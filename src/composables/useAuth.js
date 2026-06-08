@@ -123,7 +123,7 @@ export function useAuth() {
             throw new Error('ไม่พบข้อมูลผู้ใช้ในระบบ กรุณาติดต่อผู้ดูแลโรงเรียน')
           }
           
-          const p = { uid: user.uid, email: user.email, ...userData }
+          const p = { uid: user.id, email: user.email, ...userData }
           if (!Array.isArray(p.roles)) p.roles = p.role ? [p.role] : ['teacher']
           authStore.setProfile(p)
 
