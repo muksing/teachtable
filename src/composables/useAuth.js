@@ -1,9 +1,7 @@
 // src/composables/useAuth.js
 // ===== Single Project Setup — ไม่ต้องใช้ Custom Token =====
 import { ref } from 'vue'
-import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth'
-import { doc, getDoc, getDocs, setDoc, collection, query, where, serverTimestamp, onSnapshot } from 'firebase/firestore'
-import { auth, db } from '@/firebase/db'
+import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 
@@ -17,12 +15,22 @@ let _schoolInfoUnsub = null
 function startSchoolInfoListener(schoolStore, schoolId) {
   if (_schoolInfoUnsub) return  // มี listener แล้ว ไม่ต้องซ้ำ
   if (!schoolId) return // ถ้าไม่มี schoolId ไม่ต้อง listen
-  _schoolInfoUnsub = onSnapshot(doc(db, 'schools', schoolId, 'school_info', 'main'), (snap) => {
-    if (snap.exists() && schoolStore.schoolInfo) {
-      // อัปเดตเฉพาะ field ที่เปลี่ยน ไม่เขียนทับทั้งหมด
-      schoolStore.setSchool({ ...schoolStore.schoolInfo, ...snap.data() })
-    }
-  })
+  
+  const channel = supabase.channel('schema-db-changes')
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'schools', filter: `id=eq.${schoolId}` },
+      (payload) => {
+        if (schoolStore.schoolInfo) {
+          schoolStore.setSchool({ ...schoolStore.schoolInfo, ...payload.new })
+        }
+      }
+    )
+    .subscribe()
+    
+  _schoolInfoUnsub = () => {
+    supabase.removeChannel(channel)
+  }
 }
 
 function stopSchoolInfoListener() {
@@ -41,19 +49,19 @@ export function useAuth() {
     loading.value = true
     error.value   = null
     try {
-      // 1. Login Firebase Auth
-      const cred = await signInWithEmailAndPassword(auth, email, password)
-      const uid  = cred.user.uid
+      // 1. Login Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password })
+      if (authError) throw authError
+      const uid = authData.user.id
 
-      // 2. ดึง profile จาก Firestore users/{uid} ก่อน
-      const userSnap = await getDoc(doc(db, 'users', uid))
-
-      if (!userSnap.exists()) {
+      // 2. ดึง profile จาก users
+      const { data: userData, error: userError } = await supabase.from('users').select('*').eq('id', uid).single()
+      
+      if (userError || !userData) {
         throw new Error('ไม่พบข้อมูลผู้ใช้ในระบบ กรุณาติดต่อผู้ดูแลโรงเรียน')
       }
 
-      const userData = userSnap.data()
-      const userProfile = { uid, email: cred.user.email, ...userData }
+      const userProfile = { uid, email: authData.user.email, ...userData }
       
       if (userProfile.is_active === false) throw new Error('บัญชีถูกระงับการใช้งาน')
       
@@ -69,9 +77,8 @@ export function useAuth() {
       let currentTerm = '2568_1' // default
 
       if (schoolId) {
-        const schoolSnap = await getDoc(doc(db, 'schools', schoolId, 'school_info', 'main'))
-        if (schoolSnap.exists()) {
-          const schoolData = schoolSnap.data()
+        const { data: schoolData, error: schoolError } = await supabase.from('schools').select('*').eq('id', schoolId).single()
+        if (schoolData && !schoolError) {
           schoolStore.setSchool(schoolData)
           currentTerm = schoolData.current_term || currentTerm
           schoolStore.setCurrentTerm(currentTerm)
@@ -79,15 +86,13 @@ export function useAuth() {
       }
 
       // 4. อัพเดต last_login
-      await setDoc(doc(db, 'users', uid), {
-        last_login: serverTimestamp()
-      }, { merge: true })
+      await supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', uid)
 
       authStore.setLoggedIn(true)
       startSchoolInfoListener(schoolStore, schoolId)   // ← real-time sync school_info
       return { success: true }
     } catch (err) {
-      const msg = getFriendlyError(err.code || err.message)
+      const msg = getFriendlyError(err.message)
       error.value = msg
       return { success: false, error: msg }
     } finally {
@@ -99,7 +104,7 @@ export function useAuth() {
   async function logout() {
     try {
       stopSchoolInfoListener()               // ← หยุด listener ก่อน logout
-      await signOut(auth)
+      await supabase.auth.signOut()
       authStore.clear()
       schoolStore.clear()
     } catch (err) {
@@ -109,16 +114,15 @@ export function useAuth() {
 
   // ===== Auto-restore session =====
   function initAuthListener(router) {
-    return onAuthStateChanged(auth, async (user) => {
-      if (user && !authStore.isLoggedIn) {
+    return supabase.auth.onAuthStateChange(async (event, session) => {
+      const user = session?.user
+      if (user && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && !authStore.isLoggedIn) {
         try {
-          const userSnap = await getDoc(doc(db, 'users', user.uid))
-          
-          if (!userSnap.exists()) {
+          const { data: userData, error: userError } = await supabase.from('users').select('*').eq('id', user.id).single()
+          if (userError || !userData) {
             throw new Error('ไม่พบข้อมูลผู้ใช้ในระบบ กรุณาติดต่อผู้ดูแลโรงเรียน')
           }
           
-          const userData = userSnap.data()
           const p = { uid: user.uid, email: user.email, ...userData }
           if (!Array.isArray(p.roles)) p.roles = p.role ? [p.role] : ['teacher']
           authStore.setProfile(p)
@@ -127,9 +131,8 @@ export function useAuth() {
           let currentTerm = '2568_1'
           
           if (schoolId) {
-            const schoolSnap = await getDoc(doc(db, 'schools', schoolId, 'school_info', 'main'))
-            if (schoolSnap.exists()) {
-              const schoolData = schoolSnap.data()
+            const { data: schoolData } = await supabase.from('schools').select('*').eq('id', schoolId).single()
+            if (schoolData) {
               schoolStore.setSchool(schoolData)
               currentTerm = schoolData.current_term || currentTerm
               schoolStore.setCurrentTerm(currentTerm)
@@ -139,7 +142,7 @@ export function useAuth() {
           authStore.setLoggedIn(true)
           startSchoolInfoListener(schoolStore, schoolId)   // ← real-time sync หลัง restore
         } catch (e) { console.error('Auth restore error:', e) }
-      } else if (!user) {
+      } else if (event === 'SIGNED_OUT' || !user) {
         stopSchoolInfoListener()                   // ← หยุด listener เมื่อ logout
         authStore.clear()
         schoolStore.clear()
@@ -154,6 +157,7 @@ export function useAuth() {
   // ===== Error messages ภาษาไทย =====
   function getFriendlyError(code) {
     const map = {
+      'Invalid login credentials':     'อีเมลหรือรหัสผ่านไม่ถูกต้อง',
       'auth/invalid-credential':       'อีเมลหรือรหัสผ่านไม่ถูกต้อง',
       'auth/user-not-found':           'ไม่พบบัญชีผู้ใช้นี้',
       'auth/wrong-password':           'รหัสผ่านไม่ถูกต้อง',

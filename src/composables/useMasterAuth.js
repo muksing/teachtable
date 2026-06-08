@@ -1,9 +1,7 @@
 // src/composables/useMasterAuth.js
 // ===== Master-teachtable Authentication =====
 import { ref } from 'vue'
-import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth'
-import { doc, getDoc, setDoc, collection, query, where, getDocs, serverTimestamp } from 'firebase/firestore'
-import { auth, db } from '@/firebase/db'
+import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { USER_ROLES } from '@/firebase/masterSchema'
@@ -22,9 +20,8 @@ export function useMasterAuth() {
   async function loadSchoolInfo(schoolId) {
     if (!schoolId) return
     try {
-      const snap = await getDoc(doc(db, 'schools', schoolId, 'school_info', 'main'))
-      if (snap.exists()) {
-        const data = snap.data()
+      const { data, error } = await supabase.from('schools').select('*').eq('id', schoolId).single()
+      if (data) {
         schoolStore.setSchool(data)
         schoolStore.setCurrentTerm(data.current_term || '2568_1')
       }
@@ -37,17 +34,17 @@ export function useMasterAuth() {
     error.value = null
 
     try {
-      // 1. Login Firebase Auth
-      const cred = await signInWithEmailAndPassword(auth, email, password)
-      const uid = cred.user.uid
+      // 1. Login Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password })
+      if (authError) throw authError
+      const uid = authData.user.id
 
-      // 2. Load user profile
-      const userDoc = await getDoc(doc(db, 'users', uid))
-      if (!userDoc.exists()) {
+      // 2. Load user profile from Supabase
+      const { data: userData, error: userError } = await supabase.from('users').select('*').eq('id', uid).single()
+      if (userError || !userData) {
         throw new Error('User not found')
       }
 
-      const userData = userDoc.data()
       const userSchoolId = userData.schoolId || userData.school_id
       const roleList = Array.isArray(userData.roles) ? userData.roles : [userData.role, userData.globalRole].filter(Boolean)
       const isSuperAdmin = roleList.includes(USER_ROLES.SUPERADMIN)
@@ -55,8 +52,8 @@ export function useMasterAuth() {
       // 3. Validate school user status when not superadmin
       if (!isSuperAdmin) {
         if (!userSchoolId) throw new Error('Not a school user')
-        const schoolDoc = await getDoc(doc(db, 'schools', userSchoolId))
-        if (!schoolDoc.exists() || !schoolDoc.data().isActive) {
+        const { data: schoolDoc } = await supabase.from('schools').select('*').eq('id', userSchoolId).single()
+        if (!schoolDoc || schoolDoc.is_active === false) {
           throw new Error('School is not active')
         }
       }
@@ -77,7 +74,7 @@ export function useMasterAuth() {
 
     } catch (err) {
       error.value = err.message
-      await signOut(auth) // logout if error
+      await supabase.auth.signOut() // logout if error
       return { success: false, error: err.message }
     } finally {
       loading.value = false
@@ -89,7 +86,7 @@ export function useMasterAuth() {
     const result = await login(email, password)
     if (!result.success) return result
     if (!authStore.isSuperAdmin) {
-      await signOut(auth)
+      await supabase.auth.signOut()
       authStore.clear()
       schoolStore.clear()
       const msg = 'Access denied: Not a SuperAdmin'
@@ -103,7 +100,7 @@ export function useMasterAuth() {
     const result = await login(email, password)
     if (!result.success) return result
     if (authStore.isSuperAdmin || !authStore.schoolId) {
-      await signOut(auth)
+      await supabase.auth.signOut()
       authStore.clear()
       schoolStore.clear()
       const msg = 'Not a school user'
@@ -116,7 +113,7 @@ export function useMasterAuth() {
   // ===== Logout =====
   async function logout() {
     try {
-      await signOut(auth)
+      await supabase.auth.signOut()
       authStore.clear()
       return { success: true }
     } catch (err) {
@@ -127,13 +124,13 @@ export function useMasterAuth() {
 
   // ===== Auth State Listener =====
   function initAuthListener(router) {
-    onAuthStateChanged(auth, async (user) => {
-      if (user) {
+    supabase.auth.onAuthStateChange(async (event, session) => {
+      const user = session?.user
+      if (user && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
         // User is signed in
         try {
-          const userDoc = await getDoc(doc(db, 'users', user.uid))
-          if (userDoc.exists()) {
-            const userData = userDoc.data()
+          const { data: userData, error: userError } = await supabase.from('users').select('*').eq('id', user.id).single()
+          if (userData && !userError) {
             authStore.setProfile({
               ...userData,
               uid: user.uid
@@ -149,7 +146,7 @@ export function useMasterAuth() {
           console.error('Error loading user profile:', err)
           authStore.clear()
         }
-      } else {
+      } else if (event === 'SIGNED_OUT') {
         // User is signed out
         authStore.clear()
         schoolStore.clear()
@@ -180,31 +177,49 @@ export function useMasterAuth() {
   // ===== Initialize SuperAdmin =====
   async function initializeSuperAdmin() {
     try {
-      // ตรวจสอบว่ามี SuperAdmin แล้วหรือไม่
-      const q = query(
-        collection(db, 'users'),
-        where('globalRole', '==', USER_ROLES.SUPERADMIN)
-      )
-      const snapshot = await getDocs(q)
+      const adminEmail = 'Muksingapp@gmail.com'
+      const defaultPassword = 'SuperAdminPassword123!'
+      
+      // ตรวจสอบว่ามี SuperAdmin ใน Supabase หรือยัง
+      const { data: existingAdmin } = await supabase
+        .from('users')
+        .select('*')
+        .eq('globalRole', USER_ROLES.SUPERADMIN)
+        .maybeSingle()
 
-      if (snapshot.empty) {
-        // สร้าง SuperAdmin account
-        const superAdminData = {
-          email: 'muksingapp@gmail.com',
-          displayName: 'Super Admin',
-          firstName: 'Super',
-          lastName: 'Admin',
-          globalRole: USER_ROLES.SUPERADMIN,
-          isActive: true,
-          createdAt: serverTimestamp(),
-          permissions: ['all']
+      if (!existingAdmin) {
+        // 1. สร้างบัญชีผ่าน Supabase Auth
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+          email: adminEmail,
+          password: defaultPassword,
+        })
+
+        if (authError && !authError.message.includes('already registered')) {
+          throw authError
         }
 
-        // จะต้องสร้าง Auth account แยกต่างหาก
-        console.log('SuperAdmin account needs to be created manually in Firebase Auth')
-        console.log('Data:', superAdminData)
-
-        return { success: true, message: 'SuperAdmin data prepared' }
+        const uid = authData?.user?.id
+        if (uid) {
+          // 2. Insert ลงตาราง users
+          const { error: insertError } = await supabase.from('users').insert([{
+            id: uid,
+            email: adminEmail,
+            "displayName": 'Super Admin',
+            "firstName": 'Super',
+            "lastName": 'Admin',
+            "globalRole": USER_ROLES.SUPERADMIN,
+            role: USER_ROLES.SUPERADMIN,
+            roles: [USER_ROLES.SUPERADMIN],
+            "isActive": true,
+            is_active: true,
+            permissions: ['all']
+          }])
+          
+          if (insertError) throw insertError
+          
+          console.log(`✅ สร้าง SuperAdmin สำเร็จ! Email: ${adminEmail} | Password: ${defaultPassword}`)
+          return { success: true, message: 'SuperAdmin created successfully' }
+        }
       }
 
       return { success: true, message: 'SuperAdmin already exists' }
