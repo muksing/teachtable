@@ -1,0 +1,39 @@
+{
+  "name": "master-teachtable",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && firebase deploy --only hosting",
+    "create-superadmin": "node scripts/create-superadmin.js",
+    "seed-data": "node scripts/seed-data.js",
+    "sync-school-defaults": "node scripts/sync-school-defaults.cjs"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "@supabase/supabase-js": "^2.107.0",
+    "element-plus": "^2.6.0",
+    "exceljs": "^4.4.0",
+    "firebase": "^10.8.0",
+    "html2canvas": "^1.4.1",
+    "html2pdf.js": "^0.14.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
+    "pinia": "^2.1.7",
+    "vue": "^3.4.0",
+    "vue-draggable-next": "^2.3.0",
+    "vue-router": "^4.2.5",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "autoprefixer": "^10.4.17",
+    "firebase-admin": "^13.7.0",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "vite": "^5.1.0"
+  }
+}

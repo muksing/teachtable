@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.env.local
+.clasp.json
+functions/node_modules/
+scripts/service-account.json
+scripts/service-account-master.json

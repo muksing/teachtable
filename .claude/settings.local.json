@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(firebase --version)",
+      "Bash(firebase use:*)",
+      "Bash(firebase login:*)",
+      "Bash(node scripts/init-school.cjs)",
+      "Bash(dir \"C:\\\\TeachTable\\\\MasterSystem2\\\\src\\\\router\")",
+      "Bash(dir \"C:\\\\TeachTable\\\\MasterSystem2\\\\src\\\\views\")",
+      "Bash(dir \"C:\\\\TeachTable\\\\MasterSystem2\\\\src\\\\views\\\\admin\")",
+      "Bash(dir \"C:\\\\TeachTable\\\\MasterSystem2\\\\src\\\\views\\\\scheduler\")",
+      "Bash(dir \"C:\\\\TeachTable\\\\MasterSystem2\\\\src\\\\views\\\\teacher\")",
+      "Bash(dir \"C:\\\\TeachTable\\\\MasterSystem2\\\\src\\\\views\\\\reports\")",
+      "Bash(dir \"C:\\\\TeachTable\\\\MasterSystem2\\\\src\\\\components\\\\layout\")",
+      "Bash(node -e \"require\\(''firebase/storage''\\); console.log\\(''OK''\\)\")",
+      "Bash(firebase deploy:*)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Bash(head -5 grep -n \"deleteClass\\\\|deleteRoom\\\\|deleteSubject\\\\|deleteStudent\\\\|deleteTeacher\\\\|confirmDelete\\\\|deleteDoc\" \"C:/TeachTable/MasterSystem2/src/views/admin/RoomsView.vue\")",
+      "Bash(head -5 grep -n \"deleteClass\\\\|deleteRoom\\\\|deleteSubject\\\\|deleteStudent\\\\|deleteTeacher\\\\|confirmDelete\\\\|deleteDoc\" \"C:/TeachTable/MasterSystem2/src/views/admin/SubjectsView.vue\")",
+      "Bash(head -5 grep -n \"deleteClass\\\\|deleteRoom\\\\|deleteSubject\\\\|deleteStudent\\\\|deleteTeacher\\\\|confirmDelete\\\\|deleteDoc\" \"C:/TeachTable/MasterSystem2/src/views/admin/StudentsView.vue\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d['dependencies'].items\\(\\)}, indent=2\\)\\)\")",
+      "Bash(node -e \"const p=require\\('./node_modules/html2pdf.js/package.json'\\); console.log\\(p.version, p.main\\)\")",
+      "Bash(xargs grep:*)",
+      "Bash(findstr /i \"deploy\\\\|build\\\\|firebase\")",
+      "Bash(cmd.exe /c \"npm run build\")"
+    ]
+  }
+}

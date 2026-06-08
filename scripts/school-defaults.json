@@ -1,0 +1,198 @@
+{
+  "attendance_statuses": [
+    {
+      "status_code": "B001",
+      "label": "มาเรียน",
+      "color": "green",
+      "affects_behavior": false,
+      "sort_order": 1,
+      "is_active": true,
+      "points_default": 0,
+      "points_min": 0,
+      "points_max": 0
+    },
+    {
+      "status_code": "B002",
+      "label": "มาสาย",
+      "color": "yellow",
+      "affects_behavior": true,
+      "sort_order": 2,
+      "is_active": true,
+      "points_default": -2,
+      "points_min": -10,
+      "points_max": 0
+    },
+    {
+      "status_code": "B003",
+      "label": "โดดเรียน",
+      "color": "red",
+      "affects_behavior": true,
+      "sort_order": 3,
+      "is_active": true,
+      "points_default": -15,
+      "points_min": -15,
+      "points_max": 0
+    },
+    {
+      "status_code": "B004",
+      "label": "ลาป่วย",
+      "color": "purple",
+      "affects_behavior": false,
+      "sort_order": 4,
+      "is_active": true,
+      "points_default": 0,
+      "points_min": 0,
+      "points_max": 0
+    },
+    {
+      "status_code": "B005",
+      "label": "ลากิจ",
+      "color": "blue",
+      "affects_behavior": false,
+      "sort_order": 5,
+      "is_active": true,
+      "points_default": 0,
+      "points_min": 0,
+      "points_max": 0
+    },
+    {
+      "status_code": "B006",
+      "label": "ไปราชการ",
+      "color": "gray",
+      "affects_behavior": false,
+      "sort_order": 6,
+      "is_active": true,
+      "points_default": 0,
+      "points_min": 0,
+      "points_max": 0
+    }
+  ],
+  "behavior_settings": [
+    {
+      "setting_id": "B001",
+      "behavior_type": "learning",
+      "label": "ตั้งใจเรียน",
+      "points_default": 0,
+      "points_min": 0,
+      "points_max": 5,
+      "is_auto": false,
+      "is_active": true
+    },
+    {
+      "setting_id": "B002",
+      "behavior_type": "learning",
+      "label": "ไม่ตั้งใจเรียน",
+      "points_default": -2,
+      "points_min": -10,
+      "points_max": 0,
+      "is_auto": false,
+      "is_active": true
+    },
+    {
+      "setting_id": "B003",
+      "behavior_type": "learning",
+      "label": "หลับในห้องเรียน",
+      "points_default": -15,
+      "points_min": -15,
+      "points_max": 0,
+      "is_auto": false,
+      "is_active": true
+    },
+    {
+      "setting_id": "B004",
+      "behavior_type": "learning",
+      "label": "ก่อกวน",
+      "points_default": 0,
+      "points_min": -10,
+      "points_max": 0,
+      "is_auto": false,
+      "is_active": true
+    },
+    {
+      "setting_id": "B005",
+      "behavior_type": "learning",
+      "label": "ไม่ร่วมกิจกรรม",
+      "points_default": -5,
+      "points_min": -5,
+      "points_max": 0,
+      "is_auto": false,
+      "is_active": true
+    },
+    {
+      "setting_id": "B006",
+      "behavior_type": "learning",
+      "label": "ไม่ทำงาน",
+      "points_default": -5,
+      "points_min": -5,
+      "points_max": 0,
+      "is_auto": false,
+      "is_active": true
+    },
+    {
+      "setting_id": "G001",
+      "behavior_type": "general",
+      "label": "ช่วยครู",
+      "category": "Positive",
+      "points_default": 5,
+      "points_min": 0,
+      "points_max": 5,
+      "is_auto": false,
+      "is_active": true
+    },
+    {
+      "setting_id": "G002",
+      "behavior_type": "general",
+      "label": "ช่วยเพื่อน",
+      "category": "Positive",
+      "points_default": 5,
+      "points_min": 0,
+      "points_max": 5,
+      "is_auto": false,
+      "is_active": true
+    },
+    {
+      "setting_id": "G003",
+      "behavior_type": "general",
+      "label": "เก็บของ",
+      "category": "Positive",
+      "points_default": 5,
+      "points_min": 0,
+      "points_max": 5,
+      "is_auto": false,
+      "is_active": true
+    },
+    {
+      "setting_id": "G004",
+      "behavior_type": "general",
+      "label": "สร้างชื่อเสียง",
+      "category": "Positive",
+      "points_default": 5,
+      "points_min": 0,
+      "points_max": 5,
+      "is_auto": false,
+      "is_active": true
+    },
+    {
+      "setting_id": "G005",
+      "behavior_type": "general",
+      "label": "วิวาท",
+      "category": "Negative",
+      "points_default": -5,
+      "points_min": -5,
+      "points_max": 0,
+      "is_auto": false,
+      "is_active": true
+    },
+    {
+      "setting_id": "G006",
+      "behavior_type": "general",
+      "label": "ทิ้งขยะ",
+      "category": "Negative",
+      "points_default": -5,
+      "points_min": -5,
+      "points_max": 0,
+      "is_auto": false,
+      "is_active": true
+    }
+  ]
+}

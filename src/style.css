@@ -1,0 +1,99 @@
+@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .bg-grad-primary {
+    background: linear-gradient(135deg, #ff7a00 0%, #ff3d81 100%);
+  }
+  .bg-grad-success {
+    background: linear-gradient(135deg, #29d97f 0%, #00b8a0 100%);
+  }
+  .bg-grad-warning {
+    background: linear-gradient(135deg, #ffb800 0%, #ff7a00 100%);
+  }
+  .bg-grad-danger {
+    background: linear-gradient(135deg, #ff2f6d 0%, #c0002f 100%);
+  }
+  .bg-grad-info {
+    background: linear-gradient(135deg, #00d4ff 0%, #0099ff 100%);
+  }
+  .bg-grad-royal {
+    background: linear-gradient(135deg, #ff7a00 0%, #ff3d81 52%, #a855f7 100%);
+  }
+  .bg-grad-sunrise {
+    background: linear-gradient(135deg, #ff7a00 0%, #ff3d81 52%, #ffe45e 100%);
+  }
+  .bg-grad-ocean {
+    background: linear-gradient(135deg, #00d4ff 0%, #0099ff 48%, #29d97f 100%);
+  }
+  .bg-grad-pop {
+    background: linear-gradient(135deg, #ff4d6d 0%, #ff7a00 45%, #00d4ff 100%);
+  }
+  
+  .glass-card {
+    background: rgba(255, 255, 255, 0.88);
+    backdrop-filter: blur(14px);
+    border: 1px solid rgba(255, 122, 0, 0.18);
+    box-shadow: 0 8px 32px 0 rgba(255, 61, 129, 0.09);
+  }
+
+  .card-vibrant {
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(255, 122, 0, 0.28);
+    border-radius: 14px;
+    box-shadow: 0 14px 34px rgba(255, 61, 129, 0.16);
+  }
+}
+
+:root {
+  --color-primary: #ff7a00;
+  --color-success: #29d97f;
+  --color-warning: #ffb800;
+  --color-danger: #ff2f6d;
+  --color-cyan: #00d4ff;
+  --el-color-primary: #ff5a00;
+  --el-color-primary-light-3: #ff8533;
+  --el-color-primary-light-5: #ffaa66;
+  --el-color-primary-light-7: #ffcc99;
+  --el-color-primary-light-9: #fff0e0;
+  --el-color-primary-dark-2: #cc4800;
+  --el-color-success: #26d97f;
+  --el-color-warning: #ffb800;
+  --el-color-danger: #ff2f6d;
+  --el-color-info: #00b8ff;
+  --sidebar-bg: linear-gradient(180deg, #ff7a00 0%, #ff3d81 52%, #a855f7 100%);
+  --card-radius: 12px;
+}
+
+body {
+  font-family: 'Sarabun', sans-serif;
+  color: #152238;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(255,122,0,.18) 0%, transparent 36%),
+    radial-gradient(circle at 90% 10%, rgba(0,212,255,.16) 0%, transparent 33%),
+    #fffdf8;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #2d3748;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.stat-card {
+  border-radius: var(--card-radius);
+  padding: 1.25rem;
+  color: white;
+  text-align: center;
+}
