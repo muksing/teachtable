@@ -29,7 +29,13 @@
       "PowerShell(head -20)",
       "PowerShell(Remove-Item \"c:\\\\TeachTable\\\\MasterSystemSupabase\\\\functions\" -Recurse -Force -Confirm:$false)",
       "PowerShell(Remove-Item \"c:\\\\TeachTable\\\\MasterSystemSupabase\\\\src\\\\firebase\" -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue)",
-      "PowerShell($scripts = @\\(\"service-account.json\",\"fix-admin2.js\",\"fix-teacher.js\",\"unlock-admin.js\",\"update-school-mnwrsjpn.js\",\"init-school.js\",\"init-school.cjs\"\\); foreach \\($s in $scripts\\) { Remove-Item \"c:\\\\TeachTable\\\\MasterSystemSupabase\\\\scripts\\\\$s\" -Force -ErrorAction SilentlyContinue; Write-Host \"Deleted: $s\" }; Remove-Item \"c:\\\\TeachTable\\\\MasterSystemSupabase\\\\patch.js\" -Force -ErrorAction SilentlyContinue; Write-Host \"Deleted: patch.js\")"
+      "PowerShell($scripts = @\\(\"service-account.json\",\"fix-admin2.js\",\"fix-teacher.js\",\"unlock-admin.js\",\"update-school-mnwrsjpn.js\",\"init-school.js\",\"init-school.cjs\"\\); foreach \\($s in $scripts\\) { Remove-Item \"c:\\\\TeachTable\\\\MasterSystemSupabase\\\\scripts\\\\$s\" -Force -ErrorAction SilentlyContinue; Write-Host \"Deleted: $s\" }; Remove-Item \"c:\\\\TeachTable\\\\MasterSystemSupabase\\\\patch.js\" -Force -ErrorAction SilentlyContinue; Write-Host \"Deleted: patch.js\")",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git add *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"https://mkeryhnjiuwcynfzmive.supabase.co/rest/v1/\" -H \"apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rZXJ5aG5qaXV3Y3luZnptaXZlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2NDI2MzIsImV4cCI6MjA5NjIxODYzMn0.p1dp60wdapQ6Rj6X8ZU5UblWo4ji90J3A2DPhT2ORBs\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"https://mkeryhnjiuwcynfzmive.supabase.co/auth/v1/health\")",
+      "Bash(curl -s 'https://mkeryhnjiuwcynfzmive.supabase.co/rest/v1/users?select=id,email,role,roles,globalRole&limit=10' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rZXJ5aG5qaXV3Y3luZnptaXZlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2NDI2MzIsImV4cCI6MjA5NjIxODYzMn0.p1dp60wdapQ6Rj6X8ZU5UblWo4ji90J3A2DPhT2ORBs' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rZXJ5aG5qaXV3Y3luZnptaXZlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2NDI2MzIsImV4cCI6MjA5NjIxODYzMn0.p1dp60wdapQ6Rj6X8ZU5UblWo4ji90J3A2DPhT2ORBs')"
     ]
   }
 }
