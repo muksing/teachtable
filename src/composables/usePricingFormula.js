@@ -1,8 +1,10 @@
-﻿import { ref } from 'vue'
-import { db } from '@/supabase/db'
-import { doc, getDoc, setDoc, serverTimestamp } from '@/supabase/firestore'
+import { ref } from 'vue'
+import { supabase } from '@/supabase/client'
 
-const PRICING_DOC_REF = doc(db, 'system_config', 'pricing_formula')
+// Pricing formula is stored in schools table for a special 'system' school record,
+// or in the superadmin school's settings.pricing_formula JSONB field.
+// We use a dedicated row identified by school code 'SYSTEM' or id 'system'.
+const SYSTEM_SCHOOL_CODE = 'SYSTEM'
 
 export const DEFAULT_PRICING_FORMULA = {
   read_price_per_100k: 0.22,
@@ -140,15 +142,26 @@ export function usePricingFormula() {
   const loading = ref(false)
   const error = ref(null)
 
+  /**
+   * อ่านสูตรราคาจาก schools.settings.pricing_formula ของแถว SYSTEM
+   */
   async function getPricingFormula() {
     loading.value = true
     error.value = null
     try {
-      const snap = await getDoc(PRICING_DOC_REF)
-      if (!snap.exists()) {
+      const { data, error: err } = await supabase
+        .from('schools')
+        .select('settings')
+        .eq('code', SYSTEM_SCHOOL_CODE)
+        .maybeSingle()
+
+      if (err) throw err
+
+      const formula = data?.settings?.pricing_formula
+      if (!formula) {
         return { success: true, data: { ...DEFAULT_PRICING_FORMULA }, fromDefault: true }
       }
-      return { success: true, data: normalizePricingFormula(snap.data()), fromDefault: false }
+      return { success: true, data: normalizePricingFormula(formula), fromDefault: false }
     } catch (err) {
       error.value = err.message
       return { success: false, error: err.message }
@@ -157,16 +170,48 @@ export function usePricingFormula() {
     }
   }
 
+  /**
+   * บันทึกสูตรราคาลง schools.settings.pricing_formula ของแถว SYSTEM
+   */
   async function savePricingFormula(payload, uid = '') {
     loading.value = true
     error.value = null
     try {
       const formula = normalizePricingFormula(payload)
-      await setDoc(PRICING_DOC_REF, {
-        ...formula,
-        updated_at: serverTimestamp(),
-        updated_by: uid || null,
-      }, { merge: true })
+
+      // อ่าน settings เดิมก่อน merge
+      const { data: existing, error: readErr } = await supabase
+        .from('schools')
+        .select('id, settings')
+        .eq('code', SYSTEM_SCHOOL_CODE)
+        .maybeSingle()
+
+      if (readErr) throw readErr
+
+      const existingSettings = existing?.settings || {}
+      const newSettings = {
+        ...existingSettings,
+        pricing_formula: {
+          ...formula,
+          updated_at: new Date().toISOString(),
+          updated_by: uid || null,
+        },
+      }
+
+      if (existing?.id) {
+        const { error: updateErr } = await supabase
+          .from('schools')
+          .update({ settings: newSettings })
+          .eq('id', existing.id)
+        if (updateErr) throw updateErr
+      } else {
+        // สร้างแถว SYSTEM ใหม่ถ้าไม่มี
+        const { error: insertErr } = await supabase
+          .from('schools')
+          .insert({ code: SYSTEM_SCHOOL_CODE, name: 'System Config', settings: newSettings, is_active: true })
+        if (insertErr) throw insertErr
+      }
+
       return { success: true, data: formula }
     } catch (err) {
       error.value = err.message

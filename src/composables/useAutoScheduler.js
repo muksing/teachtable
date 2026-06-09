@@ -3,8 +3,7 @@
 // Algorithm: Pre-lock → Most Constrained First → Double Period First → Greedy + Retry → AI Mode
 
 import { ref } from 'vue'
-import { collection, doc, getDocs, query, where, serverTimestamp, writeBatch } from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 import { useQuotaTracking, calculateScheduleQuota } from '@/composables/useQuotaTracking'
@@ -15,13 +14,12 @@ export function useAutoScheduler() {
   const schoolStore = useSchoolStore()
   const authStore = useAuthStore()
   const quotaTracking = useQuotaTracking()
-  const db = () => getSchoolDb()
-  const batchDb = () => db().firestore || db()
+  const schoolId = () => authStore.schoolId
   const term = () => schoolStore.currentTerm || '2568_1'
 
   const scheduling = ref(false)
-  const scheduleLog = ref([])    // log ขั้นตอน
-  const scheduleResult = ref(null) // { placed, unplaced, total }
+  const scheduleLog = ref([])
+  const scheduleResult = ref(null)
 
   function log(msg) { scheduleLog.value.push(msg) }
 
@@ -36,35 +34,58 @@ export function useAutoScheduler() {
     try {
       log('🚀 เริ่มจัดตารางอัตโนมัติ...')
 
-      // 1. โหลดข้อมูลทั้งหมด
-      const [gridSnap, actSnap, supSnap] = await Promise.all([
-        getDocs(collection(db(), `terms/${term()}/timetable_grid`)),
-        getDocs(collection(db(), `terms/${term()}/activity_booking`)),
-        getDocs(collection(db(), `terms/${term()}/activity_supervision`)),
+      const sid = schoolId()
+      const t = term()
+
+      // 1. โหลดข้อมูลทั้งหมดจาก Supabase
+      const [slotsRes, activitiesRes] = await Promise.all([
+        supabase.from('timetable_slots').select('*').eq('school_id', sid).eq('term_id', t),
+        supabase.from('activity_bookings').select('*').eq('school_id', sid).eq('term_id', t),
       ])
 
-      // สร้าง grid state (day → period → class_id → slot)
-      const grid = {}      // key: `${day}_${period}_${classId}` → slot
-      const teacherGrid = {} // key: `${day}_${period}_${teacherId}` → true
-      const roomGrid = {}    // key: `${day}_${period}_${roomId}` → true
+      if (slotsRes.error) throw slotsRes.error
+      if (activitiesRes.error) throw activitiesRes.error
 
-      // โหลด existing slots
-      gridSnap.docs.forEach(d => {
-        const s = { id: d.id, ...d.data() }
+      // สร้าง grid state
+      const grid = {}
+      const teacherGrid = {}
+      const roomGrid = {}
+
+      ;(slotsRes.data || []).forEach(row => {
+        const s = {
+          id: `${row.day_of_week}_${row.period_number}_${row.class_id}`,
+          _db_id: row.id,
+          day: row.day_of_week,
+          period: row.period_number,
+          class_id: row.class_id,
+          teacher_id: row.teacher_id,
+          preferred_room: row.room_id,
+          type: row.slot_type,
+          is_locked: row.slot_type === 'activity' || row.slot_type === 'manual_lock',
+          ...row,
+        }
         const key = `${s.day}_${s.period}_${s.class_id}`
         grid[key] = s
         if (s.teacher_id) teacherGrid[`${s.day}_${s.period}_${s.teacher_id}`] = true
         if (s.preferred_room) roomGrid[`${s.day}_${s.period}_${s.preferred_room}`] = true
       })
 
-      // 2. Pre-lock: กิจกรรม (lock ห้องนักเรียน)
-      const activities = actSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+      // 2. Pre-lock: กิจกรรม
+      const activities = (activitiesRes.data || []).map(act => ({
+        id: act.id,
+        name: act.name,
+        days: act.days,
+        start_period: act.start_period,
+        duration_periods: act.duration_periods,
+        target_classes: act.target_classes || [],
+      }))
+
       let locked = 0
       for (const act of activities) {
-        const actDays = Array.isArray(act.days) && act.days.length ? act.days : (act.day ? [act.day] : [])
+        const actDays = Array.isArray(act.days) && act.days.length ? act.days : []
         for (const dayVal of actDays) {
           for (let p = act.start_period; p < act.start_period + (act.duration_periods || 1); p++) {
-            for (const classId of (act.target_classes || [])) {
+            for (const classId of act.target_classes) {
               const key = `${dayVal}_${p}_${classId}`
               if (!grid[key]) {
                 grid[key] = { day: dayVal, period: p, class_id: classId, type: 'activity', is_locked: true, name: act.name, act_id: act.id }
@@ -76,24 +97,7 @@ export function useAutoScheduler() {
       }
       log(`🔒 Pre-lock กิจกรรม: ${locked} คาบ`)
 
-      // 3. Pre-lock: ครูคุมกิจกรรม
-      const supervisions = supSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-      let teacherLocked = 0
-      for (const sup of supervisions) {
-        const act = activities.find(a => a.id === sup.act_id || a.act_id === sup.act_id)
-        if (!act) continue
-        const actDays = Array.isArray(act.days) && act.days.length ? act.days : (act.day ? [act.day] : [])
-        for (const dayVal of actDays) {
-          for (let p = act.start_period; p < act.start_period + (act.duration_periods || 1); p++) {
-            const key = `${dayVal}_${p}_${sup.teacher_id}`
-            if (!teacherGrid[key]) { teacherGrid[key] = true; teacherLocked++ }
-            if (sup.room_id) roomGrid[`${dayVal}_${p}_${sup.room_id}`] = true
-          }
-        }
-      }
-      log(`🔒 Pre-lock ครูคุมกิจกรรม: ${teacherLocked} คาบ`)
-
-      // 4. เตรียม assignment list — กรองเฉพาะที่ยังไม่ได้จัดครบ
+      // 3. เตรียม assignment list
       const pendingList = []
       for (const a of assignments) {
         const placed = Object.values(grid).filter(s => s.assign_id === (a.assign_id || a.id) && s.type === 'subject').length
@@ -113,15 +117,15 @@ export function useAutoScheduler() {
 
       log(`📚 วิชาที่ต้องจัด: ${pendingList.length} รายการ (${pendingList.reduce((s, a) => s + a.remaining, 0)} คาบ)`)
 
-      // 5. เรียง: คาบติดก่อน → Most Constrained First
+      // 4. เรียง: คาบติดก่อน → Most Constrained First
       pendingList.sort((a, b) => {
         const aConsec = (a.consecutive_periods || 1) > 1 ? 1 : 0
         const bConsec = (b.consecutive_periods || 1) > 1 ? 1 : 0
-        if (bConsec !== aConsec) return bConsec - aConsec   // คาบติดก่อน
+        if (bConsec !== aConsec) return bConsec - aConsec
         return b.constraintScore - a.constraintScore
       })
 
-      // 6. Greedy placement (หลายรอบ)
+      // 5. Greedy placement (หลายรอบ)
       const MAX_RETRIES = 8
       let placed = 0
       let unplaced = [...pendingList]
@@ -130,7 +134,6 @@ export function useAutoScheduler() {
       for (let retry = 0; retry < MAX_RETRIES; retry++) {
         if (!unplaced.length) break
         if (retry > 0) {
-          // Shuffle เพื่อลองลำดับใหม่
           unplaced = shuffle([...unplaced])
           log(`🔄 รอบที่ ${retry + 1}: ลองสลับลำดับ...`)
         }
@@ -151,32 +154,43 @@ export function useAutoScheduler() {
 
       log(`\n📊 สรุป: จัดได้ ${placed} คาบ | ยังไม่ได้จัด ${unplaced.length} วิชา`)
 
-      // 7. บันทึกลง Firestore
+      // 6. บันทึกลง Supabase (timetable_slots)
       if (newSlots.length) {
-        log(`💾 บันทึก ${newSlots.length} คาบลง Firestore...`)
-        const ts = serverTimestamp()
+        log(`💾 บันทึก ${newSlots.length} คาบลง Supabase...`)
         const uid = authStore.profile?.uid || 'auto'
+        const ts = new Date().toISOString()
+
         for (let i = 0; i < newSlots.length; i += BATCH_CHUNK_SIZE) {
           const chunk = newSlots.slice(i, i + BATCH_CHUNK_SIZE)
-          const batch = writeBatch(batchDb())
-          chunk.forEach((slot) => {
-            batch.set(doc(db(), `terms/${term()}/timetable_grid`, slot.id), {
-              ...slot,
-              created_by: uid,
-              updated_at: ts,
-            })
-          })
-          await batch.commit()
+          const rows = chunk.map(slot => ({
+            term_id: t,
+            class_id: slot.class_id,
+            subject_id: slot.subject_id || null,
+            teacher_id: slot.teacher_id || null,
+            room_id: slot.preferred_room || null,
+            day_of_week: slot.day,
+            period_number: slot.period,
+            slot_type: 'subject',
+            school_id: sid,
+            updated_by: uid,
+            updated_at: ts,
+          }))
+
+          const { error: upsertErr } = await supabase
+            .from('timetable_slots')
+            .upsert(rows, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+
+          if (upsertErr) throw upsertErr
         }
         log('✅ บันทึกสำเร็จ!')
 
         // บันทึก Quota Usage
         const quotaUsed = calculateScheduleQuota(
-          pendingList.length, // จำนวนชั้น (approx)
-          newSlots.length,    // จำนวนคาบ
-          1.0                 // ความเข้ม
+          pendingList.length,
+          newSlots.length,
+          1.0
         )
-        
+
         const quotaResult = await quotaTracking.logQuotaUsage({
           quota_used: quotaUsed,
           usage_type: 'auto_schedule',
@@ -189,7 +203,7 @@ export function useAutoScheduler() {
           created_by: authStore.profile?.uid || 'auto',
           created_by_name: authStore.profile?.displayName || 'System',
         })
-        
+
         if (quotaResult.success) {
           log(`📊 บันทึก Quota: ${quotaUsed} units`)
         } else {
@@ -215,49 +229,41 @@ export function useAutoScheduler() {
 
   // ====================================================
   // buildPlan: สร้างแผน double/single
-  // hours=4 → [2,2], hours=3 → [2,1], hours=2 → [2], hours=1 → [1]
-  // hours=5 → [2,2,1], hours=6 → [2,2,2]
   // ====================================================
   function buildPlan(assign) {
     const consecutive = assign.consecutive_periods || 1
     const remaining   = assign.remaining
     const plan = []
     if (consecutive <= 1) {
-      // Single-period subject: all blocks of 1
       for (let i = 0; i < remaining; i++) plan.push(1)
     } else {
       let rem = remaining
       while (rem >= consecutive) { plan.push(consecutive); rem -= consecutive }
-      // leftover singles
       while (rem > 0) { plan.push(1); rem-- }
     }
     return plan
   }
 
   // ====================================================
-  // calcConstraint: คะแนนความยาก (สูง = จัดยาก = ทำก่อน)
+  // calcConstraint
   // ====================================================
   function calcConstraint(assign, allAssignments) {
     let score = 0
-    // ต้องการห้อง Lab → ยาก
     if (assign.preferred_room) score += 30
-    // ชั่วโมงเยอะ → ยาก
     score += (assign.periods_per_week || 0) * 5
-    // ครูสอนหลายวิชา → ยาก
     const sameTeacher = allAssignments.filter(a => a.teacher_id === assign.teacher_id).length
     score += sameTeacher * 10
-    // consecutive_periods สูง → ยาก
     score += (assign.consecutive_periods || 1) * 8
     return score
   }
 
   // ====================================================
-  // tryPlaceAssignment: ลองวาง assignment ตาม plan
+  // tryPlaceAssignment
   // ====================================================
   function tryPlaceAssignment(assign, grid, teacherGrid, roomGrid, days, periodsPerDay) {
     const slots = []
-    const plan = [...assign.plan]  // [2, 2, 1, ...]
-    const usedDays = new Set()     // ไม่วาง 2 กลุ่มในวันเดียวกัน ถ้าเป็นไปได้
+    const plan = [...assign.plan]
+    const usedDays = new Set()
 
     for (const blockSize of plan) {
       const placed = tryPlaceBlock(assign, blockSize, grid, teacherGrid, roomGrid, days, periodsPerDay, usedDays)
@@ -266,7 +272,6 @@ export function useAutoScheduler() {
       usedDays.add(placed[0].day)
     }
 
-    // commit slots to grid
     for (const slot of slots) {
       grid[`${slot.day}_${slot.period}_${slot.class_id}`] = slot
       if (slot.teacher_id) teacherGrid[`${slot.day}_${slot.period}_${slot.teacher_id}`] = true
@@ -277,23 +282,19 @@ export function useAutoScheduler() {
   }
 
   // ====================================================
-  // buildDayLoads: นับภาระงานต่อวันของครูและห้องเรียน
-  // คืน { teacherLoad, classLoad } → Map[id][day] = count
+  // buildDayLoads
   // ====================================================
   function buildDayLoads(grid, teacherGrid) {
-    const teacherLoad = {}  // teacherId → { day → count }
-    const classLoad = {}    // classId   → { day → count }
+    const teacherLoad = {}
+    const classLoad = {}
 
-    // นับจาก grid (วิชาที่ลงแล้ว)
     Object.values(grid).forEach(s => {
       if (!s || !s.day) return
-      // class load
       if (s.class_id) {
         if (!classLoad[s.class_id]) classLoad[s.class_id] = {}
         classLoad[s.class_id][s.day] = (classLoad[s.class_id][s.day] || 0) + 1
       }
     })
-    // นับจาก teacherGrid key = `${day}_${period}_${teacherId}`
     Object.keys(teacherGrid).forEach(key => {
       const parts = key.split('_')
       if (parts.length < 3) return
@@ -305,29 +306,24 @@ export function useAutoScheduler() {
     return { teacherLoad, classLoad }
   }
 
-  // dayScore ต่ำ = ควรวางวันนี้ก่อน (กระจายได้ดีกว่า)
   function getDayScore(dayVal, assign, teacherLoad, classLoad, usedDays) {
-    const tl = teacherLoad[assign.teacher_id]?.[dayVal] || 0  // ครูสอนวันนี้กี่คาบ
-    const cl = classLoad[assign.class_id]?.[dayVal] || 0       // ห้องเรียนมีคาบวันนี้กี่คาบ
-    const penalty = usedDays.has(dayVal) ? 100 : 0             // หลีกเลี่ยงวันซ้ำกัน
+    const tl = teacherLoad[assign.teacher_id]?.[dayVal] || 0
+    const cl = classLoad[assign.class_id]?.[dayVal] || 0
+    const penalty = usedDays.has(dayVal) ? 100 : 0
     return tl * 2 + cl * 3 + penalty
   }
 
   // ====================================================
-  // tryPlaceBlock: หาตำแหน่งวาง blockSize คาบติดกัน
-  // เรียง วัน ตาม dayScore (load balancing) — กระจายคาบให้เฉลี่ยต่อวัน
+  // tryPlaceBlock
   // ====================================================
   function tryPlaceBlock(assign, blockSize, grid, teacherGrid, roomGrid, days, periodsPerDay, usedDays) {
     const maxPeriod = periodsPerDay - blockSize + 1
 
-    // คำนวณภาระงานปัจจุบัน
     const { teacherLoad, classLoad } = buildDayLoads(grid, teacherGrid)
 
-    // แยกวันออกเป็น preferredDays (ยังไม่ได้ใช้) และ fallbackDays (ใช้ไปแล้ว)
     const preferredDays = [...days].filter(d => !usedDays.has(d.value))
     const fallbackDays  = [...days].filter(d =>  usedDays.has(d.value))
 
-    // เรียงแต่ละกลุ่มตาม dayScore (load balancing)
     const sortByScore = arr => arr.sort((a, b) =>
       getDayScore(a.value, assign, teacherLoad, classLoad, new Set()) -
       getDayScore(b.value, assign, teacherLoad, classLoad, new Set())
@@ -340,12 +336,14 @@ export function useAutoScheduler() {
       period: p + i,
       class_id: assign.class_id,
       assign_id: assign.assign_id || assign.id,
-      teacher_id: assign.teacher_id || '',
+      teacher_id: assign.teacher_id || null,
       teacher_name: assign.teacher_name || '',
+      subject_id: assign.subject_id || null,
       subject_code: assign.subject_code || '',
       subject_name: assign.subject_name || '',
-      preferred_room: assign.preferred_room || '',
+      preferred_room: assign.preferred_room || null,
       type: 'subject',
+      slot_type: 'subject',
       is_locked: false,
       is_auto: true,
     }))
@@ -360,25 +358,21 @@ export function useAutoScheduler() {
         if (ok) return makeSlots(d, p)
       }
     }
-    return null  // หาไม่ได้
+    return null
   }
 
   // ====================================================
-  // isSlotFree: ตรวจ 3 มิติ
+  // isSlotFree
   // ====================================================
   function isSlotFree(assign, day, period, grid, teacherGrid, roomGrid) {
-    // 1. ห้องเรียน (class) ว่างไหม
     if (grid[`${day}_${period}_${assign.class_id}`]) return false
-    // 2. ครูว่างไหม
     if (assign.teacher_id && teacherGrid[`${day}_${period}_${assign.teacher_id}`]) return false
-    // 3. ห้อง Lab ว่างไหม
     if (assign.preferred_room && roomGrid[`${day}_${period}_${assign.preferred_room}`]) return false
     return true
   }
 
   // ====================================================
-  // checkSlotStatus: ตรวจสถานะ slot สำหรับ UI
-  // คืนค่า { classOk, teacherOk, roomOk }
+  // checkSlotStatus
   // ====================================================
   function checkSlotStatus(assign, day, period, currentGrid, tGrid, rGrid) {
     return {
@@ -389,7 +383,7 @@ export function useAutoScheduler() {
   }
 
   // ====================================================
-  // findSwappableSlots: หา slot ที่สามารถสลับกับ targetSlot ได้
+  // findSwappableSlots
   // ====================================================
   function findSwappableSlots(targetSlot, allSlots, teacherGridState, roomGridState) {
     const swappable = []
@@ -400,7 +394,6 @@ export function useAutoScheduler() {
     )
 
     for (const candidate of candidateSlots) {
-      // จะสลับได้ต้องไม่ชนทั้งคู่หลังสลับ
       const targetMovesToCandidate = canMove(targetSlot, candidate.day, candidate.period, allSlots, teacherGridState, roomGridState, candidate)
       const candidateMovesToTarget = canMove(candidate, targetSlot.day, targetSlot.period, allSlots, teacherGridState, roomGridState, targetSlot)
 
@@ -412,13 +405,11 @@ export function useAutoScheduler() {
   }
 
   function canMove(slot, newDay, newPeriod, allSlots, teacherGridState, roomGridState, excludeSlot) {
-    // ตรวจห้องเรียน
     const existingClass = allSlots.find(s =>
       s.day === newDay && s.period === newPeriod && s.class_id === slot.class_id &&
       s.id !== excludeSlot?.id
     )
     if (existingClass) return false
-    // ตรวจครู
     if (slot.teacher_id) {
       const teacherBusy = allSlots.find(s =>
         s.day === newDay && s.period === newPeriod && s.teacher_id === slot.teacher_id &&
@@ -426,7 +417,6 @@ export function useAutoScheduler() {
       )
       if (teacherBusy) return false
     }
-    // ตรวจห้อง Lab
     if (slot.preferred_room) {
       const roomBusy = allSlots.find(s =>
         s.day === newDay && s.period === newPeriod && s.preferred_room === slot.preferred_room &&
@@ -438,26 +428,37 @@ export function useAutoScheduler() {
   }
 
   // ====================================================
-  // clearAutoSlots: ลบเฉพาะ slot ที่ auto จัด (ไม่ลบ manual)
+  // clearAutoSlots: ลบเฉพาะ slot ที่ auto จัด
+  // timetable_slots ไม่มี column is_auto โดยตรง —
+  // ลบ slot ที่ slot_type = 'subject' และไม่ใช่ manual (is_locked = false)
   // ====================================================
   async function clearAutoSlots() {
-    const snap = await getDocs(
-      query(collection(db(), `terms/${term()}/timetable_grid`), where('is_auto', '==', true))
-    )
-    const toDelete = snap.docs
+    const sid = schoolId()
+    const t = term()
+
+    const { data, error } = await supabase
+      .from('timetable_slots')
+      .select('id')
+      .eq('school_id', sid)
+      .eq('term_id', t)
+      .eq('slot_type', 'subject')
+
+    if (error) throw error
+    const toDelete = data || []
+
     for (let i = 0; i < toDelete.length; i += BATCH_CHUNK_SIZE) {
       const chunk = toDelete.slice(i, i + BATCH_CHUNK_SIZE)
-      const batch = writeBatch(batchDb())
-      chunk.forEach((d) => batch.delete(d.ref))
-      await batch.commit()
+      const ids = chunk.map(r => r.id)
+      const { error: delErr } = await supabase.from('timetable_slots').delete().in('id', ids)
+      if (delErr) throw delErr
     }
+
     return toDelete.length
   }
 
   // ====================================================
   // Helpers
   // ====================================================
-  // safeId: แปลง / → - เพื่อใช้เป็น Firestore document ID (ห้ามมี slash)
   function safeId(...parts) {
     return parts.map(p => String(p ?? '').replace(/\//g, '-')).join('_')
   }
@@ -497,28 +498,26 @@ export function useAutoScheduler() {
     const data = await response.json()
     const text = data.content?.[0]?.text || ''
 
-    // parse JSON from response
     const match = text.match(/```json\s*([\s\S]*?)\s*```/)
     if (!match) throw new Error('AI ไม่ได้ส่ง JSON กลับมา')
     return JSON.parse(match[1])
   }
 
   function buildGridSummary(grid) {
-    // แบ่งข้อมูลตาม type เพื่อให้ AI เข้าใจบริบทครบถ้วน
-    const subjects = {}   // วิชาที่ลงแล้ว
-    const locked = []     // คาบที่ห้ามแตะ (กิจกรรม + lock ทุกประเภท)
+    const subjects = {}
+    const locked = []
 
     Object.values(grid).forEach(s => {
       const key = `วัน${s.day}_คาบ${s.period}`
-      if (s.type === 'subject' && !s.is_locked) {
+      if ((s.type === 'subject' || s.slot_type === 'subject') && !s.is_locked) {
         if (!subjects[key]) subjects[key] = []
         subjects[key].push(`${s.class_id}:${s.teacher_id || '?'}:${s.subject_name || s.subject_code || ''}`)
-      } else if (s.type === 'activity' || s.is_locked) {
+      } else if (s.type === 'activity' || s.slot_type === 'activity' || s.is_locked) {
         locked.push({
           วัน: s.day, คาบ: s.period,
           ห้อง: s.class_id || '',
           ครู: s.teacher_id || '',
-          ประเภท: s.type === 'activity' ? 'กิจกรรม' : 'ล็อก',
+          ประเภท: (s.type === 'activity' || s.slot_type === 'activity') ? 'กิจกรรม' : 'ล็อก',
           ชื่อ: s.name || s.subject_name || s.label || '',
         })
       }

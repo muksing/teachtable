@@ -304,15 +304,15 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { doc, getDoc } from '@/supabase/firestore'
+import { supabase } from '@/supabase/client'
 import * as XLSX from 'xlsx'
 import html2pdf from 'html2pdf.js'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { getSchoolDb } from '@/supabase/db'
+import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 
 const schoolStore = useSchoolStore()
-const db = () => getSchoolDb()
+const authStore = useAuthStore()
 const term = computed(() => schoolStore.currentTerm || '2568_1')
 
 const loading = ref(false)
@@ -340,8 +340,7 @@ const GROUP_MODES = [
 onMounted(loadData)
 
 const publishSourceLabel = computed(() => {
-  if (publishSource.value === 'firestore') return 'Firestore Snapshot'
-  if (publishSource.value === 'storage') return 'Storage JSON'
+  if (publishSource.value === 'supabase') return 'Supabase Snapshot'
   return 'Publish Snapshot'
 })
 
@@ -350,27 +349,25 @@ async function loadData() {
   publishedMissing.value = false
   publishSource.value = ''
   try {
-    const infoSnap = await getDoc(doc(db(), 'school_info', 'main'))
-    const publishMeta = infoSnap.exists() ? (infoSnap.data()?.timetable_publish || null) : null
+    const schoolId = authStore.schoolId
+
+    // Read from schools.settings.timetable_publish.payload
+    const { data: schoolRow, error } = await supabase
+      .from('schools')
+      .select('settings')
+      .eq('id', schoolId)
+      .maybeSingle()
+    if (error) throw error
+
+    const settings = schoolRow?.settings || {}
+    const publishMeta = settings.timetable_publish || null
 
     publishVersion.value = publishMeta?.version || ''
-    if (publishMeta?.published_at_iso) {
-      publishAtLabel.value = new Date(publishMeta.published_at_iso).toLocaleString('th-TH', {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      })
-    } else {
-      publishAtLabel.value = ''
-    }
+    publishAtLabel.value = publishMeta?.published_at_iso
+      ? new Date(publishMeta.published_at_iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
+      : ''
 
-    let payload = null
-
-    // Primary source: Firestore snapshot (stable, no CORS)
-    const snapshotDoc = await getDoc(doc(db(), 'public_timetable_snapshots', 'current'))
-    if (snapshotDoc.exists()) {
-      payload = snapshotDoc.data()
-      publishSource.value = 'firestore'
-    }
+    const payload = publishMeta?.payload || null
 
     if (!payload) {
       rows.value = []
@@ -378,8 +375,9 @@ async function loadData() {
       return
     }
 
+    publishSource.value = 'supabase'
     const timetable = Array.isArray(payload.timetable) ? payload.timetable : []
-    const teachers = Array.isArray(payload.teachers) ? payload.teachers : []
+    const teachersArr = Array.isArray(payload.teachers) ? payload.teachers : []
     reportTerm.value = payload.current_term || ''
     if (payload.published_at_iso && !publishAtLabel.value) {
       publishAtLabel.value = new Date(payload.published_at_iso).toLocaleString('th-TH', {
@@ -389,7 +387,7 @@ async function loadData() {
     }
 
     const teacherNameMap = {}
-    teachers.forEach(t => {
+    teachersArr.forEach(t => {
       teacherNameMap[t.teacher_id] = `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim()
     })
 

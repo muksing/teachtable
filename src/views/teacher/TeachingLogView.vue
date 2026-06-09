@@ -354,13 +354,12 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { doc, setDoc, serverTimestamp } from '@/supabase/firestore'
+import { supabase } from '@/supabase/client'
 import { useRouter } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
-import { getSchoolDb } from '@/supabase/db'
 
 const router     = useRouter()
 const authStore  = useAuthStore()
@@ -612,11 +611,16 @@ async function autoGenerateToday() {
 
     if (count > 0) {
       // บันทึก last_generated_date เพื่อไม่ให้ generate ซ้ำ
-      await setDoc(
-        doc(getSchoolDb(), 'school_info', 'main'),
-        { last_generated_date: today },
-        { merge: true }
-      )
+      const schoolId = authStore.schoolId
+      if (schoolId) {
+        const { data: schoolRow } = await supabase
+          .from('schools')
+          .select('settings')
+          .eq('id', schoolId)
+          .maybeSingle()
+        const merged = { ...(schoolRow?.settings || {}), last_generated_date: today }
+        await supabase.from('schools').update({ settings: merged }).eq('id', schoolId)
+      }
       schoolStore.setSchool({ ...info, last_generated_date: today })
     }
   } catch (e) {
@@ -788,7 +792,7 @@ async function saveRecord() {
       img2:                form.value.img2,
       record_by:           uid,
       record_by_name:      displayName,
-      timestamp:           serverTimestamp(),
+      timestamp:           new Date().toISOString(),
       is_filled:           true,
     }
 

@@ -1,23 +1,17 @@
 // src/composables/useTimetable.js
 // Logic หลักของระบบจัดตารางสอน
 import { ref, computed } from 'vue'
-import {
-  collection, doc, getDocs, setDoc, deleteDoc,
-  writeBatch, query, where, serverTimestamp
-} from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 
 export function useTimetable() {
   const authStore = useAuthStore()
   const schoolStore = useSchoolStore()
-  const db = () => getSchoolDb()
-  const batchDb = () => db().firestore || db()
+  const schoolId = () => authStore.schoolId
   const term = () => schoolStore.currentTerm || '2568_1'
 
   // ===== Constants =====
-  // Master list — ครอบคลุมทุกวันที่เป็นไปได้ (ค่า value ตรงกับ day_of_week ในระบบ)
   const ALL_DAYS = [
     { value: 1, label: 'จันทร์',    short: 'จ'  },
     { value: 2, label: 'อังคาร',    short: 'อ'  },
@@ -31,7 +25,7 @@ export function useTimetable() {
   // Dynamic — อ่านจาก school_days ในการตั้งค่าโรงเรียน
   const DAYS = computed(() => {
     const selected = schoolStore.schoolInfo?.school_days
-    if (!selected || !selected.length) return ALL_DAYS.slice(0, 5) // default จ-ศ
+    if (!selected || !selected.length) return ALL_DAYS.slice(0, 5)
     return ALL_DAYS.filter(d => selected.includes(d.label))
   })
 
@@ -51,7 +45,6 @@ export function useTimetable() {
       })
       return map
     }
-    // fallback defaults
     return {
       1: '08:30–09:20', 2: '09:20–10:10', 3: '10:10–11:00', 4: '11:00–11:50',
       5: '12:40–13:30', 6: '13:30–14:20', 7: '14:20–15:10', 8: '15:10–16:00'
@@ -70,7 +63,7 @@ export function useTimetable() {
     return {
       updated_by: authStore.profile?.uid || 'system',
       updated_by_name: authStore.profile?.displayName || 'ระบบ',
-      updated_at: serverTimestamp()
+      updated_at: new Date().toISOString()
     }
   }
 
@@ -78,9 +71,33 @@ export function useTimetable() {
   async function loadTimetable() {
     loading.value = true
     try {
-      const snap = await getDocs(collection(db(), `terms/${term()}/timetable_grid`))
+      const sid = schoolId()
+      const t = term()
+      const { data, error } = await supabase
+        .from('timetable_slots')
+        .select('*')
+        .eq('school_id', sid)
+        .eq('term_id', t)
+
+      if (error) throw error
+
       const grid = {}
-      snap.docs.forEach(d => { grid[d.id] = { id: d.id, ...d.data() } })
+      ;(data || []).forEach(slot => {
+        const key = `${slot.day_of_week}_${slot.period_number}_${slot.class_id}`
+        // normalise to grid-friendly shape
+        grid[key] = {
+          id: key,
+          _id: slot.id,
+          day: slot.day_of_week,
+          period: slot.period_number,
+          class_id: slot.class_id,
+          teacher_id: slot.teacher_id,
+          subject_id: slot.subject_id,
+          room_id: slot.room_id,
+          slot_type: slot.slot_type,
+          ...slot,
+        }
+      })
       timetableGrid.value = grid
     } finally {
       loading.value = false
@@ -88,18 +105,58 @@ export function useTimetable() {
   }
 
   async function loadAssignments() {
-    const snap = await getDocs(collection(db(), `terms/${term()}/teaching_assignments`))
-    assignments.value = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    // timetable_slots doubles as assignments — load unique assign combos
+    // If there is a separate assignments table in the project, load from there.
+    // For now we derive from timetable_slots grouping.
+    const sid = schoolId()
+    const t = term()
+    const { data, error } = await supabase
+      .from('timetable_slots')
+      .select('*, subjects(name, subject_code), teachers(first_name, last_name, teacher_code)')
+      .eq('school_id', sid)
+      .eq('term_id', t)
+
+    if (error) throw error
+    assignments.value = (data || []).map(s => ({
+      id: s.id,
+      assign_id: s.id,
+      class_id: s.class_id,
+      subject_code: s.subjects?.subject_code || '',
+      subject_name: s.subjects?.name || '',
+      teacher_id: s.teacher_id,
+      teacher_name: s.teachers ? `${s.teachers.first_name || ''} ${s.teachers.last_name || ''}`.trim() : '',
+      preferred_room: s.room_id || '',
+      periods_per_week: 1,
+      day_of_week: s.day_of_week,
+      period_number: s.period_number,
+    }))
   }
 
   async function loadActivities() {
-    const snap = await getDocs(collection(db(), `terms/${term()}/activity_booking`))
-    activities.value = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const sid = schoolId()
+    const t = term()
+    const { data, error } = await supabase
+      .from('activity_bookings')
+      .select('*')
+      .eq('school_id', sid)
+      .eq('term_id', t)
+
+    if (error) throw error
+    activities.value = (data || []).map(act => ({
+      id: act.id,
+      act_id: act.id,
+      name: act.name,
+      days: act.days,
+      day: Array.isArray(act.days) ? act.days[0] : act.days,
+      start_period: act.start_period,
+      duration_periods: act.duration_periods,
+      target_classes: act.target_classes || [],
+      color: act.color,
+    }))
   }
 
   // ===== ดึง Grid ต่อห้อง =====
   function getClassGrid(classId) {
-    // return grid[day][period] = slot | null
     const grid = {}
     DAYS.value.forEach(d => {
       grid[d.value] = {}
@@ -136,7 +193,6 @@ export function useTimetable() {
       if (excludeSlotId && slot.id === excludeSlotId) return
       if (slot.day !== day || slot.period !== period) return
 
-      // ครูสอนซ้ำ
       if (slot.teacher_id === teacherId && teacherId) {
         conflicts.push({
           type: 'teacher_conflict',
@@ -145,7 +201,6 @@ export function useTimetable() {
         })
       }
 
-      // ห้องเรียนซ้ำ
       if (slot.class_id === classId && classId) {
         conflicts.push({
           type: 'class_conflict',
@@ -157,13 +212,14 @@ export function useTimetable() {
 
     // ตรวจ Activity lock
     activities.value.forEach(act => {
-      if (act.day !== day) return
+      const actDays = Array.isArray(act.days) ? act.days : (act.day ? [act.day] : [])
+      if (!actDays.includes(day)) return
       const periods = Array.from(
         { length: act.duration_periods },
         (_, i) => act.start_period + i
       )
       if (periods.includes(period)) {
-        if (act.target_classes.includes(classId)) {
+        if ((act.target_classes || []).includes(classId)) {
           conflicts.push({
             type: 'activity_locked',
             message: `คาบนี้ถูก lock สำหรับ "${act.name}"`,
@@ -178,7 +234,6 @@ export function useTimetable() {
 
   // ===== ตรวจ Consecutive Periods =====
   function checkConsecutive(day, startPeriod, count, classId, teacherId, excludeSlotIds = []) {
-    // ตรวจว่า count คาบติดกันบน day เดิมว่างหรือไม่
     const errors = []
     for (let p = startPeriod; p < startPeriod + count; p++) {
       if (p > (PERIODS.value?.length || 8)) {
@@ -205,74 +260,131 @@ export function useTimetable() {
   // ===== วางวิชาลงตาราง (1 slot) =====
   async function placeSlot({ day, period, classId, assignment, groupId = null }) {
     const slotId = `${day}_${period}_${classId}`
+    saving.value = true
 
-    // ตรวจ conflict
-    const conflicts = checkConflicts(day, period, assignment.teacher_id, classId, slotId)
-    const hardConflicts = conflicts.filter(c => c.type !== 'teacher_conflict' || true)
-    if (hardConflicts.length > 0) {
-      return { success: false, conflicts: hardConflicts }
+    try {
+      const conflicts = checkConflicts(day, period, assignment.teacher_id, classId, slotId)
+      const hardConflicts = conflicts.filter(c => c.type !== 'teacher_conflict' || true)
+      if (hardConflicts.length > 0) {
+        return { success: false, conflicts: hardConflicts }
+      }
+
+      const sid = schoolId()
+      const t = term()
+      const auditFields = audit()
+
+      const slotData = {
+        term_id: t,
+        class_id: classId,
+        subject_id: assignment.subject_id || null,
+        teacher_id: assignment.teacher_id || null,
+        room_id: assignment.preferred_room || null,
+        day_of_week: day,
+        period_number: period,
+        slot_type: 'subject',
+        school_id: sid,
+        updated_by: auditFields.updated_by,
+        updated_at: auditFields.updated_at,
+      }
+
+      // Upsert by unique key (term_id, class_id, day_of_week, period_number)
+      const { data, error } = await supabase
+        .from('timetable_slots')
+        .upsert(slotData, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      const localSlot = {
+        id: slotId,
+        _id: data.id,
+        day: day,
+        period: period,
+        class_id: classId,
+        teacher_id: assignment.teacher_id,
+        subject_id: assignment.subject_id,
+        preferred_room: assignment.preferred_room || '',
+        subject_code: assignment.subject_code,
+        subject_name: assignment.subject_name,
+        teacher_name: assignment.teacher_name,
+        group_id: groupId || slotId,
+        is_locked: false,
+        slot_type: 'subject',
+        ...auditFields,
+      }
+      timetableGrid.value[slotId] = localSlot
+
+      return { success: true }
+    } finally {
+      saving.value = false
     }
-
-    const slotData = {
-      slot_id: slotId,
-      day,
-      period,
-      class_id: classId,
-      type: 'subject',
-      ref_id: assignment.assign_id,
-      assign_id: assignment.assign_id,
-      subject_code: assignment.subject_code,
-      subject_name: assignment.subject_name,
-      teacher_id: assignment.teacher_id,
-      teacher_name: assignment.teacher_name,
-      preferred_room: assignment.preferred_room || '',
-      group_id: groupId || slotId,
-      is_locked: false,
-      ...audit()
-    }
-
-    await setDoc(doc(db(), `terms/${term()}/timetable_grid`, slotId), slotData)
-    timetableGrid.value[slotId] = { id: slotId, ...slotData }
-    return { success: true }
   }
 
   // ===== วางวิชา Consecutive หลายคาบ =====
   async function placeConsecutiveSlots({ day, startPeriod, count, classId, assignment }) {
-    // ตรวจก่อน
     const errors = checkConsecutive(day, startPeriod, count, classId, assignment.teacher_id)
     if (errors.length > 0) {
       return { success: false, errors }
     }
 
-    const groupId = `group_${assignment.assign_id}_${day}_${startPeriod}`
-    const batch = writeBatch(batchDb())
+    saving.value = true
+    try {
+      const groupId = `group_${assignment.assign_id}_${day}_${startPeriod}`
+      const sid = schoolId()
+      const t = term()
+      const auditFields = audit()
 
-    for (let i = 0; i < count; i++) {
-      const period = startPeriod + i
-      const slotId = `${day}_${period}_${classId}`
-      const slotData = {
-        slot_id: slotId,
-        day,
-        period,
-        class_id: classId,
-        type: 'subject',
-        ref_id: assignment.assign_id,
-        assign_id: assignment.assign_id,
-        subject_code: assignment.subject_code,
-        subject_name: assignment.subject_name,
-        teacher_id: assignment.teacher_id,
-        teacher_name: assignment.teacher_name,
-        preferred_room: assignment.preferred_room || '',
-        group_id: groupId,
-        is_locked: false,
-        ...audit()
+      const rows = []
+      for (let i = 0; i < count; i++) {
+        const p = startPeriod + i
+        rows.push({
+          term_id: t,
+          class_id: classId,
+          subject_id: assignment.subject_id || null,
+          teacher_id: assignment.teacher_id || null,
+          room_id: assignment.preferred_room || null,
+          day_of_week: day,
+          period_number: p,
+          slot_type: 'subject',
+          school_id: sid,
+          updated_by: auditFields.updated_by,
+          updated_at: auditFields.updated_at,
+        })
       }
-      batch.set(doc(db(), `terms/${term()}/timetable_grid`, slotId), slotData)
-      timetableGrid.value[slotId] = { id: slotId, ...slotData }
-    }
 
-    await batch.commit()
-    return { success: true, groupId }
+      const { data, error } = await supabase
+        .from('timetable_slots')
+        .upsert(rows, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+        .select()
+
+      if (error) throw error
+
+      ;(data || []).forEach(slot => {
+        const key = `${slot.day_of_week}_${slot.period_number}_${slot.class_id}`
+        timetableGrid.value[key] = {
+          id: key,
+          _id: slot.id,
+          day: slot.day_of_week,
+          period: slot.period_number,
+          class_id: classId,
+          teacher_id: assignment.teacher_id,
+          subject_id: assignment.subject_id,
+          preferred_room: assignment.preferred_room || '',
+          subject_code: assignment.subject_code,
+          subject_name: assignment.subject_name,
+          teacher_name: assignment.teacher_name,
+          group_id: groupId,
+          is_locked: false,
+          slot_type: 'subject',
+          ...auditFields,
+        }
+      })
+
+      return { success: true, groupId }
+    } finally {
+      saving.value = false
+    }
   }
 
   // ===== ลบ Slot (ถ้า consecutive ลบทั้ง group) =====
@@ -280,52 +392,93 @@ export function useTimetable() {
     const slot = timetableGrid.value[slotId]
     if (!slot) return
 
-    if (removeGroup && slot.group_id) {
-      // ลบทั้ง group
-      const groupSlots = Object.values(timetableGrid.value)
-        .filter(s => s.group_id === slot.group_id)
-      const batch = writeBatch(batchDb())
-      groupSlots.forEach(s => {
-        batch.delete(doc(db(), `terms/${term()}/timetable_grid`, s.id))
-        delete timetableGrid.value[s.id]
-      })
-      await batch.commit()
-    } else {
-      await deleteDoc(doc(db(), `terms/${term()}/timetable_grid`, slotId))
-      delete timetableGrid.value[slotId]
+    saving.value = true
+    try {
+      if (removeGroup && slot.group_id) {
+        const groupSlots = Object.values(timetableGrid.value)
+          .filter(s => s.group_id === slot.group_id)
+
+        const ids = groupSlots.map(s => s._id).filter(Boolean)
+        if (ids.length) {
+          const { error } = await supabase.from('timetable_slots').delete().in('id', ids)
+          if (error) throw error
+        }
+        groupSlots.forEach(s => { delete timetableGrid.value[s.id] })
+      } else {
+        if (slot._id) {
+          const { error } = await supabase.from('timetable_slots').delete().eq('id', slot._id)
+          if (error) throw error
+        }
+        delete timetableGrid.value[slotId]
+      }
+    } finally {
+      saving.value = false
     }
   }
 
   // ===== Lock กิจกรรม =====
   async function lockActivitySlots(activity) {
-    const batch = writeBatch(batchDb())
-    activity.target_classes.forEach(classId => {
-      for (let p = activity.start_period; p < activity.start_period + activity.duration_periods; p++) {
-        const slotId = `${activity.day}_${p}_${classId}`
-        const slotData = {
-          slot_id: slotId,
-          day: activity.day,
-          period: p,
-          class_id: classId,
-          type: 'activity',
-          ref_id: activity.act_id,
-          act_id: activity.act_id,
-          act_name: activity.name,
-          group_id: `act_${activity.act_id}_${p}`,
-          is_locked: true,
-          ...audit()
+    saving.value = true
+    try {
+      const sid = schoolId()
+      const t = term()
+      const auditFields = audit()
+      const actDays = Array.isArray(activity.days) ? activity.days : (activity.day ? [activity.day] : [])
+
+      const rows = []
+      for (const dayVal of actDays) {
+        for (const classId of (activity.target_classes || [])) {
+          for (let p = activity.start_period; p < activity.start_period + activity.duration_periods; p++) {
+            rows.push({
+              term_id: t,
+              class_id: classId,
+              subject_id: null,
+              teacher_id: null,
+              room_id: null,
+              day_of_week: dayVal,
+              period_number: p,
+              slot_type: 'activity',
+              school_id: sid,
+              updated_by: auditFields.updated_by,
+              updated_at: auditFields.updated_at,
+            })
+          }
         }
-        batch.set(doc(db(), `terms/${term()}/timetable_grid`, slotId), slotData)
-        timetableGrid.value[slotId] = { id: slotId, ...slotData }
       }
-    })
-    await batch.commit()
+
+      if (!rows.length) return
+
+      const { data, error } = await supabase
+        .from('timetable_slots')
+        .upsert(rows, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+        .select()
+
+      if (error) throw error
+
+      ;(data || []).forEach(slot => {
+        const key = `${slot.day_of_week}_${slot.period_number}_${slot.class_id}`
+        timetableGrid.value[key] = {
+          id: key,
+          _id: slot.id,
+          day: slot.day_of_week,
+          period: slot.period_number,
+          class_id: slot.class_id,
+          slot_type: 'activity',
+          act_id: activity.id,
+          act_name: activity.name,
+          is_locked: true,
+          ...auditFields,
+        }
+      })
+    } finally {
+      saving.value = false
+    }
   }
 
   // ===== สถิติ Assignment =====
   function getAssignmentStats(assignId) {
     const slots = Object.values(timetableGrid.value)
-      .filter(s => s.assign_id === assignId && s.type === 'subject')
+      .filter(s => s.assign_id === assignId && s.slot_type === 'subject')
     return {
       placed: slots.length,
       slots

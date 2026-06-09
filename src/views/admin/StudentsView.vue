@@ -521,13 +521,12 @@ function fixPhotoUrl(url) {
 
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { doc, getDoc, setDoc, writeBatch, serverTimestamp } from '@/supabase/firestore'
 import * as XLSX from 'xlsx'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import { supabase } from '@/supabase/client'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 import { STUDENT_PREFIXES } from '@/utils/constants'
 import { usePrintReport } from '@/composables/usePrintReport'
-import { getSchoolDb } from '@/supabase/db'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 
@@ -716,11 +715,11 @@ function compressToBase64(file, maxW = 800, maxH = 800, quality = 0.8) {
 }
 
 async function loadGasSettings() {
-  const snap = await getDoc(doc(getSchoolDb(), 'school_info', 'main'))
-  if (!snap.exists()) throw new Error('ไม่พบการตั้งค่า กรุณาตั้งค่า GAS Upload Web App URL หรือ GAS Web App URL ในหน้าตั้งค่าบันทึกเข้าสอน')
-  const data = snap.data()
-  const gasUrl = data.gas_upload_web_app_url?.trim() || data.gas_web_app_url?.trim()
-  const folderId = data.gdrive_folder_id?.trim()
+  const { data, error } = await supabase.from('schools').select('settings').eq('id', authStore.schoolId).single()
+  if (error || !data) throw new Error('ไม่พบการตั้งค่า กรุณาตั้งค่า GAS Upload Web App URL หรือ GAS Web App URL ในหน้าตั้งค่าบันทึกเข้าสอน')
+  const info = data.settings?.school_info || {}
+  const gasUrl = info.gas_upload_web_app_url?.trim() || info.gas_web_app_url?.trim()
+  const folderId = info.gdrive_folder_id?.trim()
   if (!gasUrl) throw new Error('กรุณาตั้งค่า GAS Upload Web App URL หรือ GAS Web App URL ในหน้าตั้งค่าบันทึกเข้าสอน')
   if (!folderId) throw new Error('กรุณาตั้งค่า Google Drive Folder ID ในหน้าตั้งค่าบันทึกเข้าสอน')
   return { gasUrl, folderId }
@@ -978,14 +977,6 @@ async function handleSave() {
 
       await saveStudent(payload)
 
-      // ซิงค์คะแนนที่อัปเดตไปที่ฐานข้อมูลผลรวม (Behavior Summary)
-      const schoolDb = getSchoolDb()
-      const t = schoolStore.currentTerm || '2568_1'
-      await setDoc(doc(schoolDb, `terms/${t}/behavior_summary`, payload.student_id), {
-        total_score: payload.total_behavior_score,
-        last_updated: serverTimestamp()
-      }, { merge: true })
-
       ElMessage.success('บันทึกข้อมูลนักเรียนเรียบร้อย')
       students.value = await getStudents()
       dialogVisible.value = false
@@ -1068,25 +1059,16 @@ async function openResetBehaviorScoreDialog() {
     )
     const newScore = parseInt(value, 10)
     loading.value = true
-    const schoolDb = getSchoolDb()
-    const batch = writeBatch(schoolDb.firestore || schoolDb)
-    const t = schoolStore.currentTerm || '2568_1'
 
     for (const row of targetStudents) {
-      // อัปเดตตารางนักเรียน
-      batch.update(doc(schoolDb, `terms/${t}/students`, row.student_id), {
+      await saveStudent({
+        ...row,
         total_behavior_score: newScore,
         general_behavior_score: newScore,
         attendance_behavior_score: 0,
         learning_behavior_score: 0
       })
-      // รีเซ็ตตารางผลรวมความประพฤติ (เพื่อให้ UseBehavior ทำงานได้ถูกต้องเสมอ)
-      batch.set(doc(schoolDb, `terms/${t}/behavior_summary`, row.student_id), {
-        total_score: newScore, general_score: newScore, attendance_score: 0, learning_score: 0,
-        last_updated: serverTimestamp()
-      })
     }
-    await batch.commit()
 
     selectedRows.value = []
     ElMessage.success(`ตั้งค่าคะแนนเป็น ${newScore} เรียบร้อย`)
@@ -1181,22 +1163,10 @@ async function confirmImport() {
   if (!validRows.length) return
   saving.value = true
   try {
-    const schoolDb = getSchoolDb()
-    const t = schoolStore.currentTerm || '2568_1'
-    const batch = writeBatch(schoolDb.firestore || schoolDb)
-
     for (const row of validRows) {
       const { _error, _isUpdate, ...data } = row
       await saveStudent(data)
-      
-      // ซิงค์คะแนนนำเข้าของแต่ละคนไปที่ผลรวมพฤติกรรม เพื่อให้ค่าที่ติดตัวมาใช้งานได้ทันที
-      batch.set(doc(schoolDb, `terms/${t}/behavior_summary`, data.student_id), {
-        total_score: data.total_behavior_score,
-        general_score: data.total_behavior_score,
-        last_updated: serverTimestamp()
-      }, { merge: true })
     }
-    await batch.commit()
 
     ElMessage.success(`นำเข้าข้อมูล ${validRows.length} รายการเรียบร้อย`)
     students.value = await getStudents()

@@ -495,11 +495,10 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as XLSX from 'xlsx'
-import { collection, doc, getDocs, query, where, setDoc, deleteDoc, serverTimestamp, writeBatch } from '@/supabase/firestore'
+import { supabase } from '@/supabase/client'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useTimetable } from '@/composables/useTimetable'
 import { useSchoolDb } from '@/composables/useSchoolDb'
-import { getSchoolDb } from '@/supabase/db'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 import { usePrintReport } from '@/composables/usePrintReport'
@@ -513,7 +512,6 @@ const { DAYS, PERIODS, loadTimetable, lockActivitySlots } = useTimetable()
 const { getClasses, getTeachers, getRooms, getRoomCatalog } = useSchoolDb()
 const { printReport } = usePrintReport()
 
-const db = () => getSchoolDb()
 const term = () => schoolStore.currentTerm || '2568_1'
 const periodsPerDay = computed(() => schoolStore.schoolInfo?.periods_per_day || 8)
 
@@ -632,19 +630,31 @@ function audit() {
   return {
     updated_by: authStore.profile?.uid || 'system',
     updated_by_name: authStore.profile?.displayName || 'ระบบ',
-    updated_at: serverTimestamp(),
+    updated_at: new Date().toISOString(),
   }
 }
 
 // ===== Data Loading =====
 async function loadActivities() {
-  const snap = await getDocs(collection(db(), `terms/${term()}/activity_booking`))
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+  const { data, error } = await supabase
+    .from('activity_bookings')
+    .select('*')
+    .eq('school_id', authStore.schoolId)
+    .eq('term_id', term())
+  if (error) throw error
+  return (data || []).map(d => ({ ...d, act_id: d.id }))
 }
 
 async function loadSupervisions() {
-  const snap = await getDocs(collection(db(), `terms/${term()}/activity_supervision`))
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+  // Supervisions stored in schools.settings.activity_supervisions JSONB
+  const { data, error } = await supabase
+    .from('schools')
+    .select('settings')
+    .eq('id', authStore.schoolId)
+    .maybeSingle()
+  if (error) throw error
+  const list = data?.settings?.activity_supervisions || []
+  return list.filter(s => s.term_id === term())
 }
 
 onMounted(async () => {
@@ -698,29 +708,31 @@ async function saveActivity() {
   actSaving.value = true
   try {
     const isEdit = !!editingActivity.value
-    const id = isEdit ? editingActivity.value.act_id : 'act_' + Date.now()
-    const data = {
-      act_id: id,
+    const payload = {
+      school_id: authStore.schoolId,
+      term_id: term(),
       name: actForm.name,
       days: [...actForm.days],
-      day: actForm.days[0] || 1,  // compat with lockActivitySlots
       start_period: actForm.start_period,
       duration_periods: actForm.duration_periods,
       target_classes: [...actForm.target_classes],
       color: actForm.color || '',
-      ...audit(),
     }
-    await setDoc(doc(db(), `terms/${term()}/activity_booking`, id), data)
 
     if (isEdit) {
-      const idx = activities.value.findIndex(a => a.act_id === id)
-      if (idx >= 0) activities.value[idx] = { id, ...data }
-      else activities.value.push({ id, ...data })
+      const { error } = await supabase
+        .from('activity_bookings')
+        .update(payload)
+        .eq('id', editingActivity.value.id || editingActivity.value.act_id)
+      if (error) throw error
       ElMessage.success('แก้ไขกิจกรรมเรียบร้อย')
     } else {
-      activities.value.push({ id, ...data })
+      const { error } = await supabase.from('activity_bookings').insert([payload])
+      if (error) throw error
       ElMessage.success('เพิ่มกิจกรรมเรียบร้อย')
     }
+
+    activities.value = await loadActivities()
     actDialogVisible.value = false
   } catch (e) {
     ElMessage.error('บันทึกล้มเหลว: ' + e.message)
@@ -746,38 +758,6 @@ async function applyLock(activity) {
   }
 }
 
-const BATCH_CHUNK_SIZE = 400
-const IN_QUERY_LIMIT = 10
-
-async function fetchTimetableRefsByActivityIds(activityIds = []) {
-  if (!activityIds.length) return []
-  const uniqueIds = [...new Set(activityIds.filter(Boolean).map(String))]
-  const refsMap = new Map()
-
-  for (let i = 0; i < uniqueIds.length; i += IN_QUERY_LIMIT) {
-    const idsChunk = uniqueIds.slice(i, i + IN_QUERY_LIMIT)
-
-    const [actSnap, refSnap] = await Promise.all([
-      getDocs(query(collection(db(), `terms/${term()}/timetable_grid`), where('act_id', 'in', idsChunk))),
-      getDocs(query(collection(db(), `terms/${term()}/timetable_grid`), where('ref_id', 'in', idsChunk))),
-    ])
-
-    actSnap.docs.forEach((d) => refsMap.set(d.id, d.ref))
-    refSnap.docs.forEach((d) => refsMap.set(d.id, d.ref))
-  }
-
-  return [...refsMap.values()]
-}
-
-async function deleteRefsInChunks(refs = []) {
-  if (!refs.length) return
-  for (let i = 0; i < refs.length; i += BATCH_CHUNK_SIZE) {
-    const chunk = refs.slice(i, i + BATCH_CHUNK_SIZE)
-    const batch = writeBatch(db())
-    chunk.forEach((ref) => batch.delete(ref))
-    await batch.commit()
-  }
-}
 
 async function deleteActivity(activity) {
   try {
@@ -786,17 +766,15 @@ async function deleteActivity(activity) {
       'ยืนยันการลบ',
       { type: 'warning', confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก' }
     )
-    const actId = activity.act_id || activity.id
-    const slotRefs = await fetchTimetableRefsByActivityIds([actId])
+    const actId = activity.id || activity.act_id
+    const { error } = await supabase.from('activity_bookings').delete().eq('id', actId)
+    if (error) throw error
 
-    await deleteDoc(doc(db(), `terms/${term()}/activity_booking`, actId))
-    await deleteRefsInChunks(slotRefs)
-
-    activities.value = activities.value.filter(a => (a.act_id || a.id) !== actId)
+    activities.value = activities.value.filter(a => (a.id || a.act_id) !== actId)
     if (selectedActId.value === actId) selectedActId.value = null
     ElMessage.success('ลบกิจกรรมเรียบร้อย')
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error('ลบล้มเหลว: ' + e.message)
+    if (e !== 'cancel' && typeof e !== 'string') ElMessage.error('ลบล้มเหลว: ' + e.message)
   }
 }
 
@@ -811,20 +789,13 @@ async function deleteSelectedActivities() {
     )
   } catch { return }
   try {
-    const actIds = selectedActRows.value.map(a => a.act_id || a.id).filter(Boolean)
-    const slotRefs = await fetchTimetableRefsByActivityIds(actIds)
-
-    for (let i = 0; i < actIds.length; i += BATCH_CHUNK_SIZE) {
-      const chunk = actIds.slice(i, i + BATCH_CHUNK_SIZE)
-      const batch = writeBatch(db())
-      chunk.forEach((actId) => batch.delete(doc(db(), `terms/${term()}/activity_booking`, actId)))
-      await batch.commit()
-    }
-    await deleteRefsInChunks(slotRefs)
+    const actIds = selectedActRows.value.map(a => a.id || a.act_id).filter(Boolean)
+    const { error } = await supabase.from('activity_bookings').delete().in('id', actIds)
+    if (error) throw error
 
     activities.value = await loadActivities()
     selectedActRows.value = []
-    if (activities.value.findIndex(a => (a.act_id || a.id) === selectedActId.value) < 0) selectedActId.value = null
+    if (activities.value.findIndex(a => (a.id || a.act_id) === selectedActId.value) < 0) selectedActId.value = null
     ElMessage.success(`ลบ ${selectedCount} กิจกรรมเรียบร้อย`)
   } catch (e) {
     ElMessage.error('ลบล้มเหลว: ' + e.message)
@@ -834,24 +805,18 @@ async function deleteSelectedActivities() {
 async function deleteAllActivities() {
   try {
     await ElMessageBox.confirm(
-      'ลบกิจกรรมทั้งหมด และ lock slots ที่เกี่ยวข้องในตาราง ใช่หรือไม่?',
+      'ลบกิจกรรมทั้งหมด ใช่หรือไม่?',
       'ยืนยันการลบทั้งหมด',
       { type: 'warning', confirmButtonText: 'ลบทั้งหมด', cancelButtonText: 'ยกเลิก' }
     )
   } catch { return }
   try {
-    const actSnap = await getDocs(collection(db(), `terms/${term()}/activity_booking`))
-    const activityDocs = actSnap.docs
-    const activityIds = activityDocs.map((d) => d.data().act_id || d.id).filter(Boolean)
-    const slotRefs = await fetchTimetableRefsByActivityIds(activityIds)
-
-    for (let i = 0; i < activityDocs.length; i += BATCH_CHUNK_SIZE) {
-      const chunk = activityDocs.slice(i, i + BATCH_CHUNK_SIZE)
-      const batch = writeBatch(db())
-      chunk.forEach((d) => batch.delete(d.ref))
-      await batch.commit()
-    }
-    await deleteRefsInChunks(slotRefs)
+    const { error } = await supabase
+      .from('activity_bookings')
+      .delete()
+      .eq('school_id', authStore.schoolId)
+      .eq('term_id', term())
+    if (error) throw error
 
     activities.value = []
     selectedActRows.value = []
@@ -883,48 +848,49 @@ function onRoomSelectRow(row, val) {
   row.room_name = r?.room_name || r?.room_id || val
 }
 
-// Save all supervision at once (batch: create new / delete removed)
+// Save all supervision — stored in schools.settings.activity_supervisions JSONB
 async function saveAllSupervisions() {
   if (!selectedActId.value) return
   supSaving.value = true
   try {
     const act = selectedActivity.value
-    const actSups = supervisions.value.filter(s => s.act_id === selectedActId.value)
+    // Fetch current settings
+    const { data: schoolRow, error: fetchErr } = await supabase
+      .from('schools')
+      .select('settings')
+      .eq('id', authStore.schoolId)
+      .maybeSingle()
+    if (fetchErr) throw fetchErr
 
+    const settings = schoolRow?.settings || {}
+    const allSups = Array.isArray(settings.activity_supervisions)
+      ? settings.activity_supervisions.filter(
+          s => !(s.term_id === term() && s.act_id === selectedActId.value)
+        )
+      : []
+
+    // Add checked rows
     for (const row of teacherSupRows.value) {
-      const existing = actSups.find(s => s.teacher_id === row.teacher_id)
-
-      if (row.checked && !existing) {
-        // CREATE new supervision record
-        const id = `sup_${selectedActId.value}_${row.teacher_id}_${Date.now()}`
-        const data = {
-          sup_id: id, act_id: selectedActId.value, act_name: act?.name || '',
-          teacher_id: row.teacher_id, teacher_name: row.teacher_name,
-          room_id: row.room_id || null, room_name: row.room_name || null,
-          note: row.note || '', ...audit()
-        }
-        await setDoc(doc(db(), `terms/${term()}/activity_supervision`, id), data)
-        supervisions.value.push({ id, ...data })
-        row.sup_id = id
-
-      } else if (row.checked && existing) {
-        // UPDATE if room or note changed
-        const changed = existing.room_id !== (row.room_id || null) || existing.note !== row.note
-        if (changed) {
-          await setDoc(doc(db(), `terms/${term()}/activity_supervision`, existing.sup_id || existing.id), {
-            ...existing, room_id: row.room_id || null, room_name: row.room_name || null,
-            note: row.note || '', ...audit()
-          }, { merge: true })
-          Object.assign(existing, { room_id: row.room_id || null, room_name: row.room_name || null, note: row.note || '' })
-        }
-
-      } else if (!row.checked && existing) {
-        // DELETE supervision record
-        await deleteDoc(doc(db(), `terms/${term()}/activity_supervision`, existing.sup_id || existing.id))
-        supervisions.value = supervisions.value.filter(s => (s.sup_id || s.id) !== (existing.sup_id || existing.id))
-        row.sup_id = null
-      }
+      if (!row.checked) continue
+      allSups.push({
+        sup_id: row.sup_id || `sup_${selectedActId.value}_${row.teacher_id}`,
+        term_id: term(),
+        act_id: selectedActId.value,
+        act_name: act?.name || '',
+        teacher_id: row.teacher_id,
+        teacher_name: row.teacher_name,
+        room_id: row.room_id || null,
+        room_name: row.room_name || null,
+        note: row.note || '',
+        ...audit(),
+      })
     }
+
+    const { error: saveErr } = await supabase
+      .from('schools')
+      .update({ settings: { ...settings, activity_supervisions: allSups } })
+      .eq('id', authStore.schoolId)
+    if (saveErr) throw saveErr
 
     supervisions.value = await loadSupervisions()
     buildTeacherSupRows()
@@ -1027,16 +993,20 @@ async function confirmActImport() {
   if (!valid.length) return
   actImporting.value = true
   try {
-    for (const row of valid) {
-      const { _row, _error, ...data } = row
-      const id = `act_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-      await setDoc(doc(db(), `terms/${term()}/activity_booking`, id), {
-        ...data, id, ...audit(),
-      })
-    }
+    const rows = valid.map(({ _row, _error, ...data }) => ({
+      school_id: authStore.schoolId,
+      term_id: term(),
+      name: data.name,
+      days: data.days,
+      start_period: data.start_period,
+      duration_periods: data.duration_periods,
+      target_classes: data.target_classes,
+      color: data.color || '#0d9488',
+    }))
+    const { error } = await supabase.from('activity_bookings').insert(rows)
+    if (error) throw error
     ElMessage.success(`นำเข้ากิจกรรม ${valid.length} รายการเรียบร้อย`)
-    const snap = await getDocs(collection(db(), `terms/${term()}/activity_booking`))
-    activities.value = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    activities.value = await loadActivities()
     actImportDialogVisible.value = false
   } catch (e) {
     ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
@@ -1098,35 +1068,44 @@ async function confirmSupImport() {
   if (!valid.length) return
   supImporting.value = true
   try {
+    // Build new supervision records and merge into schools.settings
+    const { data: schoolRow, error: fetchErr } = await supabase
+      .from('schools')
+      .select('settings')
+      .eq('id', authStore.schoolId)
+      .maybeSingle()
+    if (fetchErr) throw fetchErr
+
+    const settings = schoolRow?.settings || {}
+    const existing = Array.isArray(settings.activity_supervisions) ? [...settings.activity_supervisions] : []
+
     for (const row of valid) {
       const act = row._act
       const teacher = row._teacher
       const tid = teacher.teacher_id || teacher.id
-      const id = `sup_${act.id || act.act_id}_${tid}_${Date.now()}`
+      const actId = act.id || act.act_id
+      const supId = `sup_${actId}_${tid}`
 
-      // ตรวจซ้ำ — ถ้ามีอยู่แล้วให้ update
-      const existing = supervisions.value.find(
-        s => s.act_id === (act.id || act.act_id) && s.teacher_id === tid
-      )
-      const docId = existing?.id || id
-      const docData = {
-        sup_id: docId,
-        act_id: act.id || act.act_id,
-        act_name: act.name || '',
+      const idx = existing.findIndex(s => s.act_id === actId && s.teacher_id === tid && s.term_id === term())
+      const record = {
+        sup_id: supId, term_id: term(), act_id: actId, act_name: act.name || '',
         teacher_id: tid,
         teacher_name: `${teacher.prefix || ''}${teacher.name || ''} ${teacher.surname || ''}`.trim(),
-        room_id: row.room_name || null,
-        room_name: row.room_name || null,
-        note: row.note || '',
-        ...audit(),
+        room_id: row.room_name || null, room_name: row.room_name || null,
+        note: row.note || '', ...audit(),
       }
-      await setDoc(doc(db(), `terms/${term()}/activity_supervision`, docId), docData, { merge: true })
+      if (idx >= 0) existing[idx] = { ...existing[idx], ...record }
+      else existing.push(record)
     }
 
+    const { error: saveErr } = await supabase
+      .from('schools')
+      .update({ settings: { ...settings, activity_supervisions: existing } })
+      .eq('id', authStore.schoolId)
+    if (saveErr) throw saveErr
+
     ElMessage.success(`นำเข้าครูคุม ${valid.length} รายการเรียบร้อย`)
-    // reload supervisions
-    const snap = await getDocs(collection(db(), `terms/${term()}/activity_supervision`))
-    supervisions.value = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    supervisions.value = await loadSupervisions()
     buildTeacherSupRows()
     supImportDialogVisible.value = false
   } catch (e) {

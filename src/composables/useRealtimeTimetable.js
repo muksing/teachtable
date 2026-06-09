@@ -1,14 +1,13 @@
 // src/composables/useRealtimeTimetable.js
-// Real-time sync ตารางสอน ผ่าน Firestore onSnapshot
+// Real-time sync ตารางสอน ผ่าน Supabase Realtime postgres_changes
 // รองรับผู้จัดหลายคนพร้อมกัน
 
 import { ref, onUnmounted } from 'vue'
-import { collection, doc, onSnapshot, setDoc, deleteDoc, serverTimestamp, writeBatch } from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 
-// safeId: แปลง / → - เพื่อใช้เป็น Firestore document ID (ห้ามมี slash)
+// safeId: สร้าง composite key ใช้เป็น local map key
 function safeId(...parts) {
   return parts.map(p => String(p ?? '').replace(/\//g, '-')).join('_')
 }
@@ -21,16 +20,17 @@ function buildSlotPayload(slot, overrides = {}) {
   const source = { ...slot, ...overrides }
   return {
     id: String(source.id ?? ''),
-    day: Number(source.day),
-    period: Number(source.period),
+    day: Number(source.day ?? source.day_of_week),
+    period: Number(source.period ?? source.period_number),
     class_id: normalizeScalar(source.class_id != null ? String(source.class_id) : null),
     teacher_id: normalizeScalar(source.teacher_id != null ? String(source.teacher_id) : null),
     teacher_name: normalizeScalar(source.teacher_name != null ? String(source.teacher_name) : null),
-    preferred_room: normalizeScalar(source.preferred_room != null ? String(source.preferred_room) : null),
+    preferred_room: normalizeScalar(source.preferred_room != null ? String(source.preferred_room) : (source.room_id != null ? String(source.room_id) : null)),
     assign_id: normalizeScalar(source.assign_id != null ? String(source.assign_id) : null),
     subject_code: normalizeScalar(source.subject_code != null ? String(source.subject_code) : null),
     subject_name: normalizeScalar(source.subject_name != null ? String(source.subject_name) : null),
-    type: String(source.type || 'subject'),
+    type: String(source.type || source.slot_type || 'subject'),
+    slot_type: String(source.slot_type || source.type || 'subject'),
     group_id: normalizeScalar(source.group_id != null ? String(source.group_id) : null),
     ref_id: normalizeScalar(source.ref_id != null ? String(source.ref_id) : null),
     act_id: normalizeScalar(source.act_id != null ? String(source.act_id) : null),
@@ -42,56 +42,125 @@ function buildSlotPayload(slot, overrides = {}) {
   }
 }
 
+// Convert a raw timetable_slots row → local slot shape
+function rowToSlot(row) {
+  return buildSlotPayload({
+    id: safeId(row.day_of_week, row.period_number, row.class_id),
+    _db_id: row.id,
+    day: row.day_of_week,
+    period: row.period_number,
+    class_id: row.class_id,
+    teacher_id: row.teacher_id,
+    preferred_room: row.room_id,
+    assign_id: null,
+    subject_code: null,
+    subject_name: null,
+    teacher_name: null,
+    slot_type: row.slot_type,
+    type: row.slot_type,
+    is_locked: row.slot_type === 'activity' || row.slot_type === 'manual_lock',
+    ...row,
+  })
+}
+
 export function useRealtimeTimetable() {
   const schoolStore = useSchoolStore()
   const authStore = useAuthStore()
-  const db = () => getSchoolDb()
-  const batchDb = () => db().firestore || db()
+  const schoolId = () => authStore.schoolId
   const term = () => schoolStore.currentTerm || '2568_1'
 
   // State
-  const timetableSlots = ref([])   // array ของ slots ทั้งหมด
+  const timetableSlots = ref([])
   const timetableMap = ref({})     // key: `${day}_${period}_${classId}` → slot
   const teacherMap = ref({})       // key: `${day}_${period}_${teacherId}` → slot
   const roomMap = ref({})          // key: `${day}_${period}_${roomId}` → slot
   const connected = ref(false)
   const lastUpdate = ref(null)
 
-  let unsubGrid = null
-  let unsubAct = null
+  let realtimeChannel = null
 
   // ====================================================
-  // subscribe: เริ่ม real-time listener
+  // subscribe: โหลดข้อมูลเริ่มต้น + เริ่ม realtime listener
   // ====================================================
-  function subscribe() {
-    // Grid listener
-    unsubGrid = onSnapshot(
-      collection(db(), `terms/${term()}/timetable_grid`),
-      (snap) => {
-        const slots = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        timetableSlots.value = slots
-        rebuildMaps(slots)
-        connected.value = true
-        lastUpdate.value = new Date()
-      },
-      (err) => {
-        console.error('Timetable realtime error:', err)
-        connected.value = false
+  async function subscribe() {
+    const sid = schoolId()
+    const t = term()
+
+    // โหลดข้อมูลเริ่มต้น
+    const { data, error } = await supabase
+      .from('timetable_slots')
+      .select('*')
+      .eq('school_id', sid)
+      .eq('term_id', t)
+
+    if (!error && data) {
+      const slots = data.map(rowToSlot)
+      timetableSlots.value = slots
+      rebuildMaps(slots)
+      connected.value = true
+      lastUpdate.value = new Date()
+    }
+
+    // เริ่ม realtime channel
+    realtimeChannel = supabase
+      .channel(`timetable_slots_${sid}_${t}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'timetable_slots',
+          filter: `school_id=eq.${sid}`,
+        },
+        (payload) => {
+          handleRealtimeEvent(payload)
+          lastUpdate.value = new Date()
+        }
+      )
+      .subscribe((status) => {
+        connected.value = status === 'SUBSCRIBED'
+      })
+
+    return realtimeChannel
+  }
+
+  function handleRealtimeEvent(payload) {
+    const { eventType, new: newRow, old: oldRow } = payload
+
+    if (eventType === 'INSERT' || eventType === 'UPDATE') {
+      if (newRow.term_id !== term()) return
+      const slot = rowToSlot(newRow)
+      const key = slot.id
+
+      // Update slots array
+      const idx = timetableSlots.value.findIndex(s => s.id === key)
+      if (idx >= 0) {
+        timetableSlots.value.splice(idx, 1, slot)
+      } else {
+        timetableSlots.value.push(slot)
       }
-    )
-    return unsubGrid
+    } else if (eventType === 'DELETE') {
+      if (oldRow) {
+        const key = safeId(oldRow.day_of_week, oldRow.period_number, oldRow.class_id)
+        timetableSlots.value = timetableSlots.value.filter(s => s.id !== key)
+      }
+    }
+
+    rebuildMaps(timetableSlots.value)
   }
 
   function unsubscribe() {
-    if (unsubGrid) { unsubGrid(); unsubGrid = null }
-    if (unsubAct) { unsubAct(); unsubAct = null }
+    if (realtimeChannel) {
+      supabase.removeChannel(realtimeChannel)
+      realtimeChannel = null
+    }
     connected.value = false
   }
 
   onUnmounted(unsubscribe)
 
   // ====================================================
-  // rebuildMaps: สร้าง lookup maps จาก slots array
+  // rebuildMaps
   // ====================================================
   function rebuildMaps(slots) {
     const gMap = {}
@@ -148,101 +217,176 @@ export function useRealtimeTimetable() {
   // placeSlot: วาง slot เดี่ยว
   // ====================================================
   async function placeSlot(slot) {
-    const id = safeId(slot.day, slot.period, slot.class_id)
-    const payload = buildSlotPayload(slot, { id })
-    await setDoc(doc(db(), `terms/${term()}/timetable_grid`, id), {
-      ...payload,
-      updated_by: authStore.profile?.uid || '',
-      updated_at: serverTimestamp(),
+    const sid = schoolId()
+    const t = term()
+    const day = slot.day ?? slot.day_of_week
+    const period = slot.period ?? slot.period_number
+    const payload = buildSlotPayload(slot, {
+      id: safeId(day, period, slot.class_id),
     })
-    return id
+
+    const { error } = await supabase
+      .from('timetable_slots')
+      .upsert({
+        term_id: t,
+        class_id: payload.class_id,
+        subject_id: payload.subject_id || null,
+        teacher_id: payload.teacher_id || null,
+        room_id: payload.preferred_room || null,
+        day_of_week: payload.day,
+        period_number: payload.period,
+        slot_type: payload.slot_type || payload.type || 'subject',
+        school_id: sid,
+        updated_by: authStore.profile?.uid || '',
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+
+    if (error) throw error
+    return payload.id
   }
 
   // ====================================================
   // swapSlots: สลับ 2 slots
   // ====================================================
   async function swapSlots(slotA, slotB) {
-    const batch = writeBatch(batchDb())
-    const idA = safeId(slotA.day, slotA.period, slotA.class_id)
-    const idB = safeId(slotB.day, slotB.period, slotB.class_id)
-    const newIdA = safeId(slotB.day, slotB.period, slotA.class_id)
-    const newIdB = safeId(slotA.day, slotA.period, slotB.class_id)
-    const ts = serverTimestamp()
+    const sid = schoolId()
+    const t = term()
+    const ts = new Date().toISOString()
     const uid = authStore.profile?.uid || ''
-    const payloadA = buildSlotPayload(slotA, { id: newIdA, day: slotB.day, period: slotB.period })
-    const payloadB = buildSlotPayload(slotB, { id: newIdB, day: slotA.day, period: slotA.period })
 
-    // ลบ slot เดิม
-    batch.delete(doc(db(), `terms/${term()}/timetable_grid`, idA))
-    batch.delete(doc(db(), `terms/${term()}/timetable_grid`, idB))
+    const dayA = slotA.day ?? slotA.day_of_week
+    const periodA = slotA.period ?? slotA.period_number
+    const dayB = slotB.day ?? slotB.day_of_week
+    const periodB = slotB.period ?? slotB.period_number
 
-    // สร้าง slot ใหม่ (สลับวัน+คาบ)
-    batch.set(doc(db(), `terms/${term()}/timetable_grid`, newIdA), {
-      ...payloadA,
-      updated_by: uid, updated_at: ts,
-    })
-    batch.set(doc(db(), `terms/${term()}/timetable_grid`, newIdB), {
-      ...payloadB,
-      updated_by: uid, updated_at: ts,
-    })
+    // ลบ slot เดิมทั้งคู่
+    const deleteIds = [slotA._db_id, slotB._db_id].filter(Boolean)
+    if (deleteIds.length) {
+      const { error: delErr } = await supabase
+        .from('timetable_slots')
+        .delete()
+        .in('id', deleteIds)
+      if (delErr) throw delErr
+    }
 
-    await batch.commit()
+    // สร้าง slot ใหม่สลับวัน+คาบ
+    const rows = [
+      {
+        term_id: t,
+        class_id: slotA.class_id,
+        subject_id: slotA.subject_id || null,
+        teacher_id: slotA.teacher_id || null,
+        room_id: slotA.preferred_room || slotA.room_id || null,
+        day_of_week: dayB,
+        period_number: periodB,
+        slot_type: slotA.slot_type || slotA.type || 'subject',
+        school_id: sid,
+        updated_by: uid,
+        updated_at: ts,
+      },
+      {
+        term_id: t,
+        class_id: slotB.class_id,
+        subject_id: slotB.subject_id || null,
+        teacher_id: slotB.teacher_id || null,
+        room_id: slotB.preferred_room || slotB.room_id || null,
+        day_of_week: dayA,
+        period_number: periodA,
+        slot_type: slotB.slot_type || slotB.type || 'subject',
+        school_id: sid,
+        updated_by: uid,
+        updated_at: ts,
+      },
+    ]
+
+    const { error: insertErr } = await supabase
+      .from('timetable_slots')
+      .upsert(rows, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+
+    if (insertErr) throw insertErr
   }
 
   // ====================================================
   // moveSlot: ย้าย slot ไปตำแหน่งใหม่
   // ====================================================
   async function moveSlot(slot, newDay, newPeriod) {
-    const oldId = safeId(slot.day, slot.period, slot.class_id)
-    const newId = safeId(newDay, newPeriod, slot.class_id)
-    const batch = writeBatch(batchDb())
-    const payload = buildSlotPayload(slot, { id: newId, day: newDay, period: newPeriod })
-    batch.delete(doc(db(), `terms/${term()}/timetable_grid`, oldId))
-    batch.set(doc(db(), `terms/${term()}/timetable_grid`, newId), {
-      ...payload,
-      updated_by: authStore.profile?.uid || '',
-      updated_at: serverTimestamp(),
-    })
-    await batch.commit()
+    const sid = schoolId()
+    const t = term()
+    const uid = authStore.profile?.uid || ''
+
+    // ลบ slot เดิม
+    if (slot._db_id) {
+      const { error: delErr } = await supabase
+        .from('timetable_slots')
+        .delete()
+        .eq('id', slot._db_id)
+      if (delErr) throw delErr
+    }
+
+    // Insert ที่ตำแหน่งใหม่
+    const { error: insertErr } = await supabase
+      .from('timetable_slots')
+      .upsert({
+        term_id: t,
+        class_id: slot.class_id,
+        subject_id: slot.subject_id || null,
+        teacher_id: slot.teacher_id || null,
+        room_id: slot.preferred_room || slot.room_id || null,
+        day_of_week: newDay,
+        period_number: newPeriod,
+        slot_type: slot.slot_type || slot.type || 'subject',
+        school_id: sid,
+        updated_by: uid,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+
+    if (insertErr) throw insertErr
   }
 
   // ====================================================
-  // lockSlot: ล็อกคาบ manual (click แล้วพิมพ์)
+  // lockSlot: ล็อกคาบ manual
   // ====================================================
   async function lockSlot({ day, period, classId, teacherId, roomId, label, lockType }) {
-    // lockType: 'class' | 'teacher' | 'room'
-    const id = lockType === 'teacher'
-      ? safeId('lock-t', day, period, teacherId)
-      : lockType === 'room'
-        ? safeId('lock-r', day, period, roomId)
-        : safeId(day, period, classId)
+    const sid = schoolId()
+    const t = term()
 
-    await setDoc(doc(db(), `terms/${term()}/timetable_grid`, id), {
-      id, day, period,
-      class_id: lockType === 'class' ? classId : null,
-      teacher_id: lockType === 'teacher' ? teacherId : (teacherId || null),
-      preferred_room: lockType === 'room' ? roomId : null,
-      type: 'manual_lock',
-      is_locked: true,
-      name: label || 'ล็อกคาบ',
-      lock_type: lockType,
-      updated_by: authStore.profile?.uid || '',
-      updated_at: serverTimestamp(),
-    })
+    const { error } = await supabase
+      .from('timetable_slots')
+      .upsert({
+        term_id: t,
+        class_id: lockType === 'class' ? classId : null,
+        teacher_id: lockType === 'teacher' ? teacherId : (teacherId || null),
+        room_id: lockType === 'room' ? roomId : null,
+        day_of_week: day,
+        period_number: period,
+        slot_type: 'manual_lock',
+        school_id: sid,
+        updated_by: authStore.profile?.uid || '',
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+
+    if (error) throw error
   }
 
   // ====================================================
-  // unlockSlot: ลบ lock
+  // unlockSlot / removeSlot: ลบ slot ด้วย db id
   // ====================================================
   async function unlockSlot(slotId) {
-    await deleteDoc(doc(db(), `terms/${term()}/timetable_grid`, slotId))
+    await removeSlot(slotId)
   }
 
-  // ====================================================
-  // removeSlot: ลบ slot (ไม่ใช่ lock)
-  // ====================================================
   async function removeSlot(slotId) {
-    await deleteDoc(doc(db(), `terms/${term()}/timetable_grid`, slotId))
+    // slotId อาจเป็น composite key หรือ db uuid
+    // ลองหาใน local map ก่อน
+    const local = timetableSlots.value.find(s => s.id === slotId || s._db_id === slotId)
+    const dbId = local?._db_id || slotId
+
+    const { error } = await supabase
+      .from('timetable_slots')
+      .delete()
+      .eq('id', dbId)
+
+    if (error) throw error
   }
 
   return {

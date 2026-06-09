@@ -1,17 +1,12 @@
 // src/composables/useBehavior.js
-import {
-  doc, getDoc, setDoc, updateDoc,
-  collection, writeBatch, serverTimestamp
-} from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 
 export function useBehavior() {
   const authStore = useAuthStore()
   const schoolStore = useSchoolStore()
-  const db = () => getSchoolDb()
-  const batchDb = () => db().firestore || db()
+  const schoolId = () => authStore.schoolId
   const term = () => schoolStore.currentTerm || '2568_1'
 
   function getBehaviorTypeLabel(type) {
@@ -24,154 +19,143 @@ export function useBehavior() {
   }
 
   /**
-   * บันทึก behavior log — Batch Write (Atomic)
+   * บันทึก behavior log และอัปเดตคะแนนนักเรียน (Atomic via Supabase RPC หรือลำดับ)
    */
   async function recordBehavior({ student, setting, pointsChange, note, source = 'manual', refTeachingLogId = null, image_urls = [] }) {
     const t = term()
-    const logRef = doc(collection(db(), `terms/${t}/behavior_logs`))
-    const logId = logRef.id
+    const sid = schoolId()
 
-    // ดึง summary ปัจจุบัน
-    const summarySnap = await getDoc(doc(db(), `terms/${t}/behavior_summary`, student.student_id))
-    const summary = summarySnap.exists() ? summarySnap.data() : {
-      total_score: 0, general_score: 0, attendance_score: 0, learning_score: 0
-    }
+    // ดึงคะแนนปัจจุบันของนักเรียน
+    const { data: studentData, error: studentErr } = await supabase
+      .from('students')
+      .select('total_behavior_score, attendance_behavior_score, learning_behavior_score')
+      .eq('id', student.student_id)
+      .eq('school_id', sid)
+      .single()
 
-    const typeKey = `${setting.behavior_type}_score`
-    const scoreBefore = summary[typeKey] || 0
+    if (studentErr) throw studentErr
+
+    const behaviorType = setting.behavior_type
+    const scoreField = behaviorType === 'attendance'
+      ? 'attendance_behavior_score'
+      : behaviorType === 'learning'
+        ? 'learning_behavior_score'
+        : null
+
+    const scoreBefore = scoreField ? (studentData?.[scoreField] || 0) : 0
     const scoreAfter  = scoreBefore + pointsChange
-    const newTotal    = (summary.total_score || 0) + pointsChange
+    const newTotal    = (studentData?.total_behavior_score || 0) + pointsChange
 
-    // Snapshot pattern
+    // 1. บันทึก behavior log
     const logData = {
-      log_id: logId,
+      term_id: t,
       student_id: student.student_id,
       class_id: student.class_id,
-      behavior_type: setting.behavior_type,
-      source,
-      ref_teaching_log_id: refTeachingLogId || null,
-      setting_id: setting.setting_id,
-      label_snapshot: setting.label,
-      behavior_type_label_snapshot: getBehaviorTypeLabel(setting.behavior_type),
-      points_policy_snapshot: setting.points_default,
-      points_change: pointsChange,
-      score_before: scoreBefore,
-      score_after: scoreAfter,
       recorded_by: authStore.profile?.uid || 'system',
-      recorded_by_name_snapshot: authStore.profile?.displayName || 'ระบบ',
-      date: new Date().toISOString().split('T')[0],
+      source_type: source,
+      source_id: refTeachingLogId || null,
+      behavior_type: behaviorType,
+      points_change: pointsChange,
+      score_after: scoreAfter,
       note: note || '',
       image_urls: Array.isArray(image_urls) ? image_urls : [],
-      can_delete: false,
-      updated_at: serverTimestamp()
+      school_id: sid,
+      created_at: new Date().toISOString(),
     }
 
-    // Batch Write — Atomic
-    const batch = writeBatch(batchDb())
-    batch.set(logRef, logData)
-    batch.set(
-      doc(db(), `terms/${t}/behavior_summary`, student.student_id),
-      {
-        total_score: newTotal,
-        [typeKey]: scoreAfter,
-        last_updated: serverTimestamp()
-      },
-      { merge: true }
-    )
+    const { error: logErr } = await supabase.from('behavior_logs').insert(logData)
+    if (logErr) throw logErr
 
-    // อัปเดตคะแนนรวมกลับไปที่ตารางนักเรียน เพื่อให้หน้านักเรียนเห็นค่าล่าสุดทันที
-    batch.update(doc(db(), `terms/${t}/students`, student.student_id), {
-      total_behavior_score: newTotal,
-      [`${setting.behavior_type}_behavior_score`]: scoreAfter
-    })
+    // 2. อัปเดตคะแนนรวมในตารางนักเรียน
+    const updatePayload = { total_behavior_score: newTotal }
+    if (scoreField) updatePayload[scoreField] = scoreAfter
 
-    await batch.commit()
-    return logId
+    const { error: updateErr } = await supabase
+      .from('students')
+      .update(updatePayload)
+      .eq('id', student.student_id)
+      .eq('school_id', sid)
+
+    if (updateErr) throw updateErr
+
+    return logData
   }
 
   /**
-   * เช็คชื่อ → บันทึก teaching_log + auto behavior (Batch Atomic)
+   * เช็คชื่อ → บันทึก attendance_record + auto behavior
    */
   async function recordAttendance({ teachingLogId, studentId, statusCode, statusSettings, student }) {
     const t = term()
+    const sid = schoolId()
     const status = statusSettings.find(s => s.status_code === statusCode)
     if (!status) throw new Error('ไม่พบสถานะการเข้าเรียน')
 
-    const batch = writeBatch(batchDb())
+    // 1. อัพเดต/สร้าง attendance_record
+    const { error: attendErr } = await supabase
+      .from('attendance_records')
+      .upsert({
+        teach_actual_id: teachingLogId,
+        student_id: studentId,
+        status: statusCode,
+        attendance_points: status.points_default || 0,
+        learning_points: 0,
+        note: '',
+      }, { onConflict: 'teach_actual_id,student_id' })
 
-    // 1. อัพเดต attendance ใน teaching_log
-    batch.update(
-      doc(db(), `terms/${t}/teaching_logs`, teachingLogId),
-      {
-        [`attendance.${studentId}`]: statusCode,
-        updated_by: authStore.profile?.uid,
-        updated_at: serverTimestamp()
-      }
-    )
+    if (attendErr) throw attendErr
 
-    // 2. ถ้า affects_behavior หรือมีการตั้งคะแนน (ไม่เท่ากับ 0) → สร้าง behavior log อัตโนมัติ
+    // 2. ถ้า affects_behavior หรือมีการตั้งคะแนน → สร้าง behavior log อัตโนมัติ
     if (status.affects_behavior || status.points_default !== 0) {
-        const summarySnap = await getDoc(
-          doc(db(), `terms/${t}/behavior_summary`, studentId)
-        )
-        const summary = summarySnap.exists() ? summarySnap.data() : {
-          total_score: 0, attendance_score: 0
-        }
+      const { data: studentData, error: studentErr } = await supabase
+        .from('students')
+        .select('total_behavior_score, attendance_behavior_score')
+        .eq('id', studentId)
+        .eq('school_id', sid)
+        .single()
 
-        const scoreBefore = summary.attendance_score || 0
-        const scoreAfter  = scoreBefore + status.points_default
-        const newTotal    = (summary.total_score || 0) + status.points_default
+      if (studentErr) throw studentErr
 
-        const logRef = doc(collection(db(), `terms/${t}/behavior_logs`))
-        batch.set(logRef, {
-          log_id: logRef.id,
-          student_id: studentId,
-          class_id: student.class_id,
-          behavior_type: 'attendance',
-          source: 'auto_attendance',
-          ref_teaching_log_id: teachingLogId,
-          setting_id: status.status_code,
-          label_snapshot: status.label,
-          behavior_type_label_snapshot: 'พฤติกรรมการมาเรียน',
-          points_policy_snapshot: status.points_default,
-          points_change: status.points_default,
-          score_before: scoreBefore,
-          score_after: scoreAfter,
-          recorded_by: 'system',
-          recorded_by_name_snapshot: 'ระบบอัตโนมัติ',
-          date: new Date().toISOString().split('T')[0],
-          note: `เช็คชื่อ: ${status.label}`,
-          can_delete: false,
-          updated_at: serverTimestamp()
-        })
+      const scoreBefore = studentData?.attendance_behavior_score || 0
+      const scoreAfter  = scoreBefore + status.points_default
+      const newTotal    = (studentData?.total_behavior_score || 0) + status.points_default
 
-        batch.set(
-          doc(db(), `terms/${t}/behavior_summary`, studentId),
-          {
-            total_score: newTotal,
-            attendance_score: scoreAfter,
-            last_updated: serverTimestamp()
-          },
-          { merge: true }
-        )
+      const { error: logErr } = await supabase.from('behavior_logs').insert({
+        term_id: t,
+        student_id: studentId,
+        class_id: student.class_id,
+        recorded_by: 'system',
+        source_type: 'auto_attendance',
+        source_id: teachingLogId,
+        behavior_type: 'attendance',
+        points_change: status.points_default,
+        score_after: scoreAfter,
+        note: `เช็คชื่อ: ${status.label}`,
+        image_urls: [],
+        school_id: sid,
+        created_at: new Date().toISOString(),
+      })
 
-        // อัปเดตคะแนนรวมกลับไปที่ตารางนักเรียน เพื่อให้หน้านักเรียนเห็นค่าล่าสุดทันที
-        batch.update(doc(db(), `terms/${t}/students`, studentId), {
+      if (logErr) throw logErr
+
+      const { error: updateErr } = await supabase
+        .from('students')
+        .update({
           total_behavior_score: newTotal,
-          attendance_behavior_score: scoreAfter
+          attendance_behavior_score: scoreAfter,
         })
-    }
+        .eq('id', studentId)
+        .eq('school_id', sid)
 
-    await batch.commit()
+      if (updateErr) throw updateErr
+    }
   }
 
   /**
-   * เช็คชื่อทั้งห้อง — Batch ทีเดียว
+   * เช็คชื่อทั้งห้อง — ทำทีละคนตามลำดับ
    */
   async function recordAttendanceBulk({ teachingLogId, attendanceMap, statusSettings, students }) {
-    // attendanceMap = { student_id: status_code, ... }
     for (const [studentId, statusCode] of Object.entries(attendanceMap)) {
-      const student = students.find(s => s.student_id === studentId)
+      const student = students.find(s => s.student_id === studentId || s.id === studentId)
       if (student) {
         await recordAttendance({ teachingLogId, studentId, statusCode, statusSettings, student })
       }

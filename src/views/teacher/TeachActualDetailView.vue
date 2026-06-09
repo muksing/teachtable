@@ -382,11 +382,7 @@
 import { ref, reactive, computed, onMounted, toRaw } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import {
-  doc, getDoc, setDoc, writeBatch, serverTimestamp,
-  collection, getDocs, query, where
-} from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
@@ -398,7 +394,6 @@ const authStore   = useAuthStore()
 const schoolStore = useSchoolStore()
 const { getStudents, getBehaviorSettings, getAttendanceStatuses, getSubjects, getPublishedTimetableSlots } = useSchoolDb()
 
-const db   = () => getSchoolDb()
 const term = () => schoolStore.currentTerm || '2568_1'
 const taId = computed(() => route.params.id)
 
@@ -526,11 +521,17 @@ function compressToBase64(file, maxW = 1200, maxH = 1200, quality = 0.82) {
 }
 
 async function loadGasSettings() {
-  const snap = await getDoc(doc(db(), 'school_info', 'main'))
-  if (!snap.exists()) throw new Error('ไม่พบการตั้งค่า GAS')
-  const data = snap.data()
-  const gasUrl   = data.gas_upload_web_app_url?.trim() || data.gas_web_app_url?.trim()
-  const folderId = data.gdrive_folder_id?.trim()
+  const schoolId = authStore.schoolId
+  if (!schoolId) throw new Error('ไม่พบ schoolId')
+  const { data, error } = await supabase
+    .from('schools')
+    .select('settings')
+    .eq('id', schoolId)
+    .single()
+  if (error || !data) throw new Error('ไม่พบการตั้งค่า GAS')
+  const info = data.settings?.school_info || {}
+  const gasUrl   = (info.gas_upload_web_app_url || info.gas_web_app_url || '').trim()
+  const folderId = (info.gdrive_folder_id || '').trim()
   if (!gasUrl)   throw new Error('กรุณาตั้งค่า GAS Upload Web App URL ในหน้าตั้งค่า')
   if (!folderId) throw new Error('กรุณาตั้งค่า Google Drive Folder ID ในหน้าตั้งค่า')
   return { gasUrl, folderId }
@@ -696,26 +697,46 @@ function markAllPresent() {
 async function loadPage() {
   loadingPage.value = true
   try {
-    const taSnap = await getDoc(doc(db(), `terms/${term()}/teach_actual`, taId.value))
-    if (taSnap.exists()) {
-      ta.value = { id: taSnap.id, ...taSnap.data() }
-    } else {
+    const { data: taData, error: taErr } = await supabase
+      .from('teach_actuals')
+      .select('*')
+      .eq('id', taId.value)
+      .single()
+    if (taErr || !taData) {
       ElMessage.error('ไม่พบข้อมูลคาบสอนนี้')
       router.back()
       return
+    }
+    // Normalise field names from Supabase schema to local usage
+    ta.value = {
+      ...taData,
+      id: taData.id,
+      period: taData.period_number,
+      class_name: taData.class_id,
+      subject_plan_id: taData.subject_id,
+      subject_name: taData.subject_id,
+      teacher_plan_id: taData.planned_teacher_id,
+      teacher_plan_name: taData.planned_teacher_id,
+      slot_type: taData.slot_type || 'normal',
+      // images array → img1/img2/img3
+      img1: Array.isArray(taData.images) ? (taData.images[0] || '') : '',
+      img2: Array.isArray(taData.images) ? (taData.images[1] || '') : '',
+      img3: Array.isArray(taData.images) ? (taData.images[2] || '') : '',
+      // student_records stored as jsonb
+      student_records: taData.student_records || {},
     }
 
     const d = ta.value
     form.value = {
       topic:             d.topic || '',
-      subject_actual_id: d.subject_actual_id || '',
+      subject_actual_id: d.actual_teacher_id ? (d.subject_id || '') : '',
       activity_type:     d.activity_type || 'บรรยาย',
       note:              d.note || '',
-      img1:              d.img1 || '',
-      img2:              d.img2 || '',
-      img3:              d.img3 || '',
+      img1: d.img1,
+      img2: d.img2,
+      img3: d.img3,
     }
-    photoUrls.value  = [d.img1 || '', d.img2 || '', d.img3 || '']
+    photoUrls.value    = [d.img1, d.img2, d.img3]
     photoBase64s.value = ['', '', '']
 
     const prevRecs = d.student_records || {}
@@ -729,7 +750,6 @@ async function loadPage() {
     learningBeh.value   = allBeh.filter(b => b.behavior_type === 'learning' && b.is_active !== false)
     attendanceBeh.value = allBeh.filter(b => b.behavior_type === 'attendance' && b.is_active !== false)
     allSubjects.value   = subjects
-    // เก็บเฉพาะ slot ของห้องนี้เพื่อกรองวิชาในช่องสอนแทน
     classSlots.value    = slots.filter(s => s.class_id === d.class_id)
 
     loadingStudents.value = true
@@ -826,11 +846,11 @@ async function saveAll() {
 
     // 2. เตรียม plain data ทั้งหมด — toRaw() เพื่อลบ Vue Proxy ออก
     const uid         = String(authStore.profile?.uid || '')
-    const displayName = String(authStore.profile?.displayName || '')
     const t           = String(term())
     const taIdStr     = String(taId.value)
     const taRaw       = toRaw(ta.value) || {}
     const rawStudents = toRaw(students.value)
+    const schoolId    = authStore.schoolId
 
     const img1 = String(photoUrls.value[0] || '')
     const img2 = String(photoUrls.value[1] || '')
@@ -841,7 +861,7 @@ async function saveAll() {
 
     const studentRecordsPayload = buildStudentRecordsPayload()
 
-    // 3. คำนวณ delta สำหรับ behavior_summary
+    // 3. คำนวณ delta สำหรับ behavior scores
     const needsUpdate = []
     const deltaMap    = {}
 
@@ -859,19 +879,23 @@ async function saveAll() {
       if (deltaAtt !== 0 || deltaLrn !== 0 || deltaTotal !== 0) needsUpdate.push(sid)
     }
 
-    const summarySnaps = await Promise.all(
-      needsUpdate.map(sid => getDoc(doc(db(), `terms/${t}/behavior_summary`, sid)))
-    )
+    // 4. อ่านคะแนนปัจจุบันจาก students table สำหรับคนที่มี delta
     const summaryMap = {}
-    summarySnaps.forEach((snap, i) => {
-      summaryMap[needsUpdate[i]] = snap.exists()
-        ? snap.data()
-        : { total_score: 100, attendance_score: 100, learning_score: 100 }
-    })
+    if (needsUpdate.length) {
+      const { data: stuRows } = await supabase
+        .from('students')
+        .select('id, student_code, total_behavior_score, attendance_behavior_score, learning_behavior_score')
+        .in('id', needsUpdate)
+      ;(stuRows || []).forEach(row => {
+        summaryMap[row.id] = {
+          total_score:      row.total_behavior_score      ?? 100,
+          attendance_score: row.attendance_behavior_score ?? 100,
+          learning_score:   row.learning_behavior_score   ?? 100,
+        }
+      })
+    }
 
-    // 4. สร้าง batch (ต้องเรียกใช้ .firestore เพื่อดึง Instance หลัก)
-    const batch = writeBatch(db().firestore)
-
+    // 5. บันทึก behavior_logs + อัปเดต students scores
     for (const stu of rawStudents) {
       const sid = String(stu.student_id)
       const rec = studentRecordsPayload[sid]
@@ -879,64 +903,50 @@ async function saveAll() {
 
       if (deltaAtt !== 0 || deltaLrn !== 0 || deltaTotal !== 0) {
         const sumData = summaryMap[sid] || { total_score: 100, attendance_score: 100, learning_score: 100 }
-        batch.set(doc(db(), `terms/${t}/behavior_summary`, sid), {
-          total_score:      Number((sumData.total_score      ?? 100) + deltaTotal),
-          attendance_score: Number((sumData.attendance_score ?? 100) + deltaAtt),
-          learning_score:   Number((sumData.learning_score   ?? 100) + deltaLrn),
-          last_updated:     serverTimestamp(),
-        }, { merge: true })
+        const newTotalScore = Number((sumData.total_score      ?? 100) + deltaTotal)
+        const newAttScore   = Number((sumData.attendance_score ?? 100) + deltaAtt)
+        const newLrnScore   = Number((sumData.learning_score   ?? 100) + deltaLrn)
 
-        // อัปเดตคะแนนกลับไปที่ตารางนักเรียน เพื่อลดจำนวนการ Read (Denormalization)
-        batch.set(doc(db(), `terms/${t}/students`, sid), {
-          total_behavior_score: Number((sumData.total_score ?? 100) + deltaTotal),
-          attendance_behavior_score: Number((sumData.attendance_score ?? 100) + deltaAtt),
-          learning_behavior_score: Number((sumData.learning_score ?? 100) + deltaLrn)
-        }, { merge: true })
+        // อัปเดตคะแนนบน students row
+        await supabase
+          .from('students')
+          .update({
+            total_behavior_score:      newTotalScore,
+            attendance_behavior_score: newAttScore,
+            learning_behavior_score:   newLrnScore,
+          })
+          .eq('id', sid)
 
         if (deltaAtt !== 0) {
-          const logId = `ta_${taIdStr}_${sid}_attendance`
-          batch.set(doc(db(), `terms/${t}/behavior_logs`, logId), {
-            log_id:                       logId,
-            student_id:                   sid,
-            class_id:                     String(stu.class_id || taRaw.class_id || ''),
-            behavior_type:                'attendance',
-            source:                       'teach_actual',
-            ref_teaching_log_id:          taIdStr,
-            label_snapshot:               String(rec.status),
-            behavior_type_label_snapshot: 'พฤติกรรมการมาเรียน',
-            points_change:                Number(attPoints),
-            score_before:                 Number(sumData.attendance_score ?? 100),
-            score_after:                  Number((sumData.attendance_score ?? 100) + deltaAtt),
-            date:                         String(taRaw.date || ''),
-            note:                         String(rec.note),
-            recorded_by:                  uid,
-            recorded_by_name_snapshot:    displayName,
-            can_delete:                   true,
-            updated_at:                   serverTimestamp(),
-          }, { merge: true })
+          await supabase.from('behavior_logs').upsert([{
+            id:            `ta_${taIdStr}_${sid}_attendance`,
+            term_id:       t,
+            student_id:    sid,
+            class_id:      String(stu.class_id || taRaw.class_id || ''),
+            school_id:     schoolId,
+            behavior_type: 'attendance',
+            recorded_by:   uid,
+            points_change: Number(attPoints),
+            score_after:   newAttScore,
+            note:          String(rec.note || ''),
+            created_at:    new Date().toISOString(),
+          }], { onConflict: 'id' })
         }
 
         if (deltaLrn !== 0) {
-          const logId = `ta_${taIdStr}_${sid}_learning`
-          batch.set(doc(db(), `terms/${t}/behavior_logs`, logId), {
-            log_id:                       logId,
-            student_id:                   sid,
-            class_id:                     String(stu.class_id || taRaw.class_id || ''),
-            behavior_type:                'learning',
-            source:                       'teach_actual',
-            ref_teaching_log_id:          taIdStr,
-            label_snapshot:               rec.selected_behaviors.map(b => b.label).join(', '),
-            behavior_type_label_snapshot: 'พฤติกรรมในห้องเรียน',
-            points_change:                Number(lrnPoints),
-            score_before:                 Number(sumData.learning_score ?? 100),
-            score_after:                  Number((sumData.learning_score ?? 100) + deltaLrn),
-            date:                         String(taRaw.date || ''),
-            note:                         String(rec.note),
-            recorded_by:                  uid,
-            recorded_by_name_snapshot:    displayName,
-            can_delete:                   true,
-            updated_at:                   serverTimestamp(),
-          }, { merge: true })
+          await supabase.from('behavior_logs').upsert([{
+            id:            `ta_${taIdStr}_${sid}_learning`,
+            term_id:       t,
+            student_id:    sid,
+            class_id:      String(stu.class_id || taRaw.class_id || ''),
+            school_id:     schoolId,
+            behavior_type: 'learning',
+            recorded_by:   uid,
+            points_change: Number(lrnPoints),
+            score_after:   newLrnScore,
+            note:          String(rec.note || ''),
+            created_at:    new Date().toISOString(),
+          }], { onConflict: 'id' })
         }
       }
     }
@@ -948,27 +958,27 @@ async function saveAll() {
     // หาครูเจ้าของวิชาที่สอนจริง — ใช้ classSlots ที่โหลดไว้แล้ว
     const actualSubjectCode = String(form.value.subject_actual_id || '')
     let subjectActualTeacherId = ''
-    if (actualSubjectCode && actualSubjectCode !== String(taRaw.subject_plan_id || '')) {
+    if (actualSubjectCode && actualSubjectCode !== String(taRaw.subject_id || taRaw.subject_plan_id || '')) {
       const matchSlot = classSlots.value.find(s => slotSubjectCode(s) === actualSubjectCode)
       subjectActualTeacherId = String(slotTeacherId(matchSlot) || '')
     }
 
-    batch.set(doc(db(), `terms/${t}/teach_actual`, taIdStr), {
-      topic:                      String(form.value.topic || ''),
-      subject_actual_id:          actualSubjectCode,
-      subject_actual_teacher_id:  subjectActualTeacherId,
-      activity_type:              String(form.value.activity_type || 'บรรยาย'),
-      note:                       String(form.value.note || ''),
-      img1, img2, img3,
-      student_records:            studentRecordsPayload,
-      inclass:                    inclassIds,
-      is_filled:                  true,
-      record_by:                  uid,
-      record_by_name:             displayName,
-      timestamp:                  serverTimestamp(),
-    }, { merge: true })
-
-    await batch.commit()
+    // 6. บันทึก teach_actual
+    const { error: saveErr } = await supabase
+      .from('teach_actuals')
+      .update({
+        topic:             String(form.value.topic || ''),
+        actual_teacher_id: subjectActualTeacherId || uid,
+        activity_type:     String(form.value.activity_type || 'บรรยาย'),
+        note:              String(form.value.note || ''),
+        images:            [img1, img2, img3].filter(Boolean),
+        student_records:   studentRecordsPayload,
+        inclass:           inclassIds,
+        is_filled:         true,
+        updated_at:        new Date().toISOString(),
+      })
+      .eq('id', taIdStr)
+    if (saveErr) throw saveErr
 
     // อัพเดท prevScore snapshot
     rawStudents.forEach(s => {
@@ -1008,30 +1018,29 @@ async function saveAll() {
 // ─── คาบคู่ ────────────────────────────────────────────────────────
 async function checkDoublePeriod(taRaw, t) {
   try {
-    const classId   = String(taRaw.class_id || '')
-    const subject   = String(taRaw.subject_plan_id || '')
-    const date      = String(taRaw.date || '')
-    const period    = Number(taRaw.period)
+    const classId = String(taRaw.class_id || '')
+    const subject = String(taRaw.subject_id || taRaw.subject_plan_id || '')
+    const date    = String(taRaw.date || '')
+    const period  = Number(taRaw.period_number ?? taRaw.period)
     if (!classId || !date) return
 
-    // ดึงทุก teach_actual ของวันและห้องเดียวกัน
-    const snap = await getDocs(query(
-      collection(db(), `terms/${t}/teach_actual`),
-      where('date', '==', date),
-      where('class_id', '==', classId),
-    ))
+    const { data } = await supabase
+      .from('teach_actuals')
+      .select('*')
+      .eq('term_id', t)
+      .eq('class_id', classId)
+      .eq('date', date)
+      .eq('school_id', authStore.schoolId)
 
-    const adjacent = snap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .find(r =>
-        r.id !== String(taId.value) &&
-        Math.abs(Number(r.period) - period) === 1 &&
-        String(r.subject_plan_id || '') === subject &&
-        !r.is_filled
-      )
+    const adjacent = (data || []).find(r =>
+      r.id !== String(taId.value) &&
+      Math.abs(Number(r.period_number) - period) === 1 &&
+      String(r.subject_id || '') === subject &&
+      !r.is_filled
+    )
 
     if (adjacent) {
-      doublePeriodTarget.value = adjacent
+      doublePeriodTarget.value = { ...adjacent, period: adjacent.period_number }
       doublePeriodDialog.value = true
     }
   } catch { /* ไม่รบกวน user ถ้าตรวจไม่ได้ */ }
@@ -1041,18 +1050,23 @@ async function saveDoublePeriod() {
   if (!doublePeriodTarget.value || !lastSavedPayload.value) return
   savingDouble.value = true
   try {
-    const t        = String(term())
-    const uid      = String(authStore.profile?.uid || '')
-    const dispName = String(authStore.profile?.displayName || '')
     const targetId = String(doublePeriodTarget.value.id)
+    const payload  = lastSavedPayload.value
 
-    await setDoc(doc(db(), `terms/${t}/teach_actual`, targetId), {
-      ...lastSavedPayload.value,
-      is_filled:      true,
-      record_by:      uid,
-      record_by_name: dispName,
-      timestamp:      serverTimestamp(),
-    }, { merge: true })
+    const { error } = await supabase
+      .from('teach_actuals')
+      .update({
+        topic:             payload.topic,
+        activity_type:     payload.activity_type,
+        note:              payload.note || '',
+        images:            [payload.img1, payload.img2, payload.img3].filter(Boolean),
+        student_records:   payload.student_records,
+        inclass:           payload.inclass,
+        is_filled:         true,
+        updated_at:        new Date().toISOString(),
+      })
+      .eq('id', targetId)
+    if (error) throw error
 
     ElMessage.success(`✅ บันทึกคาบ ${doublePeriodTarget.value.period} เรียบร้อยแล้ว`)
     doublePeriodDialog.value = false

@@ -312,10 +312,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 import * as XLSX from 'xlsx'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import {
-  doc, getDoc, updateDoc, deleteField, serverTimestamp, writeBatch
-} from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolDb } from '@/composables/useSchoolDb'
@@ -328,7 +325,8 @@ const gasUploadUrl   = computed(() => schoolStore.schoolInfo?.gas_upload_web_app
 const gdriveFolderId = computed(() => schoolStore.schoolInfo?.gdrive_folder_id || '')
 const schoolName     = computed(() => schoolStore.schoolInfo?.name || schoolStore.schoolName || 'โรงเรียน')
 const schoolLogo     = computed(() => schoolStore.schoolInfo?.logo_url || '')
-const teacherId      = computed(() => authStore.profile?.uid || '')
+const schoolId       = computed(() => authStore.schoolId)
+const teacherId      = computed(() => authStore.profile?.teacher_id || authStore.profile?.uid || '')
 const teacherName    = computed(() => authStore.profile?.displayName || authStore.profile?.email || '')
 
 // ── Attendance statuses ───────────────────────────────────────────
@@ -366,16 +364,13 @@ const STATUS_CELL_CLS = {
   'ไปราชการ': 'pp5-offsite',
 }
 
-// ── Router / DB ───────────────────────────────────────────────────
+// ── Router ────────────────────────────────────────────────────────
 const router  = useRouter()
 const route   = useRoute()
-const db      = () => getSchoolDb()
-const batchDb = () => db().firestore || db()
 const term    = computed(() => schoolStore.currentTerm || '2568_1')
 const clubId  = computed(() => route.params.clubId)
-const clubRef = computed(() => doc(db(), `terms/${term.value}/clubs`, clubId.value))
 
-// ── Core state (single document) ─────────────────────────────────
+// ── Core state (single club object from schools.settings.clubs) ───
 const clubDoc = ref(null)
 const loading = ref(false)
 const activeTab = ref('members')
@@ -415,6 +410,34 @@ const sortedMembers = computed(() =>
     return (Number(a.student_no) || 0) - (Number(b.student_no) || 0)
   })
 )
+
+// ── Helpers: read/write this club in schools.settings.clubs ───────
+async function fetchSettings() {
+  const { data: row } = await supabase
+    .from('schools')
+    .select('settings')
+    .eq('id', schoolId.value)
+    .maybeSingle()
+  return row?.settings || {}
+}
+
+async function persistClub(updatedClubData) {
+  const settings = await fetchSettings()
+  const allClubs = settings.clubs || {}
+  const termClubs = allClubs[term.value] || []
+  const idx = termClubs.findIndex(c => c.club_id === clubId.value)
+  if (idx !== -1) {
+    termClubs[idx] = updatedClubData
+  } else {
+    termClubs.push(updatedClubData)
+  }
+  allClubs[term.value] = termClubs
+  await supabase
+    .from('schools')
+    .update({ settings: { ...settings, clubs: allClubs } })
+    .eq('id', schoolId.value)
+  clubDoc.value = updatedClubData
+}
 
 // ── Member dialog ─────────────────────────────────────────────────
 const addMemberVisible   = ref(false)
@@ -565,7 +588,7 @@ async function loadStudentsForPick() {
   }
 }
 
-// ── Add / Remove members — 1 write each ──────────────────────────
+// ── Add / Remove members ──────────────────────────────────────────
 async function addMembers() {
   if (!selectedStudents.value.length) return
   const cap = clubDoc.value?.max_capacity
@@ -575,10 +598,11 @@ async function addMembers() {
   }
   memberLoading.value = true
   try {
-    const now = new Date()
-    const updates = {}
+    const now = new Date().toISOString()
+    const updated = { ...clubDoc.value }
+    if (!updated.members) updated.members = {}
     for (const s of selectedStudents.value) {
-      const data = {
+      updated.members[s.student_id] = {
         student_id:   s.student_id,
         student_name: s.student_name,
         student_no:   s.student_no || '',
@@ -586,20 +610,10 @@ async function addMembers() {
         class_room:   s.class_room || '',
         enrolled_at:  now,
       }
-      updates[`members.${s.student_id}`] = data
     }
-    updates.updated_at = serverTimestamp()
-    await updateDoc(clubRef.value, updates)  // 1 write
-    // Update local state after successful write
-    if (!clubDoc.value.members) clubDoc.value.members = {}
-    for (const s of selectedStudents.value) {
-      clubDoc.value.members[s.student_id] = {
-        student_id: s.student_id, student_name: s.student_name,
-        student_no: s.student_no || '', class_id: s.class_id || '',
-        class_room: s.class_room || '', enrolled_at: now,
-      }
-    }
-    await updateDoc(clubRef.value, { member_count: members.value.length })
+    updated.member_count = Object.keys(updated.members).length
+    updated.updated_at = now
+    await persistClub(updated)
     ElMessage.success(`เพิ่มสมาชิก ${selectedStudents.value.length} คนสำเร็จ`)
     addMemberVisible.value = false
   } catch (e) {
@@ -615,12 +629,13 @@ async function removeMember(member) {
       `ลบ "${member.student_name}" ออกจากชุมนุมนี้?`,
       'ยืนยัน', { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
-    await updateDoc(clubRef.value, {    // 1 write
-      [`members.${member.student_id}`]: deleteField(),
-      updated_at: serverTimestamp(),
-    })
-    delete clubDoc.value.members[member.student_id]
-    await updateDoc(clubRef.value, { member_count: members.value.length })
+    const updated = { ...clubDoc.value }
+    const newMembers = { ...(updated.members || {}) }
+    delete newMembers[member.student_id]
+    updated.members = newMembers
+    updated.member_count = Object.keys(newMembers).length
+    updated.updated_at = new Date().toISOString()
+    await persistClub(updated)
     ElMessage.success('ลบสมาชิกแล้ว')
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
@@ -660,7 +675,7 @@ function openSession(s) {
   sessionDialogVisible.value = true
 }
 
-// ── Save session — 1 write + behavior batch ───────────────────────
+// ── Save session ──────────────────────────────────────────────────
 async function saveSession() {
   if (!sessionForm.topic.trim()) {
     ElMessage.warning('กรุณากรอกเรื่อง/กิจกรรม')
@@ -694,32 +709,28 @@ async function saveSession() {
       uploadingFiles.value = false
     }
 
-    const t = term.value
+    const now = new Date().toISOString()
+    const updated = { ...clubDoc.value }
+    if (!updated.sessions) updated.sessions = {}
     let sessionId, prevAttendance
 
     if (editingSessionId.value) {
       sessionId = editingSessionId.value
-      prevAttendance = clubDoc.value.sessions?.[sessionId]?.attendance || {}
-
-      await updateDoc(clubRef.value, {          // 1 write
-        [`sessions.${sessionId}.attendance`]: attendance,
-        [`sessions.${sessionId}.file_urls`]:  fileUrls,
-        [`sessions.${sessionId}.topic`]:      sessionForm.topic,
-        [`sessions.${sessionId}.note`]:       sessionForm.note,
-        updated_at: serverTimestamp(),
-      })
-      if (clubDoc.value.sessions?.[sessionId]) {
-        Object.assign(clubDoc.value.sessions[sessionId], {
-          attendance, file_urls: fileUrls,
-          topic: sessionForm.topic, note: sessionForm.note,
-        })
+      prevAttendance = updated.sessions[sessionId]?.attendance || {}
+      updated.sessions[sessionId] = {
+        ...updated.sessions[sessionId],
+        attendance,
+        file_urls: fileUrls,
+        topic:     sessionForm.topic,
+        note:      sessionForm.note,
       }
     } else {
       sessionId = `ses_${clubId.value}_${Date.now()}`
       const sessionDate = sessionForm.session_date instanceof Date
-        ? sessionForm.session_date : new Date(sessionForm.session_date)
+        ? sessionForm.session_date.toISOString()
+        : new Date(sessionForm.session_date).toISOString()
       prevAttendance = {}
-      const sessionData = {
+      updated.sessions[sessionId] = {
         session_id:     sessionId,
         session_number: sessions.value.length + 1,
         topic:          sessionForm.topic,
@@ -727,19 +738,15 @@ async function saveSession() {
         session_date:   sessionDate,
         attendance,
         file_urls:      fileUrls,
-        created_at:     new Date(),
+        created_at:     now,
       }
-      await updateDoc(clubRef.value, {          // 1 write
-        [`sessions.${sessionId}`]: sessionData,
-        session_count: sessions.value.length + 1,
-        updated_at: serverTimestamp(),
-      })
-      if (!clubDoc.value.sessions) clubDoc.value.sessions = {}
-      clubDoc.value.sessions[sessionId] = sessionData
+      updated.session_count = sessions.value.length + 1
     }
+    updated.updated_at = now
+    await persistClub(updated)
 
     // Write behavior logs (delta from previous)
-    await saveBehaviorLogs(sessionId, attendance, prevAttendance, t)
+    await saveBehaviorLogs(sessionId, attendance, prevAttendance)
 
     sessionFiles.value = []
     ElMessage.success('บันทึกการประชุมสำเร็จ')
@@ -753,7 +760,7 @@ async function saveSession() {
 }
 
 // ── Behavior integration ──────────────────────────────────────────
-async function saveBehaviorLogs(sessionId, newAtt, prevAtt, t) {
+async function saveBehaviorLogs(sessionId, newAtt, prevAtt) {
   const membersNeedUpdate = members.value.filter(m => {
     const newPts  = newAtt[m.student_id]?.behavior_points ?? 0
     const prevPts = prevAtt[m.student_id]?.behavior_points ?? 0
@@ -761,29 +768,45 @@ async function saveBehaviorLogs(sessionId, newAtt, prevAtt, t) {
   })
   if (!membersNeedUpdate.length) return
 
-  // Read current behavior summaries (batch)
-  const summarySnaps = await Promise.all(
-    membersNeedUpdate.map(m => getDoc(doc(db(), `terms/${t}/behavior_summary`, m.student_id)))
-  )
-
-  const batch = writeBatch(batchDb())
   const clubName = clubDoc.value?.name || ''
   const sesNum   = clubDoc.value?.sessions?.[sessionId]?.session_number || ''
+  const sesDate  = formatDateStr(clubDoc.value?.sessions?.[sessionId]?.session_date)
+  const now      = new Date().toISOString()
 
-  summarySnaps.forEach((snap, i) => {
-    const m      = membersNeedUpdate[i]
-    const newPts = newAtt[m.student_id]?.behavior_points ?? 0
+  // Read current behavior summaries from Supabase
+  const studentIds = membersNeedUpdate.map(m => m.student_id)
+  const { data: existingLogs } = await supabase
+    .from('behavior_logs')
+    .select('student_id, score_after')
+    .eq('school_id', schoolId.value)
+    .eq('term_id', term.value)
+    .in('student_id', studentIds)
+    .order('created_at', { ascending: false })
+
+  // Build a map of latest score_after per student
+  const latestScore = {}
+  for (const row of (existingLogs || [])) {
+    if (!(row.student_id in latestScore)) {
+      latestScore[row.student_id] = row.score_after ?? 0
+    }
+  }
+
+  const logUpserts = []
+  const studentUpdates = []
+
+  for (const m of membersNeedUpdate) {
+    const newPts  = newAtt[m.student_id]?.behavior_points ?? 0
     const prevPts = prevAtt[m.student_id]?.behavior_points ?? 0
-    const delta  = newPts - prevPts
+    const delta   = newPts - prevPts
 
-    const sumData    = snap.exists() ? snap.data() : { total_score: 0, general_score: 0 }
-    const scoreBefore = sumData.general_score ?? sumData.total_score ?? 0
+    const scoreBefore = latestScore[m.student_id] ?? 0
     const scoreAfter  = scoreBefore + delta
-    const newTotal    = (sumData.total_score ?? 0) + delta
 
     const logId = `club_${clubId.value}_${sessionId}_${m.student_id}`
-    batch.set(doc(db(), `terms/${t}/behavior_logs`, logId), {
+    logUpserts.push({
       log_id:                       logId,
+      school_id:                    schoolId.value,
+      term_id:                      term.value,
       student_id:                   m.student_id,
       class_id:                     m.class_id || '',
       behavior_type:                'general',
@@ -795,28 +818,34 @@ async function saveBehaviorLogs(sessionId, newAtt, prevAtt, t) {
       points_change:                newPts,
       score_before:                 scoreBefore,
       score_after:                  scoreAfter,
-      date:                         formatDateStr(clubDoc.value?.sessions?.[sessionId]?.session_date),
+      date:                         sesDate,
       note:                         newAtt[m.student_id]?.note || '',
       recorded_by:                  teacherId.value,
       recorded_by_name_snapshot:    teacherName.value,
       can_delete:                   true,
-      updated_at:                   serverTimestamp(),
+      updated_at:                   now,
+      created_at:                   now,
     })
 
-    batch.set(doc(db(), `terms/${t}/behavior_summary`, m.student_id), {
-      general_score: scoreAfter,
-      total_score:   newTotal,
-      last_updated:  serverTimestamp(),
-    }, { merge: true })
-
-    // อัปเดตคะแนนกลับไปที่ตารางนักเรียน เพื่อให้โชว์ในหน้าจัดการนักเรียนทันที
-    batch.update(doc(db(), `terms/${t}/students`, m.student_id), {
-      total_behavior_score: newTotal,
-      general_behavior_score: scoreAfter
+    studentUpdates.push({
+      student_id:             m.student_id,
+      general_behavior_score: scoreAfter,
     })
-  })
+  }
 
-  await batch.commit()
+  // Upsert behavior logs
+  if (logUpserts.length) {
+    await supabase.from('behavior_logs').upsert(logUpserts, { onConflict: 'log_id' })
+  }
+
+  // Update student behavior scores
+  for (const upd of studentUpdates) {
+    await supabase
+      .from('students')
+      .update({ general_behavior_score: upd.general_behavior_score, updated_at: now })
+      .eq('student_id', upd.student_id)
+      .eq('school_id', schoolId.value)
+  }
 }
 
 // ── Shared: build logo+school header HTML ─────────────────────────

@@ -9,10 +9,6 @@
             <p class="text-white/80 text-sm mt-1">สร้าง โคลน ส่งออก และลบข้อมูลตามเทอม</p>
           </div>
           <div class="flex gap-2 flex-wrap">
-            <el-button @click="showMigrateDialog = true"
-              style="background:rgba(255,255,255,0.2);border-color:rgba(255,255,255,0.4);color:white">
-              📦 ย้ายข้อมูลเดิม
-            </el-button>
             <el-button type="primary" @click="openCreateDialog"
               style="background:rgba(255,255,255,0.25);border-color:rgba(255,255,255,0.5);color:white;font-weight:600">
               + สร้างเทอมใหม่
@@ -35,16 +31,16 @@
           <div class="stat-label text-white/80">เทอมทั้งหมด</div>
         </div>
         <div class="stat-card" style="background:linear-gradient(135deg,#43e97b,#38f9d7)">
-          <div class="stat-value text-white">{{ totalDocs.toLocaleString() }}</div>
-          <div class="stat-label text-white/80">เอกสารรวม</div>
+          <div class="stat-value text-white">{{ totalRows.toLocaleString() }}</div>
+          <div class="stat-label text-white/80">แถวข้อมูลรวม</div>
         </div>
         <div class="stat-card" style="background:linear-gradient(135deg,#4facfe,#00f2fe)">
-          <div class="stat-value text-white">{{ freeTierLimit.toLocaleString() }}</div>
-          <div class="stat-label text-white/80">โควต้า Free Tier</div>
+          <div class="stat-value text-white">{{ terms.length }}</div>
+          <div class="stat-label text-white/80">เทอมที่มีข้อมูล</div>
         </div>
-        <div class="stat-card" :style="`background:linear-gradient(135deg,${quotaColor})`">
-          <div class="stat-value text-white">{{ quotaPct }}%</div>
-          <div class="stat-label text-white/80">ใช้โควต้าแล้ว</div>
+        <div class="stat-card" style="background:linear-gradient(135deg,#10b981,#059669)">
+          <div class="stat-value text-white">{{ currentTerm }}</div>
+          <div class="stat-label text-white/80">เทอมปัจจุบัน</div>
         </div>
       </div>
 
@@ -91,25 +87,20 @@
               <span class="text-gray-700 font-medium">{{ row.counts?.students ?? '...' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="ภาระงาน" align="center" width="90">
-            <template #default="{ row }">
-              <span class="text-gray-700 font-medium">{{ row.counts?.assignments ?? '...' }}</span>
-            </template>
-          </el-table-column>
           <el-table-column label="ตารางสอน" align="center" width="100">
             <template #default="{ row }">
-              <span class="text-gray-700 font-medium">{{ row.counts?.timetable_grid ?? '...' }}</span>
+              <span class="text-gray-700 font-medium">{{ row.counts?.timetable_slots ?? '...' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="กิจกรรม" align="center" width="90">
             <template #default="{ row }">
-              <span class="text-gray-700 font-medium">{{ row.counts?.activity_booking ?? '...' }}</span>
+              <span class="text-gray-700 font-medium">{{ row.counts?.activity_bookings ?? '...' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="เอกสารรวม" align="center" width="100">
+          <el-table-column label="แถวรวม" align="center" width="100">
             <template #default="{ row }">
-              <span class="font-bold" :style="{ color: row.totalDocs > 5000 ? '#dc2626' : '#15803d' }">
-                {{ row.totalDocs?.toLocaleString() ?? '...' }}
+              <span class="font-bold" :style="{ color: row.totalRows > 5000 ? '#dc2626' : '#15803d' }">
+                {{ row.totalRows?.toLocaleString() ?? '...' }}
               </span>
             </template>
           </el-table-column>
@@ -202,24 +193,6 @@
           </el-button>
         </template>
       </el-dialog>
-
-      <!-- Migrate Dialog -->
-      <el-dialog v-model="showMigrateDialog" title="📦 ย้ายข้อมูลเดิม (One-Time Migration)" width="500px">
-        <el-alert type="warning" :closable="false" class="mb-4"
-          title="ใช้สำหรับโรงเรียนที่มีข้อมูลเดิมอยู่ใน root collections (teachers/, classes/, subjects/, rooms/)">
-          <p class="text-sm mt-1">ระบบจะย้ายข้อมูลเดิมทั้งหมดไปยังเทอมปัจจุบัน <strong>{{ currentTerm }}</strong> โดยจะไม่ลบข้อมูลเดิม</p>
-        </el-alert>
-        <div class="grid grid-cols-2 gap-2">
-          <el-checkbox v-for="col in migrateCollections" :key="col.key"
-            v-model="col.selected" :label="col.label" />
-        </div>
-        <template #footer>
-          <el-button @click="showMigrateDialog = false">ยกเลิก</el-button>
-          <el-button type="warning" :loading="migrating" @click="doMigrate">
-            📦 เริ่มย้ายข้อมูล
-          </el-button>
-        </template>
-      </el-dialog>
     </div>
   </AppLayout>
 </template>
@@ -229,29 +202,23 @@ import { ref, computed, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as XLSX from 'xlsx'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import {
-  collection, doc, getDocs, setDoc, deleteDoc,
-  getDoc, writeBatch, serverTimestamp
-} from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
-import { db as rootDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 
 const schoolStore = useSchoolStore()
 const authStore = useAuthStore()
-const db = () => getSchoolDb()
+
+const schoolId = computed(() => authStore.schoolId)
 const currentTerm = computed(() => schoolStore.currentTerm || '2568_1')
 
 const loading = ref(false)
 const creating = ref(false)
 const cloning = ref(false)
-const migrating = ref(false)
 
 const terms = ref([])
 const showCreateDialog = ref(false)
 const showCloneDialog = ref(false)
-const showMigrateDialog = ref(false)
 
 const newTermId = ref('')
 const cloneFrom = ref('')
@@ -259,74 +226,63 @@ const cloneSource = ref('')
 const cloneTarget = ref('')
 const newTermIdForClone = ref('')
 
-// Collections ที่โคลนได้ (พร้อม default checked)
+// Tables that can be cloned (mapped to Supabase tables)
 const CLONE_COLS = [
-  { key: 'teachers',                  label: '👨‍🏫 ครู',           defaultOn: false },
-  { key: 'classes',                   label: '🏫 ห้องเรียน',      defaultOn: true },
-  { key: 'subjects',                  label: '📚 วิชา',           defaultOn: true },
-  { key: 'rooms',                     label: '🚪 ห้อง/Lab',       defaultOn: true },
-  { key: 'students',                  label: '👨‍🎓 นักเรียน',     defaultOn: true },
-  { key: 'teaching_assignments',      label: '📋 ภาระงาน',        defaultOn: true },
-  { key: 'attendance_status_settings',label: '✅ สถานะมาเรียน',   defaultOn: true },
-  { key: 'behavior_settings',         label: '⭐ ตั้งค่าพฤติกรรม', defaultOn: true },
-  { key: 'timetable_grid',            label: '📅 ตารางสอน',       defaultOn: false },
-  { key: 'activity_booking',          label: '🎯 กิจกรรม',        defaultOn: false },
-  { key: 'activity_supervision',      label: '🧑‍🏫 ครูคุมกิจกรรม', defaultOn: false },
+  { key: 'teachers',          label: '👨‍🏫 ครู',           defaultOn: false },
+  { key: 'classes',           label: '🏫 ห้องเรียน',      defaultOn: true  },
+  { key: 'subjects',          label: '📚 วิชา',           defaultOn: true  },
+  { key: 'rooms',             label: '🚪 ห้อง/Lab',       defaultOn: true  },
+  { key: 'students',          label: '👨‍🎓 นักเรียน',     defaultOn: true  },
+  { key: 'timetable_slots',   label: '📅 ตารางสอน',       defaultOn: false },
+  { key: 'activity_bookings', label: '🎯 กิจกรรม',        defaultOn: false },
 ]
 const cloneCollections = reactive(CLONE_COLS.map(c => ({ ...c, selected: c.defaultOn })))
 
-const MIGRATE_COLS = [
-  { key: 'teachers',  label: '👨‍🏫 ครู',      selected: true },
-  { key: 'classes',   label: '🏫 ห้องเรียน',  selected: true },
-  { key: 'subjects',  label: '📚 วิชา',       selected: true },
-  { key: 'rooms',     label: '🚪 ห้อง/Lab',   selected: true },
-]
-const migrateCollections = reactive(MIGRATE_COLS)
-
-// ── Quota ─────────────────────────────────────────────────────────────────
-const freeTierLimit = 1_000_000
-const totalDocs = computed(() => terms.value.reduce((s, t) => s + (t.totalDocs || 0), 0))
-const quotaPct = computed(() => Math.round((totalDocs.value / freeTierLimit) * 100))
-const quotaColor = computed(() => {
-  if (quotaPct.value >= 80) return '#ef4444,#dc2626'
-  if (quotaPct.value >= 50) return '#f59e0b,#d97706'
-  return '#10b981,#059669'
-})
+// ── Stats ─────────────────────────────────────────────────────────────────
+const totalRows = computed(() => terms.value.reduce((s, t) => s + (t.totalRows || 0), 0))
 
 // ── Load terms ──────────────────────────────────────────────────────────
 async function loadTerms() {
   loading.value = true
-  // เริ่มจาก currentTerm ที่รู้อยู่แล้ว (จาก store) เสมอ — ไม่ขึ้นกับ Firestore list
-  const termIds = new Set([currentTerm.value])
+  const sid = schoolId.value
+  if (!sid) { loading.value = false; return }
 
   try {
-    // เพิ่ม term จาก school_info (อาจต่างจาก store ถ้าเปิดหน้านี้โดยตรง)
-    try {
-      const schoolSnap = await getDoc(doc(db(), 'school_info', 'main'))
-      if (schoolSnap.exists() && schoolSnap.data().current_term) {
-        termIds.add(schoolSnap.data().current_term)
-      }
-    } catch { /* ignore */ }
+    // Discover distinct term_ids from all term-scoped tables
+    const tables = ['teachers','classes','subjects','rooms','students','timetable_slots','activity_bookings']
+    const termIdSet = new Set([currentTerm.value])
 
-    // เพิ่ม term ที่มี document จริงใน terms/ collection
-    try {
-      const termsSnap = await getDocs(collection(db(), 'terms'))
-      termsSnap.docs.forEach(d => termIds.add(d.id))
-    } catch { /* ignore */ }
+    // Also load from academic_terms table if it exists
+    const { data: academicTerms } = await supabase
+      .from('academic_terms')
+      .select('term_id')
+      .eq('school_id', sid)
+    if (academicTerms) academicTerms.forEach(r => termIdSet.add(r.term_id))
 
-    // นับ docs ในแต่ละ term
+    // Collect term_ids from each table
+    await Promise.all(tables.map(async tbl => {
+      try {
+        const { data } = await supabase
+          .from(tbl)
+          .select('term_id')
+          .eq('school_id', sid)
+          .limit(500)
+        if (data) data.forEach(r => r.term_id && termIdSet.add(r.term_id))
+      } catch { /* ignore if table doesn't have term_id */ }
+    }))
+
+    // Count rows per term
     const list = []
-    for (const termId of termIds) {
-      const counts = await countTermCollections(termId)
-      const total = Object.values(counts).reduce((s, v) => s + v, 0)
-      list.push({ id: termId, counts, totalDocs: total })
+    for (const termId of termIdSet) {
+      const counts = await countTermRows(termId, sid)
+      const totalRows = Object.values(counts).reduce((s, v) => s + v, 0)
+      list.push({ id: termId, counts, totalRows })
     }
     list.sort((a, b) => b.id.localeCompare(a.id))
     terms.value = list
   } catch (e) {
-    // fallback: แสดงเฉพาะ currentTerm ที่ไม่มีข้อมูลจำนวน
     if (!terms.value.length) {
-      terms.value = [{ id: currentTerm.value, counts: {}, totalDocs: 0 }]
+      terms.value = [{ id: currentTerm.value, counts: {}, totalRows: 0 }]
     }
     ElMessage.warning('โหลดข้อมูลบางส่วนไม่ครบ: ' + e.message)
   } finally {
@@ -334,43 +290,46 @@ async function loadTerms() {
   }
 }
 
-async function countTermCollections(termId) {
-  const cols = ['teachers','classes','subjects','rooms','students',
-    'teaching_assignments','timetable_grid','activity_booking','activity_supervision']
+async function countTermRows(termId, sid) {
+  const tables = ['teachers','classes','subjects','rooms','students','timetable_slots','activity_bookings']
   const counts = {}
-  await Promise.all(cols.map(async col => {
+  await Promise.all(tables.map(async tbl => {
     try {
-      const snap = await getDocs(collection(db(), `terms/${termId}/${col}`))
-      counts[col] = snap.size
-    } catch {
-      counts[col] = 0
-    }
+      const { count } = await supabase
+        .from(tbl)
+        .select('*', { count: 'exact', head: true })
+        .eq('school_id', sid)
+        .eq('term_id', termId)
+      counts[tbl] = count || 0
+    } catch { counts[tbl] = 0 }
   }))
   return counts
 }
 
 // ── Create Term ───────────────────────────────────────────────────────
+function openCreateDialog() {
+  showCreateDialog.value = true
+  cloneFrom.value = ''
+  newTermId.value = ''
+  cloneCollections.forEach(c => { c.selected = c.defaultOn })
+}
+
 async function createTerm() {
-  if (!newTermId.value.trim()) {
-    return ElMessage.warning('กรุณากรอกรหัสเทอม')
-  }
+  if (!newTermId.value.trim()) return ElMessage.warning('กรุณากรอกรหัสเทอม')
   const targetId = newTermId.value.trim()
 
-  // ตรวจว่ามีอยู่แล้วหรือไม่
-  const existing = terms.value.find(t => t.id === targetId)
-  if (existing) {
-    return ElMessage.warning(`เทอม ${targetId} มีอยู่แล้ว`)
-  }
+  if (terms.value.find(t => t.id === targetId)) return ElMessage.warning(`เทอม ${targetId} มีอยู่แล้ว`)
 
   creating.value = true
   try {
-    // สร้าง term document
-    await setDoc(doc(db(), 'terms', targetId), {
-      created_at: serverTimestamp(),
+    // Register term in academic_terms table
+    await supabase.from('academic_terms').upsert({
+      school_id: schoolId.value,
+      term_id: targetId,
+      created_at: new Date().toISOString(),
       created_by: authStore.profile?.uid || 'system',
-    })
+    }, { onConflict: 'school_id,term_id' })
 
-    // โคลนถ้าเลือก
     if (cloneFrom.value) {
       await cloneTermData(cloneFrom.value, targetId)
     }
@@ -387,19 +346,11 @@ async function createTerm() {
   }
 }
 
-function openCreateDialog() {
-  showCreateDialog.value = true
-  cloneFrom.value = ''
-  newTermId.value = ''
-  cloneCollections.forEach(c => { c.selected = c.defaultOn })
-}
-
 // ── Clone ─────────────────────────────────────────────────────────────
 function openCloneDialog(termId) {
   cloneSource.value = termId
   cloneTarget.value = ''
   newTermIdForClone.value = ''
-  // reset collections to default
   cloneCollections.forEach(c => { c.selected = c.defaultOn })
   showCloneDialog.value = true
 }
@@ -409,11 +360,11 @@ async function doClone() {
   if (targetId === '__new__') {
     if (!newTermIdForClone.value.trim()) return ElMessage.warning('กรุณากรอกรหัสเทอมใหม่')
     targetId = newTermIdForClone.value.trim()
-    // สร้าง term doc
-    await setDoc(doc(db(), 'terms', targetId), {
-      created_at: serverTimestamp(),
-      created_by: authStore.profile?.uid || 'system',
-    })
+    await supabase.from('academic_terms').upsert({
+      school_id: schoolId.value,
+      term_id: targetId,
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'school_id,term_id' })
   }
   if (!targetId) return ElMessage.warning('กรุณาเลือกเทอมปลายทาง')
   if (targetId === cloneSource.value) return ElMessage.warning('ต้นทางและปลายทางเป็นเทอมเดียวกัน')
@@ -432,23 +383,37 @@ async function doClone() {
 }
 
 async function cloneTermData(fromTerm, toTerm) {
-  const selectedCols = cloneCollections.filter(c => c.selected).map(c => c.key)
-  for (const col of selectedCols) {
-    const snap = await getDocs(collection(db(), `terms/${fromTerm}/${col}`))
-    if (snap.empty) continue
-    // batch write ทีละ 500
-    const docs = snap.docs
-    for (let i = 0; i < docs.length; i += 400) {
-      const batch = writeBatch(db())
-      const chunk = docs.slice(i, i + 400)
-      chunk.forEach(d => {
-        batch.set(doc(db(), `terms/${toTerm}/${col}`, d.id), {
-          ...d.data(),
+  const sid = schoolId.value
+  const selectedTables = cloneCollections.filter(c => c.selected).map(c => c.key)
+  for (const tbl of selectedTables) {
+    try {
+      const { data } = await supabase
+        .from(tbl)
+        .select('*')
+        .eq('school_id', sid)
+        .eq('term_id', fromTerm)
+      if (!data || !data.length) continue
+
+      // Prepare rows for target term (strip id to get new auto-ids, update term_id)
+      const rows = data.map(row => {
+        const { id, created_at, updated_at, ...rest } = row
+        return {
+          ...rest,
+          term_id: toTerm,
+          school_id: sid,
           cloned_from: fromTerm,
-          cloned_at: serverTimestamp(),
-        })
+          cloned_at: new Date().toISOString(),
+        }
       })
-      await batch.commit()
+
+      // Insert in chunks of 200
+      for (let i = 0; i < rows.length; i += 200) {
+        const chunk = rows.slice(i, i + 200)
+        const { error } = await supabase.from(tbl).insert(chunk)
+        if (error) throw new Error(`${tbl}: ${error.message}`)
+      }
+    } catch (e) {
+      console.warn(`Clone ${tbl} failed:`, e.message)
     }
   }
 }
@@ -459,17 +424,18 @@ async function setActiveTerm(termId) {
     `เปลี่ยนเทอมปัจจุบันเป็น "${termId}" ?\n\n✅ ข้อมูลทุกเทอมยังอยู่ครบ ไม่ได้ลบ\n📌 ระบบจะเปลี่ยนไปอ่าน/เขียนข้อมูลของเทอม "${termId}" เท่านั้น`,
     'ยืนยันเปลี่ยนเทอม', { confirmButtonText: 'เปลี่ยน', cancelButtonText: 'ยกเลิก', type: 'warning' }
   )
-  // parse ปีและภาคเรียนจาก termId เช่น "2568_2" → year=2568, semester=2
   const parts = termId.split('_')
   const year = parseInt(parts[0]) || 0
   const semester = parseInt(parts[1]) || 1
-  const extraFields = year > 0 ? { year, semester } : {}
 
-  await setDoc(doc(db(), 'school_info', 'main'), {
-    current_term: termId,
-    ...extraFields,
-    updated_at: serverTimestamp()
-  }, { merge: true })
+  const sid = schoolId.value
+  const { data: schoolData } = await supabase.from('schools').select('settings').eq('id', sid).single()
+  const settings = schoolData?.settings || {}
+  const extraInfo = year > 0 ? { year, semester, current_term: termId } : { current_term: termId }
+
+  await supabase.from('schools').update({
+    settings: { ...settings, ...extraInfo }
+  }).eq('id', sid)
 
   schoolStore.setCurrentTerm(termId)
   if (year > 0) {
@@ -483,15 +449,14 @@ async function setActiveTerm(termId) {
 async function exportTerm(termId) {
   try {
     ElMessage.info(`กำลัง export เทอม ${termId}...`)
-    const cols = ['teachers','classes','subjects','rooms','students',
-      'teaching_assignments','timetable_grid','activity_booking','activity_supervision']
+    const sid = schoolId.value
+    const tables = ['teachers','classes','subjects','rooms','students','timetable_slots','activity_bookings']
     const wb = XLSX.utils.book_new()
-    for (const col of cols) {
-      const snap = await getDocs(collection(db(), `terms/${termId}/${col}`))
-      if (snap.empty) continue
-      const rows = snap.docs.map(d => ({ _id: d.id, ...d.data() }))
-      const ws = XLSX.utils.json_to_sheet(rows)
-      XLSX.utils.book_append_sheet(wb, ws, col.substring(0, 31))
+    for (const tbl of tables) {
+      const { data } = await supabase.from(tbl).select('*').eq('school_id', sid).eq('term_id', termId)
+      if (!data || !data.length) continue
+      const ws = XLSX.utils.json_to_sheet(data)
+      XLSX.utils.book_append_sheet(wb, ws, tbl.substring(0, 31))
     }
     XLSX.writeFile(wb, `term_${termId}_${new Date().toISOString().slice(0,10)}.xlsx`)
     ElMessage.success('Export สำเร็จ!')
@@ -510,64 +475,22 @@ async function deleteTerm(termId) {
     }
   )
   try {
-    const cols = ['teachers','classes','subjects','rooms','students',
-      'teaching_assignments','timetable_grid','activity_booking',
-      'activity_supervision','attendance_status_settings','behavior_settings',
-      'teaching_logs','behavior_logs','behavior_summary']
-    for (const col of cols) {
-      const snap = await getDocs(collection(db(), `terms/${termId}/${col}`))
-      for (let i = 0; i < snap.docs.length; i += 400) {
-        const batch = writeBatch(db())
-        snap.docs.slice(i, i + 400).forEach(d => batch.delete(d.ref))
-        await batch.commit()
-      }
+    const sid = schoolId.value
+    const tables = ['teachers','classes','subjects','rooms','students',
+      'timetable_slots','activity_bookings','teach_actuals','behavior_logs','attendance_records']
+
+    for (const tbl of tables) {
+      const { error } = await supabase.from(tbl).delete().eq('school_id', sid).eq('term_id', termId)
+      if (error) console.warn(`Delete ${tbl}/${termId}:`, error.message)
     }
-    await deleteDoc(doc(db(), 'terms', termId))
+
+    // Remove from academic_terms
+    await supabase.from('academic_terms').delete().eq('school_id', sid).eq('term_id', termId)
+
     ElMessage.success(`ลบเทอม ${termId} เรียบร้อย`)
     await loadTerms()
   } catch (e) {
     ElMessage.error('ลบไม่สำเร็จ: ' + e.message)
-  }
-}
-
-// ── Migrate old root data ──────────────────────────────────────────────
-async function doMigrate() {
-  await ElMessageBox.confirm(
-    `ย้ายข้อมูลจาก root collections ไปยังเทอม "${currentTerm.value}"?\n(ข้อมูลเดิมจะไม่ถูกลบ)`,
-    'ยืนยันย้ายข้อมูล', { confirmButtonText: 'ย้ายข้อมูล', cancelButtonText: 'ยกเลิก', type: 'warning' }
-  )
-  migrating.value = true
-  try {
-    // สร้าง term document ถ้าไม่มี (แก้ปัญหา term แสดง 0)
-    await setDoc(doc(db(), 'terms', currentTerm.value), {
-      created_at: serverTimestamp(),
-      created_by: authStore.profile?.uid || 'system',
-    }, { merge: true })
-
-    let total = 0
-    for (const col of migrateCollections) {
-      if (!col.selected) continue
-      const snap = await getDocs(collection(db(), col.key))
-      if (snap.empty) continue
-      for (let i = 0; i < snap.docs.length; i += 400) {
-        const batch = writeBatch(db())
-        snap.docs.slice(i, i + 400).forEach(d => {
-          batch.set(
-            doc(db(), `terms/${currentTerm.value}/${col.key}`, d.id),
-            { ...d.data(), migrated_from_root: true, migrated_at: serverTimestamp() }
-          )
-        })
-        await batch.commit()
-        total += Math.min(400, snap.docs.length - i)
-      }
-    }
-    ElMessage.success(`ย้ายข้อมูล ${total} รายการ เข้าเทอม ${currentTerm.value} สำเร็จ!`)
-    showMigrateDialog.value = false
-    await loadTerms()
-  } catch (e) {
-    ElMessage.error('ย้ายข้อมูลไม่สำเร็จ: ' + e.message)
-  } finally {
-    migrating.value = false
   }
 }
 

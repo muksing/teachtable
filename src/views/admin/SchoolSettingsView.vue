@@ -284,7 +284,6 @@
         </el-table>
       </el-card>
 
-      <!-- Save Button -->
       <!-- Section: AI Mode -->
       <el-card class="section-card sec-ai mb-4">
         <template #header>
@@ -305,7 +304,7 @@
           </el-input>
         </el-form-item>
         <div class="text-xs text-gray-400 mt-1">
-          Key นี้จะถูกเก็บใน Firestore ของโรงเรียนท่านเท่านั้น ไม่ได้ส่งไปที่ใด
+          Key นี้จะถูกเก็บในฐานข้อมูลของโรงเรียนท่านเท่านั้น ไม่ได้ส่งไปที่ใด
           <a href="https://console.anthropic.com" target="_blank" class="text-blue-500 ml-1">ขอ API Key ได้ที่นี่ →</a>
         </div>
       </el-card>
@@ -360,7 +359,7 @@
           </div>
         </div>
         <div class="text-xs text-gray-500 mb-3">
-          เมื่อกดเผยแพร่ ระบบจะสร้างไฟล์ JSON สำหรับหน้า public โดยผู้ใช้ทั่วไปจะเห็นเฉพาะข้อมูลที่เผยแพร่ล่าสุดเท่านั้น
+          เมื่อกดเผยแพร่ ระบบจะสร้าง snapshot JSON สำหรับหน้า public โดยผู้ใช้ทั่วไปจะเห็นเฉพาะข้อมูลที่เผยแพร่ล่าสุดเท่านั้น
         </div>
         <div class="flex items-center gap-3">
           <el-button
@@ -371,7 +370,7 @@
           >
             🚀 เผยแพร่ตารางล่าสุด
           </el-button>
-          <span v-if="publishMeta.current_path" class="text-xs text-gray-500">{{ publishMeta.current_path }}</span>
+          <span v-if="publishMeta.version" class="text-xs text-gray-500">{{ publishMeta.version }}</span>
         </div>
       </el-card>
 
@@ -395,9 +394,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { doc, getDoc, setDoc, serverTimestamp, collection, query, getDocs, orderBy } from '@/supabase/firestore'
-import { ref as storageRef, uploadString } from '@/supabase/storage'
-import { getSchoolDb, storage } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import * as XLSX from 'xlsx'
@@ -410,13 +407,13 @@ const publishing = ref(false)
 const publishMeta = reactive({
   status: '',
   version: '',
-  current_path: '',
-  versioned_path: '',
   published_at_iso: '',
 })
 const importFileRef = ref(null)
 const logoFileRef = ref(null)
 const logoUploading = ref(false)
+
+const schoolId = computed(() => authStore.schoolId)
 
 const currentPlanFeeLabel = computed(() => {
   const fee = Number(schoolStore.pricingPlan?.monthly_fee || 0)
@@ -442,26 +439,40 @@ const planStatusBoxStyle = computed(() => {
   return { background: '#fff7ed', border: '1px solid #fed7aa' }
 })
 
+// ===== Supabase helpers =====
+async function readSchoolSettings() {
+  const sid = schoolId.value
+  if (!sid) return {}
+  const { data } = await supabase.from('schools').select('settings').eq('id', sid).single()
+  return data?.settings || {}
+}
+
+async function writeSchoolSettings(patch) {
+  const sid = schoolId.value
+  if (!sid) throw new Error('ไม่พบ schoolId')
+  const settings = await readSchoolSettings()
+  const { error } = await supabase.from('schools').update({
+    settings: { ...settings, ...patch }
+  }).eq('id', sid)
+  if (error) throw error
+}
+
+// ===== Plan Notice =====
 async function markPlanNoticeRead() {
   const notice = schoolStore.planNotice
   if (!notice) return
   try {
-    await setDoc(doc(db(), 'school_info', 'main'), {
+    await writeSchoolSettings({
       plan_notice: {
         title: notice.title || '',
         message: notice.message || '',
         unread: false,
-        updated_at: serverTimestamp(),
-      },
-      updated_at: serverTimestamp(),
-    }, { merge: true })
+        updated_at: new Date().toISOString(),
+      }
+    })
     schoolStore.setSchool({
       ...schoolStore.schoolInfo,
-      plan_notice: {
-        title: notice.title || '',
-        message: notice.message || '',
-        unread: false,
-      },
+      plan_notice: { title: notice.title || '', message: notice.message || '', unread: false },
     })
     ElMessage.success('รับทราบการแจ้งเตือนแล้ว')
   } catch (e) {
@@ -469,21 +480,14 @@ async function markPlanNoticeRead() {
   }
 }
 
-// submitRenewalRequest moved to RenewalView.vue
-
 // ===== ระบบล็อคตารางสอน =====
 const timetableLocked = ref(false)
 const lockSaving = ref(false)
 
 function formatThaiDateTime(iso) {
   try {
-    return new Date(iso).toLocaleString('th-TH', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    })
-  } catch {
-    return iso
-  }
+    return new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
+  } catch { return iso }
 }
 
 async function saveLockState(val) {
@@ -494,10 +498,10 @@ async function saveLockState(val) {
   }
   lockSaving.value = true
   try {
-    await setDoc(doc(db(), 'school_info', 'main'), {
+    await writeSchoolSettings({
       timetable_locked: val,
-      timetable_locked_at: serverTimestamp(),
-    }, { merge: true })
+      timetable_locked_at: new Date().toISOString(),
+    })
     schoolStore.setSchool({ ...schoolStore.schoolInfo, timetable_locked: val })
     ElMessage.success(val ? '🔒 ล็อคระบบจัดตารางสอนเรียบร้อย' : '✅ เปิดระบบจัดตารางสอนเรียบร้อย')
   } catch (e) {
@@ -508,8 +512,7 @@ async function saveLockState(val) {
   }
 }
 
-const db = () => getSchoolDb()
-
+// ===== Publish Timetable Snapshot =====
 async function publishTimetableSnapshot() {
   if (schoolStore.isViewOnlyMode) {
     ElMessage.warning('แพ็กเกจหมดอายุ: ไม่สามารถเผยแพร่ได้')
@@ -517,101 +520,59 @@ async function publishTimetableSnapshot() {
   }
   publishing.value = true
   try {
+    const sid = schoolId.value
+    if (!sid) { ElMessage.error('ไม่พบ schoolId'); return }
     const currentTerm = `${form.year}_${form.semester}`
-    if (!currentTerm) {
-      ElMessage.warning('ไม่พบภาคเรียนปัจจุบัน')
-      return
-    }
 
-    const schoolId = authStore.schoolId
-    if (!schoolId) {
-      ElMessage.error('ไม่พบ schoolId ของผู้ใช้')
-      return
-    }
-
-    const [classesSnap, teachersSnap, gridSnap] = await Promise.all([
-      getDocs(query(collection(db(), `terms/${currentTerm}/classes`), orderBy('class_id'))),
-      getDocs(query(collection(db(), `terms/${currentTerm}/teachers`), orderBy('name'))),
-      getDocs(collection(db(), `terms/${currentTerm}/timetable_grid`)),
+    // Load data from Supabase tables
+    const [classesRes, teachersRes, slotsRes] = await Promise.all([
+      supabase.from('classes').select('*').eq('school_id', sid).eq('term_id', currentTerm).order('class_id'),
+      supabase.from('teachers').select('*').eq('school_id', sid).eq('term_id', currentTerm).order('name'),
+      supabase.from('timetable_slots').select('*').eq('school_id', sid).eq('term_id', currentTerm),
     ])
 
-    const classes = classesSnap.docs.map(d => d.data())
-    const teachers = teachersSnap.docs.map(d => d.data())
-    const timetable = gridSnap.docs.map(d => d.data())
+    const classes = classesRes.data || []
+    const teachers = teachersRes.data || []
+    const timetable = slotsRes.data || []
 
     const now = new Date()
-    const stamp = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '')
     const version = `v${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
 
-    const payload = {
-      school_id: schoolId,
-      current_term: currentTerm,
+    const publishInfo = {
+      status: 'published',
       version,
+      current_term: currentTerm,
+      class_count: classes.length,
+      teacher_count: teachers.length,
+      slot_count: timetable.length,
       published_at_iso: now.toISOString(),
-      classes,
-      teachers,
-      timetable,
-    }
-    const payloadJson = JSON.stringify(payload)
-
-    const basePath = `public_timetables/${schoolId}`
-    const currentPath = `${basePath}/current.json`
-    const versionedPath = `${basePath}/versions/${stamp}.json`
-
-    let storagePublished = true
-    try {
-      await Promise.all([
-        uploadString(storageRef(storage, currentPath), payloadJson, 'raw', { contentType: 'application/json' }),
-        uploadString(storageRef(storage, versionedPath), payloadJson, 'raw', { contentType: 'application/json' }),
-      ])
-    } catch (storageError) {
-      storagePublished = false
-      console.warn('Storage publish failed, fallback to Firestore snapshot only:', storageError)
-
-      // Proceed with Firestore update regardless of Storage outcome
+      published_by_uid: authStore.profile?.uid || null,
     }
 
-    await setDoc(doc(db(), 'public_timetable_snapshots', 'current'), {
-      ...payload,
-
-        // Update school_info with publish metadata
-      updated_at: serverTimestamp(),
-    }, { merge: true })
-
-    await setDoc(doc(db(), 'school_info', 'main'), {
-      timetable_publish: {
-        status: 'published',
-        version,
-        current_term: currentTerm,
-        current_path: storagePublished ? currentPath : '',
-        versioned_path: storagePublished ? versionedPath : '',
-        channel: storagePublished ? 'storage+firestore' : 'firestore',
-        class_count: classes.length,
-        teacher_count: teachers.length,
-        slot_count: timetable.length,
-        published_at_iso: now.toISOString(),
-        published_at: serverTimestamp(),
-        published_by_uid: authStore.profile?.uid || null,
-      },
-      timetable_publish_version: version,
-      timetable_publish_at_iso: now.toISOString(),
-      timetable_publish_status: 'published',
-
-        // Update UI state
-      updated_at: serverTimestamp(),
-    }, { merge: true })
+    // Store snapshot in schools.settings
+    const settings = await readSchoolSettings()
+    const { error } = await supabase.from('schools').update({
+      settings: {
+        ...settings,
+        timetable_publish: publishInfo,
+        public_timetable_snapshot: {
+          school_id: sid,
+          current_term: currentTerm,
+          version,
+          published_at_iso: now.toISOString(),
+          classes,
+          teachers,
+          timetable,
+        }
+      }
+    }).eq('id', sid)
+    if (error) throw error
 
     publishMeta.status = 'published'
     publishMeta.version = version
-    publishMeta.current_path = storagePublished ? currentPath : 'firestore:public_timetable_snapshots/current'
-    publishMeta.versioned_path = storagePublished ? versionedPath : ''
     publishMeta.published_at_iso = now.toISOString()
 
-
-    const msg = storagePublished 
-      ? `เผยแพร่ตารางสอนสำเร็จ (${version})`
-      : `เผยแพร่ตารางสอนสำเร็จแต่ Storage ล้มเหลว (${version}) — ข้อมูลเก็บใน Firestore`
-    ElMessage.success(msg)
+    ElMessage.success(`เผยแพร่ตารางสอนสำเร็จ (${version})`)
   } catch (e) {
     console.error(e)
     ElMessage.error('เผยแพร่ไม่สำเร็จ: ' + e.message)
@@ -662,10 +623,6 @@ const form = reactive({
   anthropic_api_key: '',
 })
 
-// period_times includes a row with period=0 (เลิกเรียน) at bottom
-// internal: form.period_times = array of { period, start, end, note }
-// period 0 = เลิกเรียน row
-
 function ensureEndRow() {
   const hasEnd = form.period_times.find(t => t.period === 0)
   if (!hasEnd) {
@@ -673,7 +630,6 @@ function ensureEndRow() {
   }
 }
 
-// Reactive display array for the table (periods 1..N + เลิกเรียน row)
 const periodTimesDisplay = computed(() => {
   const n = form.periods_per_day
   const regularRows = []
@@ -715,22 +671,18 @@ function updatePeriodNote(row, val) {
 }
 
 function onPeriodsChange(n) {
-  // Ensure we have entries for all periods 1..n
   for (let i = 1; i <= n; i++) {
     if (!form.period_times.find(t => t.period === i)) {
       const def = DEFAULT_PERIOD_TIMES.find(d => d.period === i)
       form.period_times.push(def ? { ...def } : { period: i, start: '', end: '', note: '' })
     }
   }
-  // Remove entries beyond n (keep period 0)
   form.period_times = form.period_times.filter(t => t.period === 0 || t.period <= n)
   ensureEndRow()
 }
 
-// ===== Logo Upload (Base64 via canvas compress — no Firebase Storage needed) =====
-function triggerLogoUpload() {
-  logoFileRef.value?.click()
-}
+// ===== Logo Upload (Base64 via canvas compress) =====
+function triggerLogoUpload() { logoFileRef.value?.click() }
 
 function compressToBase64(file, maxW = 240, maxH = 240, quality = 0.85) {
   return new Promise((resolve, reject) => {
@@ -761,10 +713,9 @@ async function onLogoFile(e) {
   }
   logoUploading.value = true
   try {
-    // Compress to max 240×240 JPEG ~20-40KB → safe for Firestore 1MB limit
     const base64 = await compressToBase64(file)
     form.logo_url = base64
-    await setDoc(doc(getSchoolDb(), 'school_info', 'main'), { logo_url: base64, updated_at: serverTimestamp() }, { merge: true })
+    await writeSchoolSettings({ logo_url: base64, logo_updated_at: new Date().toISOString() })
     schoolStore.setSchool({ ...schoolStore.schoolInfo, logo_url: base64 })
     ElMessage.success('อัปโหลดโลโก้สำเร็จ')
   } catch (err) {
@@ -778,7 +729,7 @@ async function onLogoFile(e) {
 async function removeLogo() {
   form.logo_url = ''
   try {
-    await setDoc(doc(getSchoolDb(), 'school_info', 'main'), { logo_url: '', updated_at: serverTimestamp() }, { merge: true })
+    await writeSchoolSettings({ logo_url: '', logo_updated_at: new Date().toISOString() })
     schoolStore.setSchool({ ...schoolStore.schoolInfo, logo_url: '' })
     ElMessage.success('ลบโลโก้แล้ว')
   } catch (err) {
@@ -788,7 +739,6 @@ async function removeLogo() {
 
 function buildSaveData() {
   const current_term = `${form.year}_${form.semester}`
-  // Build period_times array sorted
   const pts = form.period_times.slice().sort((a, b) => {
     if (a.period === 0) return 1
     if (b.period === 0) return -1
@@ -820,7 +770,7 @@ function buildSaveData() {
     period_times: pts,
     logo_url: form.logo_url || '',
     anthropic_api_key: form.anthropic_api_key || '',
-    updated_at: serverTimestamp()
+    updated_at: new Date().toISOString(),
   }
 }
 
@@ -836,7 +786,17 @@ async function saveSettings() {
   saving.value = true
   try {
     const data = buildSaveData()
-    await setDoc(doc(db(), 'school_info', 'main'), data, { merge: true })
+    const sid = schoolId.value
+    if (!sid) throw new Error('ไม่พบ schoolId')
+
+    // Update schools.name and schools.settings
+    const settings = await readSchoolSettings()
+    const { error } = await supabase.from('schools').update({
+      name: data.name,
+      settings: { ...settings, school_info: data }
+    }).eq('id', sid)
+    if (error) throw error
+
     schoolStore.setSchool({ ...data, updated_at: new Date() })
     schoolStore.setCurrentTerm(data.current_term)
     ElMessage.success('บันทึกการตั้งค่าเรียบร้อยแล้ว')
@@ -851,30 +811,34 @@ async function saveSettings() {
 async function loadSettings() {
   loading.value = true
   try {
-    const snap = await getDoc(doc(db(), 'school_info', 'main'))
-    if (snap.exists()) {
-      const data = snap.data()
-      Object.keys(form).forEach(key => {
-        if (data[key] !== undefined) {
-          if (key === 'period_times') {
-            form.period_times = Array.isArray(data.period_times) ? data.period_times : JSON.parse(JSON.stringify(DEFAULT_PERIOD_TIMES))
-          } else {
-            form[key] = data[key]
-          }
+    const sid = schoolId.value
+    if (!sid) return
+    const { data, error } = await supabase.from('schools').select('name, settings').eq('id', sid).single()
+    if (error) throw error
+
+    const settings = data?.settings || {}
+    const info = settings.school_info || {}
+
+    // Apply loaded data to form
+    const src = { ...info }
+    if (data.name) src.name = data.name // prefer schools.name
+
+    Object.keys(form).forEach(key => {
+      if (src[key] !== undefined) {
+        if (key === 'period_times') {
+          form.period_times = Array.isArray(src.period_times) ? src.period_times : JSON.parse(JSON.stringify(DEFAULT_PERIOD_TIMES))
+        } else {
+          form[key] = src[key]
         }
-      })
-      ensureEndRow()
-      timetableLocked.value = data.timetable_locked === true
-      const p = data.timetable_publish || {}
-      publishMeta.status = p.status || data.timetable_publish_status || ''
-      publishMeta.version = p.version || data.timetable_publish_version || ''
-      publishMeta.current_path = p.current_path || ''
-      publishMeta.versioned_path = p.versioned_path || ''
-      publishMeta.published_at_iso = p.published_at_iso || data.timetable_publish_at_iso || ''
-    } else {
-      form.period_times = JSON.parse(JSON.stringify(DEFAULT_PERIOD_TIMES))
-      ensureEndRow()
-    }
+      }
+    })
+    ensureEndRow()
+
+    timetableLocked.value = settings.timetable_locked === true || info.timetable_locked === true
+    const p = settings.timetable_publish || {}
+    publishMeta.status = p.status || ''
+    publishMeta.version = p.version || ''
+    publishMeta.published_at_iso = p.published_at_iso || ''
   } catch (e) {
     console.error(e)
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ')
@@ -886,7 +850,6 @@ async function loadSettings() {
 // Export
 function handleExport() {
   const data = buildSaveData()
-  // Build flat rows for Excel
   const rows = [
     ['ชื่อโรงเรียน', data.name],
     ['ชื่อย่อ', data.name_short],
@@ -913,13 +876,11 @@ function handleExport() {
   ]
   const ws1 = XLSX.utils.aoa_to_sheet([['รายการ', 'ค่า'], ...rows])
   ws1['!cols'] = [{ wch: 25 }, { wch: 40 }]
-
   const ptRows = (data.period_times || []).map(t => ([
     t.period === 0 ? 'เลิกเรียน' : `คาบที่ ${t.period}`,
     t.start, t.end, t.note
   ]))
   const ws2 = XLSX.utils.aoa_to_sheet([['คาบ', 'เวลาเริ่ม', 'เวลาสิ้นสุด', 'หมายเหตุ'], ...ptRows])
-
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws1, 'ข้อมูลโรงเรียน')
   XLSX.utils.book_append_sheet(wb, ws2, 'เวลาคาบ')
@@ -927,10 +888,7 @@ function handleExport() {
   ElMessage.success('ส่งออกข้อมูลสำเร็จ')
 }
 
-// Import
-function handleImport() {
-  importFileRef.value?.click()
-}
+function handleImport() { importFileRef.value?.click() }
 
 async function onImportFile(e) {
   const file = e.target.files?.[0]
@@ -938,28 +896,25 @@ async function onImportFile(e) {
   try {
     if (file.name.endsWith('.json')) {
       const text = await file.text()
-      const data = JSON.parse(text)
-      applyImportData(data)
+      applyImportData(JSON.parse(text))
     } else {
       const buf = await file.arrayBuffer()
       const wb = XLSX.read(buf, { type: 'array' })
       const ws = wb.Sheets[wb.SheetNames[0]]
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1 })
       const data = {}
-      rows.slice(1).forEach(r => {
-        const keyMap = {
-          'ชื่อโรงเรียน': 'name', 'ชื่อย่อ': 'name_short', 'ชื่อภาษาอังกฤษ': 'name_en',
-          'ตำบล/แขวง': 'tambon', 'อำเภอ/เขต': 'amphoe', 'จังหวัด': 'changwat',
-          'รหัสไปรษณีย์': 'postal_code', 'โทรศัพท์': 'phone', 'โทรสาร': 'fax',
-          'อีเมล': 'email', 'เว็บไซต์': 'website',
-          'ผู้อำนวยการ': 'principal_name', 'ตำแหน่งผู้อำนวยการ': 'principal_position',
-          'ผู้ลงนามตาราง': 'signer_name', 'ตำแหน่งผู้ลงนาม': 'signer_position',
-          'ปีการศึกษา': 'year', 'ภาคเรียน': 'semester',
-          'วันเปิดภาคเรียน': 'term_start', 'วันสิ้นสุดภาคเรียน': 'term_end',
-          'จำนวนคาบต่อวัน': 'periods_per_day'
-        }
-        if (keyMap[r[0]]) data[keyMap[r[0]]] = r[1]
-      })
+      const keyMap = {
+        'ชื่อโรงเรียน': 'name', 'ชื่อย่อ': 'name_short', 'ชื่อภาษาอังกฤษ': 'name_en',
+        'ตำบล/แขวง': 'tambon', 'อำเภอ/เขต': 'amphoe', 'จังหวัด': 'changwat',
+        'รหัสไปรษณีย์': 'postal_code', 'โทรศัพท์': 'phone', 'โทรสาร': 'fax',
+        'อีเมล': 'email', 'เว็บไซต์': 'website',
+        'ผู้อำนวยการ': 'principal_name', 'ตำแหน่งผู้อำนวยการ': 'principal_position',
+        'ผู้ลงนามตาราง': 'signer_name', 'ตำแหน่งผู้ลงนาม': 'signer_position',
+        'ปีการศึกษา': 'year', 'ภาคเรียน': 'semester',
+        'วันเปิดภาคเรียน': 'term_start', 'วันสิ้นสุดภาคเรียน': 'term_end',
+        'จำนวนคาบต่อวัน': 'periods_per_day'
+      }
+      rows.slice(1).forEach(r => { if (keyMap[r[0]]) data[keyMap[r[0]]] = r[1] })
       applyImportData(data)
     }
     ElMessage.success('นำเข้าข้อมูลสำเร็จ')
@@ -982,9 +937,7 @@ function applyImportData(data) {
   ensureEndRow()
 }
 
-onMounted(async () => {
-  await loadSettings()
-})
+onMounted(loadSettings)
 </script>
 
 <style scoped>
@@ -993,78 +946,6 @@ onMounted(async () => {
   border-radius: 16px;
   padding: 24px 28px;
   box-shadow: 0 4px 24px rgba(124,58,237,0.18);
-}
-
-.renewal-card {
-  border: 1px solid #c7d2fe;
-  background: linear-gradient(180deg, #f8fafc, #eef2ff);
-}
-
-.renewal-history-card {
-  border: 1px solid #cbd5e1;
-  background: linear-gradient(180deg, #ffffff, #f8fafc);
-}
-
-.latest-renewal-grid {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  gap: 20px;
-}
-
-.latest-renewal-meta {
-  display: grid;
-  gap: 10px;
-}
-
-.latest-renewal-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #e2e8f0;
-  font-size: 14px;
-}
-
-.latest-renewal-row .label,
-.proof-label {
-  color: #64748b;
-  font-weight: 600;
-}
-
-.latest-renewal-note {
-  align-items: flex-start;
-}
-
-.latest-renewal-proof {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-@media (max-width: 960px) {
-  .latest-renewal-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.renewal-proof-box {
-  width: 100%;
-}
-
-.renewal-proof-preview {
-  border: 1px solid #cbd5e1;
-  border-radius: 14px;
-  background: #fff;
-  padding: 10px;
-  max-width: 360px;
-}
-
-.renewal-proof-image {
-  display: block;
-  width: 100%;
-  max-height: 320px;
-  object-fit: contain;
-  border-radius: 10px;
 }
 
 .section-card {
@@ -1086,34 +967,17 @@ onMounted(async () => {
   font-weight: 500;
 }
 
-:deep(.el-form-item) {
-  margin-bottom: 0;
-}
-
-:deep(.el-form-item__label) {
-  font-size: 13px;
-  color: #334155;
-  font-weight: 600;
-}
-
-:deep(.el-card__header) {
-  padding: 12px 20px;
-  border-bottom: 1px solid rgba(255,255,255,0.22);
-}
-
-:deep(.el-card__body) {
-  padding: 20px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-}
+:deep(.el-form-item) { margin-bottom: 0; }
+:deep(.el-form-item__label) { font-size: 13px; color: #334155; font-weight: 600; }
+:deep(.el-card__header) { padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.22); }
+:deep(.el-card__body) { padding: 20px; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
 
 :deep(.el-input__wrapper),
 :deep(.el-select__wrapper),
 :deep(.el-textarea__inner),
 :deep(.el-input-number .el-input__wrapper),
 :deep(.el-date-editor.el-input__wrapper),
-:deep(.el-date-editor .el-input__wrapper),
-:deep(.el-time-editor.el-input__wrapper),
-:deep(.el-time-editor .el-input__wrapper) {
+:deep(.el-date-editor .el-input__wrapper) {
   background: #f0f9ff;
   border: 1px solid #bae6fd;
   box-shadow: none !important;
@@ -1121,109 +985,32 @@ onMounted(async () => {
   transition: all 0.2s ease;
 }
 
-:deep(.el-input__wrapper.is-focus),
-:deep(.el-select__wrapper.is-focused),
-:deep(.el-textarea__inner:focus),
-:deep(.el-input-number .el-input__wrapper.is-focus),
-:deep(.el-date-editor.is-focus .el-input__wrapper),
-:deep(.el-time-editor.is-focus .el-input__wrapper) {
-  border-color: #22c55e;
-  background: #ecfdf5;
-}
+.sec-logo { border-color: #fde68a; }
+.sec-school { border-color: #d8b4fe; }
+.sec-admin { border-color: #93c5fd; }
+.sec-academic { border-color: #86efac; }
+.sec-schedule { border-color: #fdba74; }
+.sec-period { border-color: #fca5a5; }
+.sec-ai { border-color: #67e8f9; }
+.sec-lock { border-color: #fca5a5; }
+.sec-publish { border-color: #a5f3fc; }
+.sec-plan { border-color: #c7d2fe; }
 
-:deep(.el-input__wrapper:hover),
-:deep(.el-select__wrapper:hover),
-:deep(.el-textarea__inner:hover) {
-  border-color: #38bdf8;
-}
+.sec-logo :deep(.el-card__header) { background: linear-gradient(135deg, #f59e0b, #d97706); }
+.sec-school :deep(.el-card__header) { background: linear-gradient(135deg, #8b5cf6, #7c3aed); }
+.sec-admin :deep(.el-card__header) { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+.sec-academic :deep(.el-card__header) { background: linear-gradient(135deg, #10b981, #059669); }
+.sec-schedule :deep(.el-card__header) { background: linear-gradient(135deg, #f59e0b, #ea580c); }
+.sec-period :deep(.el-card__header) { background: linear-gradient(135deg, #ef4444, #dc2626); }
+.sec-ai :deep(.el-card__header) { background: linear-gradient(135deg, #06b6d4, #0891b2); }
+.sec-lock :deep(.el-card__header) { background: linear-gradient(135deg, #f43f5e, #e11d48); }
+.sec-plan :deep(.el-card__header) { background: linear-gradient(135deg, #6366f1, #4f46e5); }
+.sec-publish :deep(.el-card__header) { background: linear-gradient(135deg, #0ea5e9, #0284c7); }
 
-.sec-logo {
-  border-color: #fde68a;
-}
-
-.sec-school {
-  border-color: #d8b4fe;
-}
-
-.sec-admin {
-  border-color: #93c5fd;
-}
-
-.sec-academic {
-  border-color: #86efac;
-}
-
-.sec-schedule {
-  border-color: #fdba74;
-}
-
-.sec-period {
-  border-color: #fca5a5;
-}
-
-.sec-ai {
-  border-color: #67e8f9;
-}
-
-.sec-lock {
-  border-color: #fca5a5;
-}
-
-.sec-publish {
-  border-color: #a5f3fc;
-}
-
-.sec-teachlog {
-  border-color: #6ee7b7;
-}
-
-.sec-logo :deep(.el-card__header) {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
-}
-
-.sec-school :deep(.el-card__header) {
-  background: linear-gradient(135deg, #8b5cf6, #7c3aed);
-}
-
-.sec-admin :deep(.el-card__header) {
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
-}
-
-.sec-academic :deep(.el-card__header) {
-  background: linear-gradient(135deg, #10b981, #059669);
-}
-
-.sec-schedule :deep(.el-card__header) {
-  background: linear-gradient(135deg, #f59e0b, #ea580c);
-}
-
-.sec-period :deep(.el-card__header) {
-  background: linear-gradient(135deg, #ef4444, #dc2626);
-}
-
-.sec-ai :deep(.el-card__header) {
-  background: linear-gradient(135deg, #06b6d4, #0891b2);
-}
-
-.sec-lock :deep(.el-card__header) {
-  background: linear-gradient(135deg, #f43f5e, #e11d48);
-}
-
-.sec-teachlog :deep(.el-card__header) {
-  background: linear-gradient(135deg, #22c55e, #16a34a);
-}
-
-.logo-preview img {
-  border-radius: 12px;
-}
+.logo-preview img { border-radius: 12px; }
 
 @media (max-width: 768px) {
-  .school-settings-surface {
-    padding: 12px !important;
-  }
-
-  :deep(.el-card__body) {
-    padding: 14px;
-  }
+  .school-settings-surface { padding: 12px !important; }
+  :deep(.el-card__body) { padding: 14px; }
 }
 </style>

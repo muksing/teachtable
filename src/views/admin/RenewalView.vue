@@ -240,11 +240,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { doc, collection, setDoc, getDocs, query, orderBy, addDoc, serverTimestamp, getDoc } from '@/supabase/firestore'
-import { getSchoolDb, db as masterDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import {
@@ -327,8 +326,6 @@ const totalModel = computed(() => {
   if (!formulaReady.value) return { subTotal: 0, discount: 0, total: 0 }
   return calcFormulaTotal(pricingModel.value.monthly, renewalForm.months, discountPercent.value)
 })
-
-const db = () => getSchoolDb()
 
 const currentPlanFeeLabel = computed(() => {
   const fee = Number(schoolStore.pricingPlan?.monthly_fee || 0)
@@ -433,25 +430,28 @@ async function loadPricingFormula() {
   }
 }
 
-function getCalculationSnapshotDoc() {
-  return doc(db(), 'renewal_calculation_cache', 'latest')
-}
-
 async function loadCalculationSnapshot() {
   try {
-    const snap = await getDoc(getCalculationSnapshotDoc())
-    if (!snap.exists()) return
-    const data = snap.data()
-    if (data?.input) {
-      renewalForm.months = Number(data.input.months || renewalForm.months)
-      renewalForm.rooms = Number(data.input.rooms || renewalForm.rooms)
-      renewalForm.teachers = Number(data.input.teachers || renewalForm.teachers)
-      renewalForm.days = Number(data.input.days || renewalForm.days)
-      renewalForm.periods = Number(data.input.periods || renewalForm.periods)
-      renewalForm.concurrent = Number(data.input.concurrent || renewalForm.concurrent)
-      renewalForm.renewalMode = data.input.renewalMode || renewalForm.renewalMode
+    const schoolId = authStore.schoolId
+    if (!schoolId) return
+    const { data, error } = await supabase
+      .from('schools')
+      .select('settings')
+      .eq('id', schoolId)
+      .single()
+    if (error || !data) return
+    const cache = data.settings?.renewal_calculation_cache
+    if (!cache) return
+    if (cache.input) {
+      renewalForm.months = Number(cache.input.months || renewalForm.months)
+      renewalForm.rooms = Number(cache.input.rooms || renewalForm.rooms)
+      renewalForm.teachers = Number(cache.input.teachers || renewalForm.teachers)
+      renewalForm.days = Number(cache.input.days || renewalForm.days)
+      renewalForm.periods = Number(cache.input.periods || renewalForm.periods)
+      renewalForm.concurrent = Number(cache.input.concurrent || renewalForm.concurrent)
+      renewalForm.renewalMode = cache.input.renewalMode || renewalForm.renewalMode
     }
-    savedCalculationAt.value = data?.saved_at || null
+    savedCalculationAt.value = cache.saved_at || null
   } catch (err) {
     console.warn('Load calculation snapshot failed:', err)
   }
@@ -464,7 +464,11 @@ async function saveCalculationSnapshot() {
   }
   savingCalculation.value = true
   try {
-    const payload = {
+    const schoolId = authStore.schoolId
+    if (!schoolId) throw new Error('ไม่พบ schoolId')
+
+    const savedAt = new Date().toISOString()
+    const cachePayload = {
       input: {
         months: Number(renewalForm.months || 1),
         rooms: Number(renewalForm.rooms || 1),
@@ -482,11 +486,23 @@ async function saveCalculationSnapshot() {
       },
       pricing_formula_snapshot: { ...normalizedFormula.value },
       saved_by_uid: authStore.profile?.uid || null,
-      saved_at: new Date().toISOString(),
-      updated_at: serverTimestamp(),
+      saved_at: savedAt,
     }
-    await setDoc(getCalculationSnapshotDoc(), payload, { merge: true })
-    savedCalculationAt.value = payload.saved_at
+
+    // Read current settings then merge
+    const { data: schoolData } = await supabase
+      .from('schools')
+      .select('settings')
+      .eq('id', schoolId)
+      .single()
+    const currentSettings = schoolData?.settings || {}
+    const { error } = await supabase
+      .from('schools')
+      .update({ settings: { ...currentSettings, renewal_calculation_cache: cachePayload } })
+      .eq('id', schoolId)
+    if (error) throw error
+
+    savedCalculationAt.value = savedAt
     ElMessage.success('บันทึกยอดคำนวณเรียบร้อยแล้ว')
   } catch (err) {
     ElMessage.error('บันทึกยอดคำนวณไม่สำเร็จ: ' + err.message)
@@ -515,8 +531,6 @@ async function submitRenewalRequest() {
     const contactEmail = authStore.profile?.email || schoolStore.schoolInfo?.email || ''
     const contactName = authStore.profile?.displayName || '-'
     const currentPlanCode = schoolStore.pricingPlan?.code || ''
-    const masterRequestRef = doc(collection(masterDb, 'renewal_requests'))
-    const requestId = masterRequestRef.id
 
     const calculatedMonthly = Number(pricingModel.value.monthly || 0)
     const calculatedTotal = Number(totalModel.value.total || 0)
@@ -524,7 +538,6 @@ async function submitRenewalRequest() {
     const dueAmount = Math.max(1, Math.round(calculatedTotal))
 
     const requestPayload = {
-      request_id: requestId,
       school_id: schoolId,
       school_name: schoolName,
       current_plan_code: currentPlanCode,
@@ -537,7 +550,7 @@ async function submitRenewalRequest() {
       contact_email: contactEmail,
       contact_name: contactName,
       status: 'pending',
-      created_at: serverTimestamp(),
+      created_at: new Date().toISOString(),
       created_by_uid: authStore.profile?.uid || null,
       renewal_mode: renewalForm.renewalMode,
       calculation_input: {
@@ -556,33 +569,8 @@ async function submitRenewalRequest() {
       pricing_formula_snapshot: { ...normalizedFormula.value },
     }
 
-    await Promise.all([
-      setDoc(masterRequestRef, requestPayload),
-      setDoc(doc(collection(db(), 'renewal_requests'), requestId), requestPayload),
-    ])
-
-    await addDoc(collection(masterDb, 'email_queue'), {
-      to: 'muksingapp@gmail.com',
-      subject: `[ต่ออายุ] ${schoolName} ส่งคำขอต่ออายุ ${renewalForm.months} เดือน`,
-      htmlBody: `
-        <h3>มีคำขอต่ออายุสมาชิกจากโรงเรียน</h3>
-        <p><b>เลขที่คำขอ:</b> ${requestId}</p>
-        <p><b>โรงเรียน:</b> ${schoolName}</p>
-        <p><b>schoolId:</b> ${schoolId || '-'}</p>
-        <p><b>แพ็กเกจปัจจุบัน:</b> ${currentPlanCode || '-'}</p>
-        <p><b>ระยะเวลา:</b> ${renewalForm.months} เดือน</p>
-        <p><b>โหมดต่ออายุ:</b> ${renewalForm.renewalMode === 'auto' ? 'อัตโนมัติเมื่อโอนครบ' : 'ตั้งค่าเอง'}</p>
-        <p><b>ยอดคำนวณ:</b> ${calculatedTotal.toLocaleString('th-TH')} บาท</p>
-        <p><b>ยอดที่ต้องโอน:</b> ${dueAmount.toLocaleString('th-TH')} บาท</p>
-        <p><b>พารามิเตอร์:</b> ห้อง ${renewalForm.rooms}, ครู ${renewalForm.teachers}, วัน/สัปดาห์ ${renewalForm.days}, คาบ/วัน ${renewalForm.periods}, จัดพร้อมกัน ${renewalForm.concurrent}</p>
-        <p><b>ค่าคงที่:</b> จัดอัตโนมัติ 5 ครั้ง, ล้างตาราง 5 ครั้ง</p>
-        <p><b>วันที่โอน:</b> ${renewalForm.paymentDate}</p>
-        <p><b>ผู้ติดต่อ:</b> ${contactName} (${contactEmail || '-'})</p>
-        <p><b>หมายเหตุ:</b> ${renewalForm.note || '-'}</p>
-      `,
-      status: 'pending',
-      createdAt: serverTimestamp(),
-    })
+    const { error } = await supabase.from('school_requests').insert([requestPayload])
+    if (error) throw error
 
     ElMessage.success('ส่งคำขอต่ออายุเรียบร้อยแล้ว')
 
@@ -609,17 +597,19 @@ async function submitRenewalRequest() {
 async function loadRenewalHistory() {
   renewalHistoryLoading.value = true
   try {
-    const snapshot = await getDocs(query(collection(db(), 'renewal_requests'), orderBy('created_at', 'desc')))
-    renewalHistory.value = snapshot.docs.map((snap) => {
-      const data = snap.data()
-      return {
-        id: snap.id,
-        ...data,
-        created_at: typeof data.created_at?.toDate === 'function' ? data.created_at.toDate() : data.created_at ? new Date(data.created_at) : null,
-        payment_date: data.payment_date ? new Date(data.payment_date) : null,
-        reviewed_at: typeof data.reviewed_at?.toDate === 'function' ? data.reviewed_at.toDate() : data.reviewed_at ? new Date(data.reviewed_at) : null,
-      }
-    })
+    const schoolId = authStore.schoolId
+    const { data, error } = await supabase
+      .from('school_requests')
+      .select('*')
+      .eq('school_id', schoolId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    renewalHistory.value = (data || []).map(row => ({
+      ...row,
+      created_at: row.created_at ? new Date(row.created_at) : null,
+      payment_date: row.payment_date ? new Date(row.payment_date) : null,
+      reviewed_at: row.reviewed_at ? new Date(row.reviewed_at) : null,
+    }))
   } catch (e) {
     console.error('Failed to load renewal history:', e)
   } finally {
@@ -629,7 +619,7 @@ async function loadRenewalHistory() {
 
 function formatDateLabel(value) {
   if (!value) return '-'
-  const dateValue = typeof value?.toDate === 'function' ? value.toDate() : new Date(value)
+  const dateValue = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(dateValue.getTime())) return '-'
   return dateValue.toLocaleString('th-TH', {
     year: 'numeric',

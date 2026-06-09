@@ -1,9 +1,9 @@
 // src/composables/useSignature.js
 // โมดูลลายเซ็น — ตั้งค่าแยกตามงาน ใช้ร่วมกันทุก report
 import { ref } from 'vue'
-import { doc, setDoc } from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import { useSchoolStore } from '@/stores/school'
+import { useAuthStore } from '@/stores/auth'
 
 // ===== นิยาม module ทั้งหมดในระบบ =====
 export const SIGNATURE_MODULES = [
@@ -35,27 +35,53 @@ export const DEFAULT_SIGNATURES = {
 // ===== Composable =====
 export function useSignature() {
   const schoolStore = useSchoolStore()
+  const authStore = useAuthStore()
   const saving = ref(false)
 
   // ดึง signatures ของ module นั้น (fallback ไป default)
   function getModuleSignatures(moduleKey) {
     const saved = schoolStore.schoolInfo?.signatures?.[moduleKey]
+      || schoolStore.schoolInfo?.settings?.signature_settings?.[moduleKey]
     if (saved && Array.isArray(saved) && saved.length) return saved
     return DEFAULT_SIGNATURES[moduleKey] || [
       { role: 'principal', label: 'ผู้อำนวยการ', name: '', position: 'ผู้อำนวยการโรงเรียน', auto_from: '' },
     ]
   }
 
-  // บันทึก signatures ทั้งหมดลง Firestore
+  // บันทึก signatures ทั้งหมดลง schools.settings.signature_settings
   async function saveAllSignatures(allSigs) {
     saving.value = true
     try {
-      const db = getSchoolDb()
-      await setDoc(doc(db, 'school_info', 'main'), {
-        signatures: allSigs,
-      }, { merge: true })
+      const schoolId = authStore.schoolId
+      if (!schoolId) throw new Error('School ID not found')
+
+      // อ่าน settings เดิมก่อน merge
+      const { data, error: readErr } = await supabase
+        .from('schools')
+        .select('settings')
+        .eq('id', schoolId)
+        .single()
+
+      if (readErr) throw readErr
+
+      const existingSettings = data?.settings || {}
+      const { error: updateErr } = await supabase
+        .from('schools')
+        .update({
+          settings: {
+            ...existingSettings,
+            signature_settings: allSigs,
+          },
+        })
+        .eq('id', schoolId)
+
+      if (updateErr) throw updateErr
+
       // อัพเดท store ด้วย
       if (schoolStore.schoolInfo) {
+        if (!schoolStore.schoolInfo.settings) schoolStore.schoolInfo.settings = {}
+        schoolStore.schoolInfo.settings.signature_settings = allSigs
+        // backward compat
         schoolStore.schoolInfo.signatures = allSigs
       }
     } finally {
@@ -75,7 +101,6 @@ export function useSignature() {
     const sigs = getModuleSignatures(moduleKey)
 
     const cols = sigs.map(sig => {
-      // resolve ชื่อ: dynamic > static > เว้นว่าง
       let name = sig.name || ''
       if (!name && sig.auto_from) {
         const path = sig.auto_from.split('.')
@@ -85,16 +110,12 @@ export function useSignature() {
       }
       if (!name) name = dynamicVals[sig.role] || ''
 
-      // ส่วนบน: ภาพลายเซ็น (ถ้ามีและเปิด) หรือเส้น หรือช่องว่าง
       let lineHTML = ''
       if (sig.sig_img && showImg) {
-        // แสดงภาพเต็มขนาด ไม่บีบ — ผู้ใช้ควรอัพโหลดภาพขนาดที่เหมาะสม (~120×50px)
         lineHTML = `<img src="${sig.sig_img}" style="max-width:100%;max-height:56px;object-fit:contain;display:block;margin:0 auto 2px;">`
       } else if (showLine) {
-        // เส้นให้ลงนาม
         lineHTML = `<div style="border-bottom:1.5px solid #9ca3af;height:36px;margin-bottom:3px;"></div>`
       } else {
-        // ไม่มีภาพ ไม่มีเส้น — เว้นช่องไว้ให้ลงนามด้วยมือ
         lineHTML = `<div style="height:36px;"></div>`
       }
 

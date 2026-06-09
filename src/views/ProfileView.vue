@@ -188,9 +188,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { doc, getDoc, updateDoc, serverTimestamp } from '@/supabase/firestore'
-import { auth, masterDb as rootDb } from '@/supabase/db'
-import { EmailAuthProvider, reauthenticateWithCredential, updatePassword } from '@/supabase/auth'
+import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -273,7 +271,7 @@ async function onFileSelected(event) {
   }
 }
 
-// ─── Save photo to Firestore ──────────────────────────────────────────────────
+// ─── Save photo to Supabase ───────────────────────────────────────────────────
 async function savePhoto() {
   if (!pendingPhotoBase64.value) return
 
@@ -282,10 +280,11 @@ async function savePhoto() {
 
   savingPhoto.value = true
   try {
-    await updateDoc(doc(rootDb, 'users', uid), {
-      photo_url: pendingPhotoBase64.value,
-      updated_at: serverTimestamp()
-    })
+    const { error } = await supabase
+      .from('users')
+      .update({ photo_url: pendingPhotoBase64.value, updated_at: new Date().toISOString() })
+      .eq('id', uid)
+    if (error) throw error
 
     // Update store so navbar / avatar updates immediately
     authStore.setProfile({ ...authStore.profile, photo_url: pendingPhotoBase64.value })
@@ -309,17 +308,21 @@ async function saveInfo() {
 
   savingInfo.value = true
   try {
-    await updateDoc(doc(rootDb, 'users', uid), {
-      displayName: form.value.displayName.trim(),
-      phone:       form.value.phone.trim(),
-      updated_at:  serverTimestamp()
-    })
+    const { error } = await supabase
+      .from('users')
+      .update({
+        displayName: form.value.displayName.trim(),
+        phone:       form.value.phone.trim(),
+        updated_at:  new Date().toISOString(),
+      })
+      .eq('id', uid)
+    if (error) throw error
 
     // Update store so navbar display name refreshes immediately
     authStore.setProfile({
       ...authStore.profile,
       displayName: form.value.displayName.trim(),
-      phone:       form.value.phone.trim()
+      phone:       form.value.phone.trim(),
     })
 
     ElMessage.success('บันทึกข้อมูลสำเร็จ')
@@ -344,17 +347,22 @@ async function changePassword() {
   const valid = await pwdFormRef.value?.validate().catch(() => false)
   if (!valid) return
 
-  const user = auth.currentUser
-  if (!user) { ElMessage.error('ไม่พบผู้ใช้ที่ล็อกอินอยู่'); return }
-
   changingPwd.value = true
   try {
-    // Reauthenticate first
-    const credential = EmailAuthProvider.credential(user.email, pwdForm.value.currentPwd)
-    await reauthenticateWithCredential(user, credential)
+    // Supabase: re-sign-in to verify current password then update
+    const email = authStore.profile?.email
+    if (!email) throw new Error('ไม่พบอีเมลของผู้ใช้')
 
-    // Update password
-    await updatePassword(user, pwdForm.value.newPwd)
+    const { error: signInErr } = await supabase.auth.signInWithPassword({
+      email,
+      password: pwdForm.value.currentPwd,
+    })
+    if (signInErr) throw new Error('รหัสผ่านปัจจุบันไม่ถูกต้อง')
+
+    const { error: updateErr } = await supabase.auth.updateUser({
+      password: pwdForm.value.newPwd,
+    })
+    if (updateErr) throw updateErr
 
     // Clear all password fields
     pwdForm.value.currentPwd  = ''
@@ -364,47 +372,42 @@ async function changePassword() {
 
     ElMessage.success('เปลี่ยนรหัสผ่านสำเร็จ')
   } catch (err) {
-    if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-      ElMessage.error('รหัสผ่านปัจจุบันไม่ถูกต้อง')
-    } else if (err.code === 'auth/too-many-requests') {
-      ElMessage.error('พยายามล็อกอินหลายครั้งเกินไป กรุณาลองใหม่ภายหลัง')
-    } else {
-      ElMessage.error('เปลี่ยนรหัสผ่านไม่สำเร็จ: ' + err.message)
-    }
+    ElMessage.error('เปลี่ยนรหัสผ่านไม่สำเร็จ: ' + err.message)
   } finally {
     changingPwd.value = false
   }
 }
 
-// ─── Load from Firestore on mount ─────────────────────────────────────────────
+// ─── Load from Supabase on mount ──────────────────────────────────────────────
 onMounted(async () => {
   const uid = authStore.profile?.uid
   if (!uid) return
 
   try {
-    const snap = await getDoc(doc(rootDb, 'users', uid))
-    if (snap.exists()) {
-      const data = snap.data()
+    const { data, error } = await supabase
+      .from('users')
+      .select('displayName, phone, photo_url')
+      .eq('id', uid)
+      .maybeSingle()
 
-      // Pre-fill form fields
+    if (data) {
       form.value.displayName = data.displayName ?? authStore.profile?.displayName ?? ''
       form.value.phone       = data.phone ?? ''
 
-      // Sync any Firestore-only fields back into store (photo_url, phone)
       authStore.setProfile({
         ...authStore.profile,
         displayName: data.displayName ?? authStore.profile?.displayName,
         phone:       data.phone ?? '',
-        photo_url:   data.photo_url ?? authStore.profile?.photo_url ?? null
+        photo_url:   data.photo_url ?? authStore.profile?.photo_url ?? null,
       })
     } else {
-      // Firestore doc might not exist yet — fall back to store values
       form.value.displayName = authStore.profile?.displayName ?? ''
       form.value.phone       = authStore.profile?.phone ?? ''
     }
+
+    if (error) console.warn('ProfileView load warn:', error.message)
   } catch (err) {
     ElMessage.error('โหลดข้อมูลโปรไฟล์ไม่สำเร็จ: ' + err.message)
-    // Still fill from store as fallback
     form.value.displayName = authStore.profile?.displayName ?? ''
     form.value.phone       = authStore.profile?.phone ?? ''
   }

@@ -98,15 +98,13 @@
 
 <script setup>
 import { computed, ref, onMounted } from 'vue'
-import { doc, getDoc } from '@/supabase/firestore'
-import { ref as storageRef, getDownloadURL } from '@/supabase/storage'
+import { supabase } from '@/supabase/client'
 import html2canvas from 'html2canvas'
 import { ElMessage } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
-import { getSchoolDb, storage } from '@/supabase/db'
 
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
@@ -293,31 +291,45 @@ async function loadMyTimetable() {
   publishedMissingText.value = ''
 
   try {
-    const schoolRootRef = getSchoolDb(schoolId.value)
-    const infoSnap = await getDoc(doc(schoolRootRef, 'school_info', 'main'))
-    const publishMeta = infoSnap.exists() ? (infoSnap.data()?.timetable_publish || null) : null
+    // Read published timetable payload from schools.settings.timetable_publish.payload
+    const { data: schoolRow, error } = await supabase
+      .from('schools')
+      .select('settings')
+      .eq('id', schoolId.value)
+      .maybeSingle()
+    if (error) throw error
 
-    const currentPath = String(publishMeta?.current_path || '').trim()
-    const shouldTryStorage = currentPath !== '' && !currentPath.startsWith('firestore:')
-    let payload = null
-
-    // Keep parity with PrintTimetable flow: skip Storage when meta explicitly points to Firestore.
-    if (shouldTryStorage) {
-      try {
-        const url = await getDownloadURL(storageRef(storage, currentPath))
-        payload = await fetchJsonWithTimeout(url, 9000)
-      } catch (storageErr) {
-        console.warn('Published JSON unavailable, fallback to Firestore snapshot:', storageErr?.message || storageErr)
-      }
-    }
-
-    if (!payload) {
-      const snapshotDoc = await getDoc(doc(schoolRootRef, 'public_timetable_snapshots', 'current'))
-      if (snapshotDoc.exists()) payload = snapshotDoc.data()
-    }
+    const settings = schoolRow?.settings || {}
+    const publishMeta = settings.timetable_publish || null
+    const payload = publishMeta?.payload || null
 
     if (payload) {
       applyPayload(payload)
+      return
+    }
+
+    // Fallback: query timetable_slots directly for this teacher
+    const currentTermVal = schoolStore.currentTerm || '2568_1'
+    const { data: slotsData, error: slotsErr } = await supabase
+      .from('timetable_slots')
+      .select('*')
+      .eq('school_id', schoolId.value)
+      .eq('term_id', currentTermVal)
+      .eq('teacher_id', teacherId.value)
+    if (slotsErr) throw slotsErr
+
+    if (slotsData && slotsData.length) {
+      const THAI_DAY_MAP = { จันทร์: 1, อังคาร: 2, พุธ: 3, พฤหัสบดี: 4, ศุกร์: 5, เสาร์: 6, อาทิตย์: 7 }
+      slots.value = slotsData.map(row => ({
+        ...row,
+        day: typeof row.day_of_week === 'number' ? row.day_of_week : (THAI_DAY_MAP[row.day_of_week] ?? 0),
+        period: row.period_number,
+        teacher_id: row.teacher_id,
+        subject_code: row.subject_id,
+        class_id: row.class_id,
+        type: row.slot_type || 'normal',
+      }))
+      currentTerm.value = currentTermVal
       return
     }
 

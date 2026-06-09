@@ -55,14 +55,12 @@
 
       <!-- Table -->
       <el-card style="border-radius:12px;box-shadow:0 1px 8px rgba(0,0,0,0.06)">
-        <!-- Section hint -->
         <div v-if="activeTab === 'learning'" class="mb-3 px-3 py-2 rounded-lg text-sm" style="background:#fffbeb;border:1px solid #fde68a;color:#92400e">
           💡 พฤติกรรมในห้องเรียน — ครูเลือกได้ขณะบันทึกเข้าสอน (ไม่รวมความประพฤติทั่วไป)
         </div>
         <div v-else class="mb-3 px-3 py-2 rounded-lg text-sm" style="background:#f0f9ff;border:1px solid #bae6fd;color:#075985">
           💡 ความประพฤติทั่วไป — ใช้สำหรับการประเมินพฤติกรรมนอกห้องเรียน / รายงานวินัย
         </div>
-        <!-- Bulk Actions Bar -->
         <div class="flex items-center gap-2 mb-3 flex-wrap">
           <el-button size="small" @click="tableRef?.toggleAllSelection()">เลือกทั้งหมด</el-button>
           <el-button size="small" @click="tableRef?.clearSelection()">ยกเลิกเลือก</el-button>
@@ -168,16 +166,15 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { collection, doc, getDocs, setDoc, deleteDoc, serverTimestamp } from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
+import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
-import { useSchoolDb } from '@/composables/useSchoolDb'
 import * as XLSX from 'xlsx'
 
+const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
-const { getBehaviorSettings } = useSchoolDb()
 
-const db = () => getSchoolDb()
+const schoolId = computed(() => authStore.schoolId)
 const term = computed(() => schoolStore.currentTerm || '2568_1')
 
 const loading = ref(false)
@@ -200,7 +197,6 @@ const TYPE_OPTIONS = [
 ]
 
 const TYPE_LABEL = { general: 'ความประพฤติ', attendance: 'การมาเรียน', learning: 'ในห้องเรียน' }
-const TYPE_TAG = { general: 'primary', attendance: 'success', learning: 'warning' }
 
 const form = reactive({
   setting_id: '',
@@ -252,6 +248,17 @@ function openDialog(item = null) {
   dialogVisible.value = true
 }
 
+async function persistSettings(newList) {
+  const sid = schoolId.value
+  if (!sid) throw new Error('ไม่พบ schoolId')
+  const { data: schoolData } = await supabase.from('schools').select('settings').eq('id', sid).single()
+  const schoolSettings = schoolData?.settings || {}
+  const { error } = await supabase.from('schools').update({
+    settings: { ...schoolSettings, behavior_settings: newList }
+  }).eq('id', sid)
+  if (error) throw error
+}
+
 async function saveSetting() {
   await formRef.value?.validate()
   if (validationError.value) {
@@ -260,7 +267,6 @@ async function saveSetting() {
   }
   dialogLoading.value = true
   try {
-    const id = form.setting_id
     const data = {
       setting_id: form.setting_id,
       label: form.label,
@@ -270,15 +276,17 @@ async function saveSetting() {
       points_max: form.points_max,
       is_auto: form.is_auto,
       is_active: form.is_active,
-      updated_at: serverTimestamp(),
+      updated_at: new Date().toISOString(),
     }
-    await setDoc(doc(db(), `terms/${term.value}/behavior_settings`, id), data, { merge: true })
-    const idx = settings.value.findIndex(s => s.setting_id === id)
+    const idx = settings.value.findIndex(s => s.setting_id === form.setting_id)
+    let newList
     if (idx >= 0) {
-      Object.assign(settings.value[idx], data)
+      newList = settings.value.map((s, i) => i === idx ? { ...s, ...data } : s)
     } else {
-      settings.value.push({ id, ...data })
+      newList = [...settings.value, data]
     }
+    await persistSettings(newList)
+    settings.value = newList
     ElMessage.success('บันทึกสำเร็จ')
     dialogVisible.value = false
   } catch (e) {
@@ -290,10 +298,10 @@ async function saveSetting() {
 
 async function toggleActive(row) {
   try {
-    await setDoc(doc(db(), `terms/${term.value}/behavior_settings`, row.setting_id), {
-      is_active: row.is_active,
-      updated_at: serverTimestamp(),
-    }, { merge: true })
+    const newList = settings.value.map(s =>
+      s.setting_id === row.setting_id ? { ...s, is_active: row.is_active } : s
+    )
+    await persistSettings(newList)
     ElMessage.success(`${row.is_active ? 'เปิด' : 'ปิด'}ใช้งาน "${row.label}" แล้ว`)
   } catch (e) {
     row.is_active = !row.is_active
@@ -308,9 +316,9 @@ async function confirmDelete(row) {
       'ลบรูปแบบพฤติกรรม',
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
-    await deleteDoc(doc(db(), `terms/${term.value}/behavior_settings`, row.setting_id))
-    const idx = settings.value.findIndex(s => s.setting_id === row.setting_id)
-    if (idx >= 0) settings.value.splice(idx, 1)
+    const newList = settings.value.filter(s => s.setting_id !== row.setting_id)
+    await persistSettings(newList)
+    settings.value = newList
     ElMessage.success('ลบรูปแบบพฤติกรรมแล้ว')
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
@@ -328,11 +336,10 @@ async function deleteSelected() {
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
     loading.value = true
-    for (const row of selectedRows.value) {
-      await deleteDoc(doc(db(), `terms/${term.value}/behavior_settings`, row.setting_id))
-      const idx = settings.value.findIndex(s => s.setting_id === row.setting_id)
-      if (idx >= 0) settings.value.splice(idx, 1)
-    }
+    const ids = new Set(selectedRows.value.map(r => r.setting_id))
+    const newList = settings.value.filter(s => !ids.has(s.setting_id))
+    await persistSettings(newList)
+    settings.value = newList
     selectedRows.value = []
     ElMessage.success('ลบรายการที่เลือกเรียบร้อย')
   } catch { /* cancelled */ } finally { loading.value = false }
@@ -348,10 +355,10 @@ async function deleteAll() {
       { confirmButtonText: 'ลบทั้งหมด', cancelButtonText: 'ยกเลิก', type: 'error' }
     )
     loading.value = true
-    for (const row of [...allRows]) {
-      await deleteDoc(doc(db(), `terms/${term.value}/behavior_settings`, row.setting_id))
-    }
-    settings.value = []
+    const ids = new Set(allRows.map(r => r.setting_id))
+    const newList = settings.value.filter(s => !ids.has(s.setting_id))
+    await persistSettings(newList)
+    settings.value = newList
     ElMessage.success('ลบทั้งหมดเรียบร้อย')
   } catch { /* cancelled */ } finally { loading.value = false }
 }
@@ -359,7 +366,12 @@ async function deleteAll() {
 async function loadSettings() {
   loading.value = true
   try {
-    settings.value = await getBehaviorSettings()
+    const sid = schoolId.value
+    if (!sid) return
+    const { data, error } = await supabase.from('schools').select('settings').eq('id', sid).single()
+    if (error) throw error
+    const raw = data?.settings?.behavior_settings
+    settings.value = Array.isArray(raw) ? raw : []
   } catch (e) {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ')
   } finally {
@@ -401,13 +413,12 @@ async function onImportFile(e) {
     const wb = XLSX.read(buf, { type: 'array' })
     const ws = wb.Sheets[wb.SheetNames[0]]
     const rows = XLSX.utils.sheet_to_json(ws)
-    let imported = 0
+    const typeMap = { 'ความประพฤติ': 'general', 'ความประพฤติทั่วไป': 'general', 'การมาเรียน': 'attendance', 'ในห้องเรียน': 'learning' }
+    const map = new Map(settings.value.map(s => [s.setting_id, s]))
     for (const row of rows) {
       const id = row['รหัส']
       if (!id) continue
-      // Map ประเภท label back to value
-      const typeMap = { 'ความประพฤติ': 'general', 'ความประพฤติทั่วไป': 'general', 'การมาเรียน': 'attendance', 'ในห้องเรียน': 'learning' }
-      const data = {
+      map.set(String(id), {
         setting_id: String(id),
         label: row['ชื่อพฤติกรรม'] || '',
         behavior_type: typeMap[row['ประเภท']] || 'general',
@@ -416,13 +427,13 @@ async function onImportFile(e) {
         points_max: Number(row['คะแนนสูงสุด']) || 0,
         is_auto: row['อัตโนมัติ'] === 'ใช่' || row['อัตโนมัติ'] === true,
         is_active: row['เปิดใช้'] !== 'ไม่',
-        updated_at: serverTimestamp(),
-      }
-      await setDoc(doc(db(), `terms/${term.value}/behavior_settings`, String(id)), data, { merge: true })
-      imported++
+        updated_at: new Date().toISOString(),
+      })
     }
-    await loadSettings()
-    ElMessage.success(`นำเข้า ${imported} รายการสำเร็จ`)
+    const newList = Array.from(map.values())
+    await persistSettings(newList)
+    settings.value = newList
+    ElMessage.success(`นำเข้า ${rows.filter(r => r['รหัส']).length} รายการสำเร็จ`)
   } catch (err) {
     ElMessage.error('นำเข้าไม่สำเร็จ: ' + err.message)
   } finally {

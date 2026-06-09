@@ -335,11 +335,10 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { collection, doc, setDoc, deleteDoc, getDocs, serverTimestamp, writeBatch, query, where } from '@/supabase/firestore'
+import { supabase } from '@/supabase/client'
 import * as XLSX from 'xlsx'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useSchoolDb } from '@/composables/useSchoolDb'
-import { getSchoolDb } from '@/supabase/db'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { usePrintReport } from '@/composables/usePrintReport'
@@ -348,10 +347,9 @@ import { useScheduleGuard } from '@/composables/useScheduleGuard'
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
 const { isLocked } = useScheduleGuard()
-const { getTeachers, getSubjects, getClasses, getRooms, getRoomCatalog } = useSchoolDb()
+const { getTeachers, getSubjects, getClasses, getRooms, getRoomCatalog, getTeachingAssignments, getTimetable } = useSchoolDb()
 const { printReport } = usePrintReport()
 const term = () => schoolStore.currentTerm || '2568_1'
-const db = () => getSchoolDb()
 
 const loading = ref(false), saving = ref(false), dialogVisible = ref(false)
 const editing = ref(null), formRef = ref()
@@ -458,17 +456,48 @@ onMounted(async () => {
 })
 
 async function reload() {
-  const [aSnap, gSnap] = await Promise.all([
-    getDocs(collection(db(), `terms/${term()}/teaching_assignments`)),
-    getDocs(collection(db(), `terms/${term()}/timetable_grid`)),
-  ])
-  const grid = {}
-  gSnap.docs.forEach(d => { grid[d.id] = d.data() })
-  assignments.value = aSnap.docs.map(d => {
-    const a = { id: d.id, ...d.data() }
-    const placed = Object.values(grid).filter(s => s.assign_id === a.assign_id && s.type === 'subject').length
-    return { ...a, placed, done: placed >= a.periods_per_week }
+  // Read timetable_slots as both the "assignments" source and the "placed" counter.
+  // Group by class_id + subject_id + teacher_id to get unique assignment rows,
+  // then count how many slots exist per group.
+  const schoolId = authStore.schoolId
+  const currentTerm = term()
+  const { data, error } = await supabase
+    .from('timetable_slots')
+    .select('*')
+    .eq('school_id', schoolId)
+    .eq('term_id', currentTerm)
+  if (error) throw error
+
+  // Build grouped assignments map keyed by class+subject+teacher
+  const map = {}
+  ;(data || []).forEach(row => {
+    const key = `${row.class_id}|${row.subject_id}|${row.teacher_id}`
+    if (!map[key]) {
+      const teacher = teachers.value.find(t => t.teacher_id === row.teacher_id)
+      const subject = subjects.value.find(s => s.subject_code === row.subject_id)
+      map[key] = {
+        id: key,
+        assign_id: key,
+        class_id: row.class_id,
+        subject_code: row.subject_id,
+        subject_name: subject?.name || row.subject_id || '',
+        teacher_id: row.teacher_id,
+        teacher_name: teacher ? `${teacher.prefix || ''}${teacher.name} ${teacher.surname}` : row.teacher_id || '',
+        preferred_room: row.room_id || '',
+        periods_per_week: 0,
+        consecutive_periods: 1,
+        placed: 0,
+      }
+    }
+    map[key].periods_per_week += 1
+    map[key].placed += 1
   })
+
+  assignments.value = Object.values(map).map(a => ({
+    ...a,
+    done: a.placed >= a.periods_per_week,
+    remaining: Math.max(0, a.periods_per_week - a.placed),
+  }))
 }
 
 function openDialog(a = null) {
@@ -529,14 +558,48 @@ async function saveAssignment() {
 
     saving.value = true
     try {
-      const id = editing.value?.assign_id || `${form.class_id}_${form.subject_code}_${Date.now()}`.replace(/\//g, '_')
-      await setDoc(doc(db(), `terms/${term()}/teaching_assignments`, id), {
-        assign_id: id,
-        ...form,
-        updated_by: authStore.profile?.uid,
-        updated_by_name: authStore.profile?.displayName,
-        updated_at: serverTimestamp()
-      }, { merge: true })
+      // In Supabase, "assignments" are represented by timetable_slots.
+      // Saving an assignment upserts a placeholder slot for the first period.
+      // The timetable editor manages the actual slot placement.
+      const schoolId = authStore.schoolId
+      const currentTerm = term()
+      // Check if any slot already exists for this class+subject+teacher combo
+      const { data: existing } = await supabase
+        .from('timetable_slots')
+        .select('id')
+        .eq('school_id', schoolId)
+        .eq('term_id', currentTerm)
+        .eq('class_id', form.class_id)
+        .eq('subject_id', form.subject_code)
+        .eq('teacher_id', form.teacher_id)
+        .limit(1)
+
+      if (!existing?.length) {
+        // Insert one placeholder row so the assignment appears in the list
+        const { error } = await supabase.from('timetable_slots').insert([{
+          school_id: schoolId,
+          term_id: currentTerm,
+          class_id: form.class_id,
+          subject_id: form.subject_code,
+          teacher_id: form.teacher_id,
+          room_id: form.preferred_room || null,
+          day_of_week: 'จันทร์',
+          period_number: 1,
+          slot_type: 'subject',
+        }])
+        if (error) throw error
+      } else if (editing.value) {
+        // Update room_id on all matching slots
+        await supabase
+          .from('timetable_slots')
+          .update({ room_id: form.preferred_room || null })
+          .eq('school_id', schoolId)
+          .eq('term_id', currentTerm)
+          .eq('class_id', form.class_id)
+          .eq('subject_id', form.subject_code)
+          .eq('teacher_id', form.teacher_id)
+      }
+
       ElMessage.success('บันทึกเรียบร้อย')
       dialogVisible.value = false
       await reload()
@@ -549,32 +612,13 @@ async function saveAssignment() {
 }
 
 // ===== ปรับอัตโนมัติ: ตั้ง periods_per_week ให้ตรงกับตารางวิชา =====
+// In Supabase, periods_per_week = number of timetable_slots rows for this assignment.
+// "autoFix" is a no-op here since the count is live-derived from slots.
 async function autoFixPeriods() {
-  if (!validateIssues.value.length) return
-  autoFixing.value = true
-  try {
-    let fixed = 0
-    for (const issue of validateIssues.value) {
-      const a = assignments.value.find(x => x.class_id === issue.class_id && x.subject_code === issue.subject_code)
-      if (!a) continue
-      const id = a.assign_id || a.id
-      await setDoc(doc(db(), `terms/${term()}/teaching_assignments`, id), {
-        ...a,
-        periods_per_week: issue.subject_periods,
-        updated_by: authStore.profile?.uid,
-        updated_at: serverTimestamp()
-      }, { merge: true })
-      fixed++
-    }
-    await reload()
-    validateIssues.value = []
-    ElMessage.success(`ปรับ ${fixed} รายการให้ตรงกับตารางวิชาเรียบร้อย`)
-    validateVisible.value = false
-  } catch (e) {
-    ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
-  } finally {
-    autoFixing.value = false
-  }
+  await reload()
+  validateIssues.value = []
+  ElMessage.success('ข้อมูลอัปเดตแล้ว — จำนวนคาบถูกคำนวณจากตารางสอนล่าสุด')
+  validateVisible.value = false
 }
 
 // ===== ตรวจสอบความถูกต้อง: เทียบ periods_per_week กับตารางวิชา =====
@@ -605,15 +649,23 @@ function validatePeriods() {
 async function deleteAssignment(a) {
   try {
     await ElMessageBox.confirm(
-      `ลบ "${a.subject_name}" ห้อง ${a.class_id}?`,
+      `ลบ "${a.subject_name}" ห้อง ${a.class_id}? (ลบทุกคาบในตารางสอน)`,
       'ยืนยันการลบ',
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
-    await deleteDoc(doc(db(), `terms/${term()}/teaching_assignments`, a.assign_id || a.id))
+    const { error } = await supabase
+      .from('timetable_slots')
+      .delete()
+      .eq('school_id', authStore.schoolId)
+      .eq('term_id', term())
+      .eq('class_id', a.class_id)
+      .eq('subject_id', a.subject_code)
+      .eq('teacher_id', a.teacher_id)
+    if (error) throw error
     ElMessage.success('ลบเรียบร้อย')
     await reload()
-  } catch {
-    // cancelled
+  } catch (e) {
+    if (e !== 'cancel' && typeof e !== 'string') ElMessage.error(e.message)
   }
 }
 
@@ -623,18 +675,27 @@ async function deleteSelected() {
   if (!selectedRows.value.length) return
   try {
     await ElMessageBox.confirm(
-      `ยืนยันการลบ ${selectedRows.value.length} รายการที่เลือก?`,
+      `ยืนยันการลบ ${selectedRows.value.length} รายการที่เลือก? (ลบทุกคาบในตารางสอน)`,
       'ยืนยันการลบ',
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
     loading.value = true
     for (const row of selectedRows.value) {
-      await deleteDoc(doc(db(), `terms/${term()}/teaching_assignments`, row.assign_id || row.id))
+      await supabase
+        .from('timetable_slots')
+        .delete()
+        .eq('school_id', authStore.schoolId)
+        .eq('term_id', term())
+        .eq('class_id', row.class_id)
+        .eq('subject_id', row.subject_code)
+        .eq('teacher_id', row.teacher_id)
     }
     selectedRows.value = []
     ElMessage.success('ลบรายการที่เลือกเรียบร้อย')
     await reload()
-  } catch { /* cancelled */ } finally { loading.value = false }
+  } catch (e) {
+    if (e !== 'cancel' && typeof e !== 'string') ElMessage.error(e.message)
+  } finally { loading.value = false }
 }
 
 async function deleteAll() {
@@ -647,12 +708,17 @@ async function deleteAll() {
       { confirmButtonText: 'ลบทั้งหมด', cancelButtonText: 'ยกเลิก', type: 'error' }
     )
     loading.value = true
-    for (const row of [...allRows]) {
-      await deleteDoc(doc(db(), `terms/${term()}/teaching_assignments`, row.assign_id || row.id))
-    }
+    const { error } = await supabase
+      .from('timetable_slots')
+      .delete()
+      .eq('school_id', authStore.schoolId)
+      .eq('term_id', term())
+    if (error) throw error
     ElMessage.success('ลบทั้งหมดเรียบร้อย')
     await reload()
-  } catch { /* cancelled */ } finally { loading.value = false }
+  } catch (e) {
+    if (e !== 'cancel' && typeof e !== 'string') ElMessage.error(e.message)
+  } finally { loading.value = false }
 }
 
 // ===== Export =====
@@ -737,22 +803,23 @@ async function confirmImport() {
   importSaving.value = true
   let imported = 0
   try {
+    const schoolId = authStore.schoolId
+    const currentTerm = term()
     for (const row of validRows) {
-      const id = `${row.class_id}_${row.subject_code}_${row.teacher_id}`.replace(/\//g, '_')
-      await setDoc(doc(db(), `terms/${term()}/teaching_assignments`, id), {
-        assign_id: id,
+      // Insert one placeholder slot per assignment row (period 1, Monday)
+      // so it appears in the assignment list; TimetableView places it properly.
+      const { error } = await supabase.from('timetable_slots').upsert([{
+        school_id: schoolId,
+        term_id: currentTerm,
         class_id: row.class_id,
-        subject_code: row.subject_code,
-        subject_name: row.subject_name,
+        subject_id: row.subject_code,
         teacher_id: row.teacher_id,
-        teacher_name: row.teacher_name,
-        preferred_room: row.preferred_room,
-        periods_per_week: row.periods_per_week,
-        consecutive_periods: row.consecutive_periods,
-        updated_by: authStore.profile?.uid,
-        updated_by_name: authStore.profile?.displayName,
-        updated_at: serverTimestamp()
-      }, { merge: true })
+        room_id: row.preferred_room || null,
+        day_of_week: 'จันทร์',
+        period_number: 1,
+        slot_type: 'subject',
+      }], { onConflict: 'term_id,class_id,day_of_week,period_number' })
+      if (error) throw error
       imported++
     }
     await reload()

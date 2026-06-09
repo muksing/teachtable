@@ -237,23 +237,22 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { doc, getDoc } from '@/supabase/firestore'
-import { ref as storageRef, getDownloadURL } from '@/supabase/storage'
+import { supabase } from '@/supabase/client'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import * as XLSX from 'xlsx'
 import ExcelJS from 'exceljs'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { getSchoolDb, storage } from '@/supabase/db'
+import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useTimetable } from '@/composables/useTimetable'
 import { useSignature } from '@/composables/useSignature'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 
 const schoolStore = useSchoolStore()
+const authStore = useAuthStore()
 const { buildSignatureHTML, getModuleSignatures } = useSignature()
 const { getRooms } = useSchoolDb()
-const db = () => getSchoolDb()
 const term = computed(() => schoolStore.currentTerm || '2568_1')
 const { DAYS, PERIODS, PERIOD_TIMES } = useTimetable()
 
@@ -367,37 +366,26 @@ async function loadData() {
   loading.value = true
   publishedMissing.value = false
   try {
-    const schoolRootRef = db()
+    const schoolId = authStore.schoolId
 
-    // ── 1. อ่าน publish meta (1 doc) ────────────────────────────────
-    const infoSnap = await getDoc(doc(schoolRootRef, 'school_info', 'main'))
-    const publishMeta = infoSnap.exists() ? (infoSnap.data()?.timetable_publish || null) : null
+    // ── 1. อ่าน schools.settings จาก Supabase ───────────────────────
+    const { data: schoolRow, error } = await supabase
+      .from('schools')
+      .select('settings')
+      .eq('id', schoolId)
+      .maybeSingle()
+    if (error) throw error
+
+    const settings = schoolRow?.settings || {}
+    const publishMeta = settings.timetable_publish || null
+
     publishVersion.value = publishMeta?.version || ''
     publishAtLabel.value = publishMeta?.published_at_iso
       ? new Date(publishMeta.published_at_iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
       : ''
-    const schoolId = schoolStore.schoolInfo?.school_id || useAuthStore().schoolId
 
-    let payload = null
-
-    // ── 2. ลอง Storage JSON ก่อน (0 Firestore reads) ────────────────
-    const currentPath = String(publishMeta?.current_path || '').trim()
-    const shouldTryStorage = currentPath !== '' && !currentPath.startsWith('firestore:')
-    if (shouldTryStorage) {
-      try {
-        const url = await getDownloadURL(storageRef(storage, currentPath))
-        const resp = await fetch(url, { cache: 'no-store' })
-        if (resp.ok) payload = await resp.json()
-      } catch (e) {
-        console.warn('PrintTimetable: Storage JSON ไม่พร้อม fallback snapshot', e?.message)
-      }
-    }
-
-    // ── 3. Fallback: Firestore snapshot doc เดียว (1 doc) ───────────
-    if (!payload) {
-      const snapshotDoc = await getDoc(doc(schoolRootRef, 'public_timetable_snapshots', 'current'))
-      if (snapshotDoc.exists()) payload = snapshotDoc.data()
-    }
+    // ── 2. ดึง published payload ─────────────────────────────────────
+    const payload = publishMeta?.payload || null
 
     if (!payload) {
       publishedMissing.value = true
@@ -415,19 +403,18 @@ async function loadData() {
       publishVersion.value = payload.version
     }
 
-    // ── 4. แยกข้อมูลจาก payload ─────────────────────────────────────
+    // ── 3. แยกข้อมูลจาก payload ─────────────────────────────────────
     classes.value  = (Array.isArray(payload.classes)  ? payload.classes  : [])
       .sort((a, b) => (a.class_id || '').localeCompare(b.class_id || '', 'th'))
     teachers.value = (Array.isArray(payload.teachers) ? payload.teachers : [])
       .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'th'))
 
-    // ── โหลดข้อมูลห้อง Lab ที่มีจริงในระบบ เพื่อมากรองชื่อครูที่หลุดเข้ามา ──
+    // ── โหลดข้อมูลห้อง Lab ที่มีจริงในระบบ ──
     const actualRooms = await getRooms()
     const validRoomIds = new Set(actualRooms.map(r => r.room_id))
 
     slots.value = (Array.isArray(payload.timetable) ? payload.timetable : []).map(s => {
       const pr = (s.preferred_room || '').toString().trim()
-      // ถ้าค่าห้องไม่ใช่ห้องที่มีในระบบ (เช่น เป็นชื่อครู) ให้ล้างค่าทิ้งเลย
       if (pr && !validRoomIds.has(pr)) return { ...s, preferred_room: '' }
       return { ...s, preferred_room: pr }
     })

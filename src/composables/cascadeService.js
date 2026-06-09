@@ -1,203 +1,193 @@
-import { collection, doc, query, where, getDocs, writeBatch, getDoc } from '@/supabase/firestore'
-import { db, getSchoolDb } from '@/supabase/db'
+// src/composables/cascadeService.js
+// Migrated to native Supabase — no Firestore compat imports
+import { supabase } from '@/supabase/client'
 
-async function commitInChunks(dbInstance, operations) {
-  const CHUNK_SIZE = 400
-  for (let i = 0; i < operations.length; i += CHUNK_SIZE) {
-    const chunk = operations.slice(i, i + CHUNK_SIZE)
-    const batch = writeBatch(dbInstance)
-    chunk.forEach(op => {
-      if (op.type === 'set') batch.set(op.ref, op.data)
-      else if (op.type === 'update') batch.update(op.ref, op.data)
-      else if (op.type === 'delete') batch.delete(op.ref)
-    })
-    await batch.commit()
-  }
-}
+/**
+ * Cascade service: when a subject or teacher code/name changes, update all
+ * related Supabase rows across timetable_slots and teach_actuals.
+ *
+ * NOTE: Unlike the old Firestore version, we cannot use doc references.
+ * We run targeted UPDATE queries per table. For large datasets this may be
+ * multiple round trips; consider wrapping in a Supabase Edge Function for
+ * strict atomicity.
+ */
 
 export const cascadeService = {
+  /**
+   * When a subject is renamed/re-coded:
+   * - Update timetable_slots.subject_id
+   * - Update teach_actuals.subject_id
+   *
+   * @param {string} termId    - term string like '2568_1'
+   * @param {string} oldId     - old subject_code (used as subject_id in slots)
+   * @param {object} oldData   - { subject_code, name }
+   * @param {object} newData   - { subject_code, name }
+   */
   async updateSubject(termId, oldId, oldData, newData) {
-    const schoolDb = getSchoolDb()
-    const termRef = doc(schoolDb, 'terms', termId)
-    const subjectsRef = collection(termRef, 'subjects')
-    const timetableRef = collection(termRef, 'timetable')
-    const timetableGridRef = collection(termRef, 'timetable_grid')
-    const assignmentsRef = collection(termRef, 'teaching_assignments')
-    const teachActualRef = collection(termRef, 'teach_actual')
-
-    const ops = []
-    
     const newCode = newData.subject_code || newData.subject_id
-    const oldCode = oldData.subject_code || oldData.subject_id
-    const isIdChanged = oldId !== newCode
+    const oldCode = oldData.subject_code || oldData.subject_id || oldId
     const isCodeChanged = oldCode !== newCode
+    const isNameChanged = (newData.name || newData.subject_name) !== (oldData.name || oldData.subject_name)
 
-    if (isIdChanged || isCodeChanged) {
-      const newDocRef = doc(subjectsRef, newCode)
-      const newDocSnap = await getDoc(newDocRef)
-      if (newDocSnap.exists()) {
+    if (!isCodeChanged && !isNameChanged) return true
+
+    // Check for duplicate subject_code in subjects table (same school)
+    if (isCodeChanged) {
+      const { data: existing } = await supabase
+        .from('subjects')
+        .select('id')
+        .eq('subject_code', newCode)
+        .maybeSingle()
+      if (existing) {
         throw new Error(`รหัสวิชา "${newCode}" มีอยู่ในระบบแล้ว กรุณาใช้รหัสอื่น`)
       }
     }
 
-    if (isIdChanged) {
-      const newDocRef = doc(subjectsRef, newCode)
-      ops.push({ type: 'set', ref: newDocRef, data: newData })
-      const oldDocRef = doc(subjectsRef, oldId)
-      ops.push({ type: 'delete', ref: oldDocRef })
-    } else {
-      const subjectRef = doc(subjectsRef, oldId)
-      ops.push({ type: 'update', ref: subjectRef, data: newData })
+    // 1. Update subjects table
+    const subjectUpdates = {}
+    if (isCodeChanged) subjectUpdates.subject_code = newCode
+    if (isNameChanged) subjectUpdates.name = newData.name || newData.subject_name
+
+    if (Object.keys(subjectUpdates).length > 0) {
+      const { error } = await supabase
+        .from('subjects')
+        .update(subjectUpdates)
+        .eq('subject_code', oldCode)
+      if (error) throw error
     }
 
-    const updateSlots = async (collectionRef) => {
-      const q = query(collectionRef, where('subject_code', '==', oldCode))
-      const snap = await getDocs(q)
-      snap.forEach(docSnap => {
-        const updates = {}
-        if (isCodeChanged) updates.subject_code = newCode
-        if (newData.subject_name && newData.subject_name !== oldData.subject_name) {
-          updates.subject_name = newData.subject_name
-        }
-        if (Object.keys(updates).length > 0) ops.push({ type: 'update', ref: docSnap.ref, data: updates })
-      })
-    }
-    
-    await updateSlots(timetableRef)
-    await updateSlots(timetableGridRef)
-
-    const assignQuery = query(assignmentsRef, where('subject_code', '==', oldCode))
-    const assignSnap = await getDocs(assignQuery)
-    assignSnap.forEach(assignDoc => {
-      const updates = {}
-      if (isCodeChanged) updates.subject_code = newCode
-      if (newData.subject_name && newData.subject_name !== oldData.subject_name) {
-        updates.subject_name = newData.subject_name
-      }
-      if (Object.keys(updates).length > 0) ops.push({ type: 'update', ref: assignDoc.ref, data: updates })
-    })
-
-    if (isIdChanged || isCodeChanged || (newData.subject_name && newData.subject_name !== oldData.subject_name)) {
-      // อัปเดตตารางสอนจริง (teacher_plan)
-      const taPlanQuery = query(teachActualRef, where('subject_plan_id', '==', oldCode))
-      const taPlanSnap = await getDocs(taPlanQuery)
-      taPlanSnap.forEach(taDoc => {
-        const updates = {}
-        if (isCodeChanged) updates.subject_plan_id = newCode
-        if (newData.subject_name && newData.subject_name !== oldData.subject_name) {
-          updates.subject_name = newData.subject_name
-        }
-        if (Object.keys(updates).length > 0) ops.push({ type: 'update', ref: taDoc.ref, data: updates })
-      })
-
-      // อัปเดตตารางสอนจริง (teacher_actual)
-      if (isCodeChanged) {
-        const taActQuery = query(teachActualRef, where('subject_actual_id', '==', oldCode))
-        const taActSnap = await getDocs(taActQuery)
-        taActSnap.forEach(taDoc => {
-          ops.push({ type: 'update', ref: taDoc.ref, data: { subject_actual_id: newCode } })
-        })
-      }
+    // 2. Update timetable_slots.subject_id
+    if (isCodeChanged) {
+      const { error } = await supabase
+        .from('timetable_slots')
+        .update({ subject_id: newCode })
+        .eq('term_id', termId)
+        .eq('subject_id', oldCode)
+      if (error) throw error
     }
 
-    await commitInChunks(db, ops)
+    // 3. Update teach_actuals.subject_id
+    if (isCodeChanged) {
+      const { error } = await supabase
+        .from('teach_actuals')
+        .update({ subject_id: newCode })
+        .eq('term_id', termId)
+        .eq('subject_id', oldCode)
+      if (error) throw error
+    }
+
     return true
   },
 
+  /**
+   * When a teacher is renamed/re-coded:
+   * - Update timetable_slots.teacher_id
+   * - Update teach_actuals.planned_teacher_id and actual_teacher_id
+   *
+   * @param {string} termId    - term string like '2568_1'
+   * @param {string} oldId     - old teacher_code
+   * @param {object} oldData   - { teacher_id, prefix, name/firstName, surname/lastName }
+   * @param {object} newData   - { teacher_id, prefix, name/firstName, surname/lastName }
+   */
   async updateTeacher(termId, oldId, oldData, newData) {
-    const schoolDb = getSchoolDb()
-    const termRef = doc(schoolDb, 'terms', termId)
-    const teachersRef = collection(termRef, 'teachers')
-    const timetableRef = collection(termRef, 'timetable')
-    const timetableGridRef = collection(termRef, 'timetable_grid')
-    const assignmentsRef = collection(termRef, 'teaching_assignments')
-    const teachActualRef = collection(termRef, 'teach_actual')
-    const supervisionRef = collection(termRef, 'activity_supervision')
+    const newTeacherId = newData.teacher_id || newData.teacherId || newData.id
+    const oldTeacherId = oldData.teacher_id || oldData.teacherId || oldData.id || oldId
+    const isIdChanged = oldTeacherId !== newTeacherId
 
-    const ops = []
-
-    const newId = newData.teacher_id || newData.teacherId || newData.id
-    const oldTeacherId = oldData.teacher_id || oldData.teacherId || oldData.id
-    const isIdChanged = oldId !== newId
-    
     const newFullName = `${newData.prefix || ''}${newData.firstName || newData.name || ''} ${newData.lastName || newData.surname || ''}`.trim()
     const oldFullName = `${oldData.prefix || ''}${oldData.firstName || oldData.name || ''} ${oldData.lastName || oldData.surname || ''}`.trim()
     const isNameChanged = newFullName !== oldFullName
 
+    if (!isIdChanged && !isNameChanged) return true
+
+    // Check for duplicate teacher_code
     if (isIdChanged) {
-      const newDocRef = doc(teachersRef, newId)
-      const newDocSnap = await getDoc(newDocRef)
-      if (newDocSnap.exists()) {
-        throw new Error(`รหัสครู "${newId}" มีอยู่ในระบบแล้ว กรุณาใช้รหัสอื่น`)
+      const { data: existing } = await supabase
+        .from('teachers')
+        .select('id')
+        .eq('teacher_code', newTeacherId)
+        .maybeSingle()
+      if (existing) {
+        throw new Error(`รหัสครู "${newTeacherId}" มีอยู่ในระบบแล้ว กรุณาใช้รหัสอื่น`)
       }
     }
 
-    if (isIdChanged) {
-      const newDocRef = doc(teachersRef, newId)
-      ops.push({ type: 'set', ref: newDocRef, data: newData })
-      const oldDocRef = doc(teachersRef, oldId)
-      ops.push({ type: 'delete', ref: oldDocRef })
-    } else {
-      const teacherRef = doc(teachersRef, oldId)
-      ops.push({ type: 'update', ref: teacherRef, data: newData })
+    // 1. Update teachers table
+    const teacherUpdates = {}
+    if (isIdChanged) teacherUpdates.teacher_code = newTeacherId
+    if (isNameChanged) {
+      teacherUpdates.first_name = newData.firstName || newData.name || oldData.first_name || ''
+      teacherUpdates.last_name = newData.lastName || newData.surname || oldData.last_name || ''
+      if (newData.prefix) teacherUpdates.prefix = newData.prefix
+    }
+    if (Object.keys(teacherUpdates).length > 0) {
+      const { error } = await supabase
+        .from('teachers')
+        .update(teacherUpdates)
+        .eq('teacher_code', oldTeacherId)
+      if (error) throw error
     }
 
-    if (isIdChanged || isNameChanged) {
-      const updateTeacherSlots = async (collectionRef) => {
-        const q = query(collectionRef, where('teacher_id', '==', oldTeacherId))
-        const snap = await getDocs(q)
-        snap.forEach(docSnap => {
-          const updates = {}
-          if (isIdChanged) updates.teacher_id = newId
-          if (isNameChanged) updates.teacher_name = newFullName
-          ops.push({ type: 'update', ref: docSnap.ref, data: updates })
+    // 2. Update timetable_slots.teacher_id
+    if (isIdChanged) {
+      const { error } = await supabase
+        .from('timetable_slots')
+        .update({ teacher_id: newTeacherId })
+        .eq('term_id', termId)
+        .eq('teacher_id', oldTeacherId)
+      if (error) throw error
+    }
+
+    // 3. Update teach_actuals.planned_teacher_id
+    if (isIdChanged) {
+      const { error } = await supabase
+        .from('teach_actuals')
+        .update({ planned_teacher_id: newTeacherId })
+        .eq('term_id', termId)
+        .eq('planned_teacher_id', oldTeacherId)
+      if (error) throw error
+    }
+
+    // 4. Update teach_actuals.actual_teacher_id (substitute teacher field)
+    if (isIdChanged) {
+      const { error } = await supabase
+        .from('teach_actuals')
+        .update({ actual_teacher_id: newTeacherId })
+        .eq('term_id', termId)
+        .eq('actual_teacher_id', oldTeacherId)
+      if (error) throw error
+    }
+
+    // 5. Update leave_requests.teacher_id
+    if (isIdChanged) {
+      const { error } = await supabase
+        .from('leave_requests')
+        .update({
+          teacher_id: newTeacherId,
+          ...(isNameChanged ? { teacher_name: newFullName } : {}),
+          updated_at: new Date().toISOString(),
         })
-      }
-      
-      await updateTeacherSlots(timetableRef)
-      await updateTeacherSlots(timetableGridRef)
-      await updateTeacherSlots(supervisionRef)
-
-      const assignQuery = query(assignmentsRef, where('teacher_id', '==', oldTeacherId))
-      const assignSnap = await getDocs(assignQuery)
-      assignSnap.forEach(assignDoc => {
-        const updates = {}
-        if (isIdChanged) updates.teacher_id = newId
-        if (isNameChanged) updates.teacher_name = newFullName
-        ops.push({ type: 'update', ref: assignDoc.ref, data: updates })
-      })
-
-      // อัปเดตตารางสอนจริง (teacher_plan)
-      const taPlanQuery = query(teachActualRef, where('teacher_plan_id', '==', oldTeacherId))
-      const taPlanSnap = await getDocs(taPlanQuery)
-      taPlanSnap.forEach(taDoc => {
-        const updates = {}
-        if (isIdChanged) updates.teacher_plan_id = newId
-        if (isNameChanged) updates.teacher_plan_name = newFullName
-        ops.push({ type: 'update', ref: taDoc.ref, data: updates })
-      })
-
-      // อัปเดตตารางสอนจริงสำหรับครูสอนแทน (subject_actual_teacher_id)
-      const taSubQuery = query(teachActualRef, where('subject_actual_teacher_id', '==', oldTeacherId))
-      const taSubSnap = await getDocs(taSubQuery)
-      taSubSnap.forEach(taDoc => {
-        const updates = {}
-        if (isIdChanged) updates.subject_actual_teacher_id = newId
-        if (isNameChanged) updates.sub_teacher_name = newFullName
-        ops.push({ type: 'update', ref: taDoc.ref, data: updates })
-      })
+        .eq('term_id', termId)
+        .eq('teacher_id', oldTeacherId)
+      if (error) throw error
+    } else if (isNameChanged) {
+      const { error } = await supabase
+        .from('leave_requests')
+        .update({ teacher_name: newFullName, updated_at: new Date().toISOString() })
+        .eq('term_id', termId)
+        .eq('teacher_id', oldTeacherId)
+      if (error) throw error
     }
 
+    // 6. Update classes.homeroom_teacher_id
     if (isIdChanged) {
-      const usersRef = collection(db, 'users')
-      const q = query(usersRef, where('schoolId', '==', schoolDb.id), where('teacherId', '==', oldTeacherId))
-      const userSnap = await getDocs(q)
-      userSnap.forEach(userDoc => {
-        ops.push({ type: 'update', ref: userDoc.ref, data: { teacherId: newId, teacher_id: newId } })
-      })
+      const { error } = await supabase
+        .from('classes')
+        .update({ homeroom_teacher_id: newTeacherId })
+        .eq('homeroom_teacher_id', oldTeacherId)
+      if (error) throw error
     }
 
-    await commitInChunks(db, ops)
     return true
-  }
+  },
 }

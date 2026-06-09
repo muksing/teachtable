@@ -804,15 +804,14 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { collection, getDocs, doc, deleteDoc, updateDoc, setDoc, writeBatch, serverTimestamp } from '@/supabase/firestore'
 import { useRouter } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import { supabase } from '@/supabase/client'
 import { useTimetable } from '@/composables/useTimetable'
 import { useRealtimeTimetable } from '@/composables/useRealtimeTimetable'
 import { useAutoScheduler } from '@/composables/useAutoScheduler'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 import { useSchedulerPresence } from '@/composables/useSchedulerPresence'
-import { getSchoolDb } from '@/supabase/db'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 import { useScheduleGuard } from '@/composables/useScheduleGuard'
@@ -823,8 +822,6 @@ const authStore = useAuthStore()
 const { isLocked, showLockMsg, guardAction } = useScheduleGuard()
 const presence = useSchedulerPresence()
 const term = () => schoolStore.currentTerm || '2568_1'
-const db = () => getSchoolDb()
-const batchDb = () => db().firestore || db()
 
 const {
   DAYS, PERIODS, PERIOD_TIMES,
@@ -1208,21 +1205,26 @@ async function saveCardTeacher() {
     const assignId = a.assign_id || a.id
     const newRoom = cardEditDlg.newPreferredRoom || a.preferred_room || null
 
-    // Delete ALL timetable_grid slots for this assign_id (F4: reset to pending)
+    // Delete ALL timetable_slots for this assignment (F4: reset to pending)
     const slotsToDelete = rt.timetableSlots.value.filter(s => s.assign_id === assignId && s.class_id === a.class_id)
-    const batch = writeBatch(batchDb())
-    slotsToDelete.forEach(s => {
-      batch.delete(doc(db(), `terms/${term()}/timetable_grid`, s.id))
-    })
-    // Update the teaching_assignments doc with new teacher + preferred_room
-    const updateData = {
-      teacher_id: cardEditDlg.newTeacherId,
-      teacher_name: newName,
-      updated_at: serverTimestamp()
+    const schoolId = authStore.schoolId
+    const t = term()
+    if (slotsToDelete.length) {
+      const slotIds = slotsToDelete.map(s => s._db_id || s.id).filter(Boolean)
+      if (slotIds.length) {
+        const { error } = await supabase.from('timetable_slots').delete().in('id', slotIds)
+        if (error) throw error
+      }
     }
-    if (newRoom !== undefined) updateData.preferred_room = newRoom
-    batch.update(doc(db(), `terms/${term()}/teaching_assignments`, assignId), updateData)
-    await batch.commit()
+    // Update remaining timetable_slots for this class+subject+teacher with new teacher + preferred_room
+    const { error: updateError } = await supabase
+      .from('timetable_slots')
+      .update({ teacher_id: cardEditDlg.newTeacherId, room_id: newRoom, updated_at: new Date().toISOString() })
+      .eq('school_id', schoolId)
+      .eq('term_id', t)
+      .eq('class_id', a.class_id)
+      .eq('subject_id', a.subject_code)
+    if (updateError) throw updateError
 
     // update local
     const idx = assignments.value.findIndex(x => (x.assign_id || x.id) === assignId)
@@ -1252,9 +1254,11 @@ async function removeCardSlots(a) {
     await ElMessageBox.confirm(`ลบ ${toDelete.length} คาบของ "${a.subject_name}" (${a.class_id}) ออกจากตาราง?`, 'ยืนยัน', { type: 'warning' })
   } catch { return }
   try {
-    const batch = writeBatch(batchDb())
-    toDelete.forEach(s => batch.delete(doc(db(), `terms/${term()}/timetable_grid`, s.id)))
-    await batch.commit()
+    const dbIds = toDelete.map(s => s._db_id || s.id).filter(Boolean)
+    if (dbIds.length) {
+      const { error } = await supabase.from('timetable_slots').delete().in('id', dbIds)
+      if (error) throw error
+    }
     await loadAssignmentsWithProgress()
     ElMessage.success(`ลบ ${toDelete.length} คาบแล้ว`)
   } catch (e) {
@@ -1279,27 +1283,19 @@ function toPlainObject(obj) {
 async function doApplyAllActivities() {
   workflowLoading.value = '1'
   try {
-    const actSnap = await getDocs(collection(db(), `terms/${term()}/activity_booking`))
-    const acts = actSnap.docs.map(d => {
-      try {
-        const data = toPlainObject(d.data())
-        // Validate required fields
-        if (!data.start_period || !data.duration_periods || !Array.isArray(data.target_classes)) {
-          console.warn(`Activity ${d.id} has invalid fields, skipping:`, data)
-          return null
-        }
-        return { id: d.id, ...data }
-      } catch (err) {
-        console.error(`Failed to parse activity ${d.id}:`, err.message)
-        return null
-      }
-    }).filter(a => a !== null)
+    const schoolId = authStore.schoolId
+    const t = term()
+    const { data: actData, error: actErr } = await supabase
+      .from('activity_bookings')
+      .select('*')
+      .eq('school_id', schoolId)
+      .eq('term_id', t)
+    if (actErr) throw actErr
 
+    const acts = (actData || []).filter(a => a.start_period && a.duration_periods && Array.isArray(a.target_classes))
     if (!acts.length) { ElMessage.warning('ยังไม่มีกิจกรรม — กรอกกิจกรรมในหน้า ActivityBooking ก่อน'); return }
 
-    const batch = writeBatch(batchDb())
-    let count = 0
-
+    const payloads = []
     acts.forEach(act => {
       const days = Array.isArray(act.days) && act.days.length ? act.days : (act.day != null ? [act.day] : [])
       const targetClasses = Array.isArray(act.target_classes) ? act.target_classes : []
@@ -1309,30 +1305,38 @@ async function doApplyAllActivities() {
             const startPeriod = Number(act.start_period)
             const durationPeriods = Number(act.duration_periods)
             for (let p = startPeriod; p < startPeriod + durationPeriods; p++) {
-              const safeClassId = String(classId).replace(/\//g, '-')
-              const slotId = `${dayVal}_${p}_${safeClassId}`
-              batch.set(doc(db(), `terms/${term()}/timetable_grid`, slotId), {
-                id: slotId, day: Number(dayVal), period: Number(p),
-                class_id: String(classId), type: 'activity',
-                ref_id: String(act.act_id || act.id),
+              payloads.push({
+                school_id: schoolId,
+                term_id: t,
+                class_id: String(classId),
+                day_of_week: Number(dayVal),
+                period_number: Number(p),
+                slot_type: 'activity',
+                subject_id: null,
+                teacher_id: null,
+                room_id: null,
                 act_id: String(act.act_id || act.id),
                 act_name: String(act.name || ''),
                 is_locked: true,
-                updated_by: String(authStore.profile?.uid || 'system'),
-                updated_at: serverTimestamp(),
               })
-              count++
             }
           } catch (err) {
-            console.warn(`Failed to batch slot for ${classId} day ${dayVal}:`, err.message)
+            console.warn(`Failed to prepare slot for ${classId} day ${dayVal}:`, err.message)
           }
         })
       })
     })
 
-    await batch.commit()
-    workflowStep.value = '2'   // ไปขั้นตอน 2
-    ElMessage.success(`✅ ลงกิจกรรม ${count} คาบ (${acts.length} กิจกรรม) เรียบร้อย — กดปุ่ม ② ครูคุม`)
+    const CHUNK = 400
+    for (let i = 0; i < payloads.length; i += CHUNK) {
+      const { error } = await supabase
+        .from('timetable_slots')
+        .upsert(payloads.slice(i, i + CHUNK), { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+      if (error) throw error
+    }
+
+    workflowStep.value = '2'
+    ElMessage.success(`✅ ลงกิจกรรม ${payloads.length} คาบ (${acts.length} กิจกรรม) เรียบร้อย — กดปุ่ม ② ครูคุม`)
   } catch (e) {
     ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
   } finally {
@@ -1344,23 +1348,24 @@ async function doApplyAllActivities() {
 async function doApplySupervisions() {
   workflowLoading.value = '2'
   try {
-    const [actSnap, supSnap] = await Promise.all([
-      getDocs(collection(db(), `terms/${term()}/activity_booking`)),
-      getDocs(collection(db(), `terms/${term()}/activity_supervision`)),
+    const schoolId = authStore.schoolId
+    const t = term()
+    const [{ data: actData, error: actErr }, { data: supData, error: supErr }] = await Promise.all([
+      supabase.from('activity_bookings').select('*').eq('school_id', schoolId).eq('term_id', t),
+      supabase.from('activity_supervisions').select('*').eq('school_id', schoolId).eq('term_id', t),
     ])
-    const acts = actSnap.docs.map(d => ({ id: d.id, ...toPlainObject(d.data()) }))
-    const sups = supSnap.docs.map(d => ({ id: d.id, ...toPlainObject(d.data()) }))
-    const checkedSups = sups.filter(s => s.teacher_id)
+    if (actErr) throw actErr
+    if (supErr) throw supErr
+
+    const acts = actData || []
+    const checkedSups = (supData || []).filter(s => s.teacher_id)
     if (!checkedSups.length) { ElMessage.warning('ยังไม่มีครูคุมกิจกรรม — กำหนดครูคุมในหน้า ActivityBooking ก่อน'); return }
 
-    const batch = writeBatch(batchDb())
-    let count = 0
-
+    const payloads = []
     checkedSups.forEach(sup => {
       const act = acts.find(a => (a.act_id || a.id) === sup.act_id)
       if (!act) return
       const days = Array.isArray(act.days) && act.days.length ? act.days : (act.day != null ? [act.day] : [])
-      const safeTeacherId = String(sup.teacher_id).replace(/\//g, '-')
 
       days.forEach(dayVal => {
         try {
@@ -1368,54 +1373,55 @@ async function doApplySupervisions() {
           const durationPeriods = Number(act.duration_periods)
           for (let p = startPeriod; p < startPeriod + durationPeriods; p++) {
             // Lock teacher slot (แสดงในแผงครู)
-            const teacherSlotId = `lock-t_${dayVal}_${p}_${safeTeacherId}`
-            batch.set(doc(db(), `terms/${term()}/timetable_grid`, teacherSlotId), {
-              id: teacherSlotId, day: Number(dayVal), period: Number(p),
+            payloads.push({
+              school_id: schoolId,
+              term_id: t,
               class_id: null,
               teacher_id: String(sup.teacher_id),
-              teacher_name: String(sup.teacher_name || ''),
-              type: 'activity',
+              room_id: null,
+              day_of_week: Number(dayVal),
+              period_number: Number(p),
+              slot_type: 'activity',
               act_id: String(act.act_id || act.id),
               act_name: String(act.name || ''),
-              name: String(act.name || ''),
               is_locked: true,
               lock_type: 'teacher',
-              updated_by: String(authStore.profile?.uid || 'system'),
-              updated_at: serverTimestamp(),
             })
-            count++
 
             // Lock room/lab slot (แสดงในแผงห้อง/Lab)
             if (sup.room_id) {
-              const safeRoomId = String(sup.room_id).replace(/\//g, '-')
-              const roomSlotId = `lock-r_${dayVal}_${p}_${safeRoomId}`
-              batch.set(doc(db(), `terms/${term()}/timetable_grid`, roomSlotId), {
-                id: roomSlotId, day: Number(dayVal), period: Number(p),
+              payloads.push({
+                school_id: schoolId,
+                term_id: t,
                 class_id: null,
                 teacher_id: String(sup.teacher_id),
-                teacher_name: String(sup.teacher_name || ''),
-                preferred_room: String(sup.room_id),
-                type: 'activity',
+                room_id: String(sup.room_id),
+                day_of_week: Number(dayVal),
+                period_number: Number(p),
+                slot_type: 'activity',
                 act_id: String(act.act_id || act.id),
                 act_name: String(act.name || ''),
-                name: String(act.name || ''),
                 is_locked: true,
                 lock_type: 'room',
-                updated_by: String(authStore.profile?.uid || 'system'),
-                updated_at: serverTimestamp(),
               })
-              count++
             }
           }
         } catch (err) {
-          console.warn(`Failed to batch supervision for ${sup.teacher_id} day ${dayVal}:`, err.message)
+          console.warn(`Failed to prepare supervision for ${sup.teacher_id} day ${dayVal}:`, err.message)
         }
       })
     })
 
-    await batch.commit()
+    const CHUNK = 400
+    for (let i = 0; i < payloads.length; i += CHUNK) {
+      const { error } = await supabase
+        .from('timetable_slots')
+        .upsert(payloads.slice(i, i + CHUNK), { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+      if (error) throw error
+    }
+
     workflowStep.value = null  // เข้าสู่โหมดจัดตารางปกติ
-    ElMessage.success(`✅ ล็อกครูคุม ${checkedSups.length} คน → ${count} slot — พร้อมจัดตารางสอน!`)
+    ElMessage.success(`✅ ล็อกครูคุม ${checkedSups.length} คน → ${payloads.length} slot — พร้อมจัดตารางสอน!`)
   } catch (e) {
     ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
   } finally {
@@ -1453,8 +1459,44 @@ async function loadAssignmentsWithProgress(forceReload = false) {
 
   assignmentsLoadPromise = (async () => {
     if (forceReload || assignments.value.length === 0) {
-      const aSnap = await getDocs(collection(db(), `terms/${term()}/teaching_assignments`))
-      assignments.value = aSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+      const schoolId = authStore.schoolId
+      const t = term()
+      const { data, error } = await supabase
+        .from('timetable_slots')
+        .select('*')
+        .eq('school_id', schoolId)
+        .eq('term_id', t)
+        .eq('slot_type', 'subject')
+      if (error) throw error
+      // Derive assignment list: group by class+subject+teacher, sum periods_per_week
+      const map = {}
+      ;(data || []).forEach(row => {
+        const key = `${row.class_id}|${row.subject_id}|${row.teacher_id}`
+        if (!map[key]) {
+          const teacher = teachers.value.find(tc => tc.teacher_id === row.teacher_id)
+          const subject = (schoolStore.subjects || []).find(s => s.subject_code === row.subject_id)
+          map[key] = {
+            id: key,
+            assign_id: key,
+            class_id: row.class_id,
+            subject_code: row.subject_id,
+            subject_name: subject?.name || row.subject_id || '',
+            teacher_id: row.teacher_id,
+            teacher_name: teacher ? `${teacher.prefix || ''}${teacher.name} ${teacher.surname}` : (row.teacher_id || ''),
+            preferred_room: row.room_id || '',
+            periods_per_week: 0,
+            consecutive_periods: 1,
+            placed: 0,
+          }
+        }
+        map[key].periods_per_week += 1
+        map[key].placed += 1
+      })
+      assignments.value = Object.values(map).map(a => ({
+        ...a,
+        done: a.placed >= a.periods_per_week,
+        remaining: Math.max(0, a.periods_per_week - a.placed),
+      }))
     }
     recalcAssignmentProgress()
   })()
@@ -1763,25 +1805,15 @@ async function saveEditSlot() {
     const slotsToUpdate = rt.timetableSlots.value
       .filter(s => s.assign_id === assignId && s.class_id === classId)
 
-    const batch = writeBatch(batchDb())
-
-    slotsToUpdate.forEach(s => {
-      batch.update(doc(db(), `terms/${term()}/timetable_grid`, s.id), {
-        teacher_id: editDlg.newTeacherId,
-        teacher_name: newName,
-        updated_at: serverTimestamp()
-      })
-    })
-
-    if (assignId) {
-      batch.update(doc(db(), `terms/${term()}/teaching_assignments`, assignId), {
-        teacher_id: editDlg.newTeacherId,
-        teacher_name: newName,
-        updated_at: serverTimestamp()
-      })
+    // Update teacher on all matching timetable_slots rows
+    const dbIds = slotsToUpdate.map(s => s._db_id || s.id).filter(Boolean)
+    if (dbIds.length) {
+      const { error: slotErr } = await supabase
+        .from('timetable_slots')
+        .update({ teacher_id: editDlg.newTeacherId, updated_at: new Date().toISOString() })
+        .in('id', dbIds)
+      if (slotErr) throw slotErr
     }
-
-    await batch.commit()
 
     // Update local assignments
     if (assignId) {
@@ -1829,7 +1861,7 @@ function openSlotEdit(slot) {
 }
 
 async function removeSlotById(slotId) {
-  await deleteDoc(doc(db(), `terms/${term()}/timetable_grid`, slotId))
+  await rt.removeSlot(slotId)
   editDlg.visible = false
   await loadAssignmentsWithProgress()
   ElMessage.success('ลบคาบแล้ว')
@@ -1837,8 +1869,10 @@ async function removeSlotById(slotId) {
 
 async function removeAllSlotsOfAssignment(assignId) {
   const toDelete = rt.timetableSlots.value.filter(s => s.assign_id === assignId)
-  for (const s of toDelete) {
-    await deleteDoc(doc(db(), `terms/${term()}/timetable_grid`, s.id))
+  const dbIds = toDelete.map(s => s._db_id || s.id).filter(Boolean)
+  if (dbIds.length) {
+    const { error } = await supabase.from('timetable_slots').delete().in('id', dbIds)
+    if (error) throw error
   }
   editDlg.visible = false
   await loadAssignmentsWithProgress()
@@ -1956,25 +1990,21 @@ async function confirmCoTeach() {
   const teacher = teachers.value.find(t => t.teacher_id === coTeachDlg.teacherId)
   if (!teacher) { ElMessage.error('ไม่พบครูที่เลือก'); return }
   const teacherName = `${teacher.prefix||''}${teacher.name} ${teacher.surname}`
-  const safeTeacherId = String(coTeachDlg.teacherId).replace(/\//g, '-')
-  const slotId = `lock-coteach_${slot.day}_${slot.period}_${safeTeacherId}`
   try {
-    await setDoc(doc(db(), `terms/${term()}/timetable_grid`, slotId), {
-      id: slotId,
-      day: slot.day,
-      period: slot.period,
+    const { error } = await supabase.from('timetable_slots').upsert([{
+      school_id: authStore.schoolId,
+      term_id: term(),
       class_id: slot.class_id,
-      assign_id: slot.assign_id,
-      subject_code: slot.subject_code,
-      subject_name: slot.subject_name,
+      subject_id: slot.subject_code || null,
       teacher_id: coTeachDlg.teacherId,
-      teacher_name: teacherName,
-      preferred_room: slot.preferred_room || null,
-      type: 'subject',
+      room_id: slot.preferred_room || null,
+      day_of_week: slot.day,
+      period_number: slot.period,
+      slot_type: 'subject',
       is_coteach: true,
       is_locked: false,
-      updated_at: serverTimestamp(),
-    })
+    }], { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+    if (error) throw error
     ElMessage.success(`เพิ่มครูร่วมสอน ${teacherName} แล้ว`)
     coTeachDlg.visible = false
   } catch (e) {
@@ -2174,15 +2204,20 @@ async function handleClearAll() {
     await ElMessageBox.confirm('ยืนยันล้างตารางทั้งหมด? (จะเริ่มขั้นตอน ① ลงกิจกรรม → ② ครูคุม ใหม่)', 'ยืนยัน', { type: 'warning' })
   } catch { return }
   try {
-    const snap = await getDocs(collection(db(), `terms/${term()}/timetable_grid`))
-    const batch = writeBatch(batchDb())
-    snap.docs.forEach(d => batch.delete(doc(db(), `terms/${term()}/timetable_grid`, d.id)))
-    await batch.commit()
+    const schoolId = authStore.schoolId
+    const t = term()
+    const { error, count } = await supabase
+      .from('timetable_slots')
+      .delete()
+      .eq('school_id', schoolId)
+      .eq('term_id', t)
+    if (error) throw error
     // Wait a moment for real-time sync to update
     await new Promise(r => setTimeout(r, 100))
+    assignments.value = []
     await loadAssignmentsWithProgress()
     workflowStep.value = '1'   // เริ่ม workflow ใหม่
-    ElMessage.success(`ล้างตารางทั้งหมด ${snap.docs.length} slot แล้ว — กดปุ่ม ① ลงกิจกรรม`)
+    ElMessage.success(`ล้างตารางทั้งหมดเรียบร้อยแล้ว — กดปุ่ม ① ลงกิจกรรม`)
   } catch (e) {
     console.error('Clear all error:', e)
     ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)

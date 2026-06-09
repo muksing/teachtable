@@ -1,11 +1,8 @@
 import { ref } from 'vue'
-import { getFirestore, collection, doc, getDoc, addDoc, setDoc, query, where, getDocs, updateDoc, Timestamp } from '@/supabase/firestore'
+import { supabase } from '@/supabase/client'
 import { usePricingFormula, calcFormulaMonthly, calcFormulaTotal, getDiscountPercent } from './usePricingFormula'
-import { useSchoolDb } from './useSchoolDb'
 
 export function usePackageRenewal() {
-  const db = getFirestore()
-  const schoolDb = useSchoolDb()
   const { getPricingFormula } = usePricingFormula()
 
   // ดึงสูตรคำนวณปัจจุบันจาก SuperAdmin
@@ -27,8 +24,8 @@ export function usePackageRenewal() {
       periods: params.periods,
       concurrent: params.concurrent,
       teachers: params.teachers,
-      autoRuns: 5, // ค่าคงที่
-      resetCycles: 5, // ค่าคงที่
+      autoRuns: 5,
+      resetCycles: 5,
       months: params.months || 12,
     }
 
@@ -51,14 +48,15 @@ export function usePackageRenewal() {
     }
   }
 
-  // สร้างคำขอต่ออายุแพ็คเกจ
+  // สร้างคำขอต่ออายุแพ็คเกจ — บันทึกลง school_requests table
   async function createRenewalRequest(schoolId, renewalData, userId) {
     try {
       const renewalRequest = {
-        schoolId,
-        currentPlan: renewalData.currentPlan,
-        newPlan: renewalData.newPlan,
-        calculationParams: {
+        school_id: schoolId,
+        request_type: 'renewal',
+        current_plan: renewalData.currentPlan,
+        new_plan: renewalData.newPlan,
+        calculation_params: {
           rooms: renewalData.rooms,
           days: renewalData.days,
           periods: renewalData.periods,
@@ -74,49 +72,57 @@ export function usePackageRenewal() {
           discountPercent: renewalData.discountPercent,
           discount: renewalData.discount,
         },
-        paymentEvidence: {
+        payment_evidence: {
           slipFile: renewalData.slipFile || null,
           amount: renewalData.paymentAmount || 0,
           transferDate: renewalData.transferDate || null,
         },
-        status: 'pending', // pending, approved, rejected, active
-        requestedBy: userId,
-        requestedAt: Timestamp.now(),
-        approvedBy: null,
-        approvedAt: null,
-        renewalType: renewalData.renewalType || 'manual', // manual or auto
+        status: 'pending',
+        requested_by: userId,
+        requested_at: new Date().toISOString(),
+        approved_by: null,
+        approved_at: null,
+        renewal_type: renewalData.renewalType || 'manual',
         notes: renewalData.notes || '',
       }
 
-      const renewalRef = collection(db, 'schools', schoolId, 'renewal_requests')
-      const docRef = await addDoc(renewalRef, renewalRequest)
-      return { success: true, requestId: docRef.id, data: renewalRequest }
+      const { data, error } = await supabase
+        .from('school_requests')
+        .insert(renewalRequest)
+        .select()
+        .single()
+
+      if (error) throw error
+      return { success: true, requestId: data.id, data: renewalRequest }
     } catch (error) {
       console.error('Error creating renewal request:', error)
       return { success: false, error: error.message }
     }
   }
 
-  // ดึงคำขอต่ออายุของรับ
+  // ดึงคำขอต่ออายุของโรงเรียน
   async function getRenewalRequests(schoolId, status = null) {
     try {
-      const renewalRef = collection(db, 'schools', schoolId, 'renewal_requests')
-      let q = renewalRef
+      let query = supabase
+        .from('school_requests')
+        .select('*')
+        .eq('school_id', schoolId)
+        .eq('request_type', 'renewal')
+        .order('requested_at', { ascending: false })
 
       if (status) {
-        q = query(renewalRef, where('status', '==', status))
+        query = query.eq('status', status)
       }
 
-      const querySnapshot = await getDocs(q)
-      const requests = []
-      querySnapshot.forEach((doc) => {
-        requests.push({
-          id: doc.id,
-          ...doc.data(),
-          requestedAt: doc.data().requestedAt?.toDate ? doc.data().requestedAt.toDate() : null,
-          approvedAt: doc.data().approvedAt?.toDate ? doc.data().approvedAt.toDate() : null,
-        })
-      })
+      const { data, error } = await query
+      if (error) throw error
+
+      const requests = (data || []).map(row => ({
+        id: row.id,
+        ...row,
+        requestedAt: row.requested_at ? new Date(row.requested_at) : null,
+        approvedAt: row.approved_at ? new Date(row.approved_at) : null,
+      }))
 
       return { success: true, requests }
     } catch (error) {
@@ -125,15 +131,30 @@ export function usePackageRenewal() {
     }
   }
 
-  // ดึงคำขอต่ออายุทั้งหมดจริง (สำหรับ SuperAdmin)
+  // ดึงคำขอต่ออายุทั้งหมด (สำหรับ SuperAdmin)
   async function getAllRenewalRequests(status = 'pending') {
     try {
-      const allRequests = []
-      // หมายเหตุ: ใน Firestore ไม่สามารถ query ข้ามหลาย subcollections ได้โดยตรง
-      // ต้องใช้ Admin SDK หรือหลายคำค้นหา
-      // นี่เป็นขีดจำกัดของ client SDK
-      console.warn('getAllRenewalRequests requires Admin SDK - use Cloud Function instead')
-      return { success: false, error: 'Use admin endpoint', requests: [] }
+      let query = supabase
+        .from('school_requests')
+        .select('*')
+        .eq('request_type', 'renewal')
+        .order('requested_at', { ascending: false })
+
+      if (status) {
+        query = query.eq('status', status)
+      }
+
+      const { data, error } = await query
+      if (error) throw error
+
+      const requests = (data || []).map(row => ({
+        id: row.id,
+        ...row,
+        requestedAt: row.requested_at ? new Date(row.requested_at) : null,
+        approvedAt: row.approved_at ? new Date(row.approved_at) : null,
+      }))
+
+      return { success: true, requests }
     } catch (error) {
       return { success: false, error: error.message, requests: [] }
     }
@@ -142,21 +163,22 @@ export function usePackageRenewal() {
   // ดึงคำขอต่ออายุรายชิ้น
   async function getRenewalRequest(schoolId, requestId) {
     try {
-      const docRef = doc(db, 'schools', schoolId, 'renewal_requests', requestId)
-      const docSnap = await getDoc(docRef)
+      const { data, error } = await supabase
+        .from('school_requests')
+        .select('*')
+        .eq('id', requestId)
+        .eq('school_id', schoolId)
+        .single()
 
-      if (!docSnap.exists()) {
-        return { success: false, error: 'Request not found' }
-      }
+      if (error) throw error
 
-      const data = docSnap.data()
       return {
         success: true,
         request: {
-          id: docSnap.id,
+          id: data.id,
           ...data,
-          requestedAt: data.requestedAt?.toDate ? data.requestedAt.toDate() : null,
-          approvedAt: data.approvedAt?.toDate ? data.approvedAt.toDate() : null,
+          requestedAt: data.requested_at ? new Date(data.requested_at) : null,
+          approvedAt: data.approved_at ? new Date(data.approved_at) : null,
         },
       }
     } catch (error) {
@@ -168,38 +190,56 @@ export function usePackageRenewal() {
   // ยืนยันและอนุมัติคำขอต่ออายุ (SuperAdmin)
   async function approveRenewalRequest(schoolId, requestId, superAdminId, duration = 12) {
     try {
-      const docRef = doc(db, 'schools', schoolId, 'renewal_requests', requestId)
-      const docSnap = await getDoc(docRef)
+      const { data: requestData, error: fetchErr } = await supabase
+        .from('school_requests')
+        .select('*')
+        .eq('id', requestId)
+        .single()
 
-      if (!docSnap.exists()) {
-        return { success: false, error: 'Request not found' }
-      }
+      if (fetchErr) throw fetchErr
 
-      const renewalData = docSnap.data()
       const now = new Date()
-      const expiryDate = new Date(now.getTime() + duration * 30 * 24 * 60 * 60 * 1000) // ประมาณ duration เดือน
+      const expiryDate = new Date(now.getTime() + duration * 30 * 24 * 60 * 60 * 1000)
 
       // อัปเดต renewal request
-      await updateDoc(docRef, {
-        status: 'approved',
-        approvedBy: superAdminId,
-        approvedAt: Timestamp.now(),
-      })
+      const { error: updateReqErr } = await supabase
+        .from('school_requests')
+        .update({
+          status: 'approved',
+          approved_by: superAdminId,
+          approved_at: now.toISOString(),
+        })
+        .eq('id', requestId)
 
-      // อัปเดต school info ด้วยแผนที่อัปเดต
-      const schoolInfoRef = doc(db, 'schools', schoolId, 'school_info', 'main')
-      await setDoc(
-        schoolInfoRef,
-        {
-          pricing_plan: {
-            code: renewalData.newPlan,
-            expires_at: Timestamp.fromDate(expiryDate),
-            lastRenewalRequest: requestId,
-            lastRenewalAt: Timestamp.now(),
+      if (updateReqErr) throw updateReqErr
+
+      // อัปเดต school settings.pricing_plan
+      const { data: schoolData, error: schoolReadErr } = await supabase
+        .from('schools')
+        .select('settings')
+        .eq('id', schoolId)
+        .single()
+
+      if (schoolReadErr) throw schoolReadErr
+
+      const existingSettings = schoolData?.settings || {}
+      const { error: schoolUpdateErr } = await supabase
+        .from('schools')
+        .update({
+          settings: {
+            ...existingSettings,
+            pricing_plan: {
+              ...(existingSettings.pricing_plan || {}),
+              code: requestData.new_plan,
+              expires_at: expiryDate.toISOString(),
+              lastRenewalRequest: requestId,
+              lastRenewalAt: now.toISOString(),
+            },
           },
-        },
-        { merge: true }
-      )
+        })
+        .eq('id', schoolId)
+
+      if (schoolUpdateErr) throw schoolUpdateErr
 
       return {
         success: true,
@@ -215,14 +255,18 @@ export function usePackageRenewal() {
   // ปฏิเสธคำขอต่ออายุ
   async function rejectRenewalRequest(schoolId, requestId, superAdminId, reason = '') {
     try {
-      const docRef = doc(db, 'schools', schoolId, 'renewal_requests', requestId)
-      await updateDoc(docRef, {
-        status: 'rejected',
-        approvedBy: superAdminId,
-        approvedAt: Timestamp.now(),
-        rejectionReason: reason,
-      })
+      const { error } = await supabase
+        .from('school_requests')
+        .update({
+          status: 'rejected',
+          approved_by: superAdminId,
+          approved_at: new Date().toISOString(),
+          rejection_reason: reason,
+        })
+        .eq('id', requestId)
+        .eq('school_id', schoolId)
 
+      if (error) throw error
       return { success: true, message: 'ปฏิเสธคำขอเรียบร้อยแล้ว' }
     } catch (error) {
       console.error('Error rejecting renewal request:', error)

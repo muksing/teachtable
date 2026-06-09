@@ -101,11 +101,12 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { getSchoolDb } from '@/supabase/db'
-import { collection, query, where, getDocs, deleteDoc, doc, writeBatch } from '@/supabase/firestore'
+import { supabase } from '@/supabase/client'
+import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 
+const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
 const { getClasses, getTeachers, getSubjects } = useSchoolDb()
 
@@ -135,28 +136,44 @@ async function loadData() {
   }
   loading.value = true
   try {
-    const db = getSchoolDb()
+    const schoolId = authStore.schoolId
     const term = schoolStore.currentTerm || '2568_1'
-    
-    let q = collection(db, `terms/${term}/teach_actual`)
-    
-    // เลือก Query แค่ 1 เงื่อนไขหลัก เพื่อป้องกัน Error Index ของ Firestore ส่วนที่เหลือจะกรองใน Memory ทันที
+
+    let query = supabase
+      .from('teach_actuals')
+      .select('*')
+      .eq('school_id', schoolId)
+      .eq('term_id', term)
+
+    // Apply primary filter server-side; secondary filters applied in memory
     if (filterDate.value) {
-      q = query(q, where('date', '==', filterDate.value))
+      query = query.eq('date', filterDate.value)
     } else if (filterClass.value) {
-      q = query(q, where('class_id', '==', filterClass.value))
+      query = query.eq('class_id', filterClass.value)
     } else if (filterSubject.value) {
-      q = query(q, where('subject_plan_id', '==', filterSubject.value))
+      query = query.eq('subject_id', filterSubject.value)
     }
-    
-    const snap = await getDocs(q)
-    allData.value = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+
+    const { data, error } = await query
+    if (error) throw error
+
+    allData.value = (data || [])
+      .map(row => ({
+        ...row,
+        period: row.period_number,
+        teacher_plan_name: row.planned_teacher_id,
+        subject_name: row.subject_id,
+        teacher_plan_id: row.planned_teacher_id,
+        subject_plan_id: row.subject_id,
+        subject_actual_teacher_id: row.actual_teacher_id,
+        subject_actual_id: row.subject_id,
+      }))
       .sort((a, b) => {
         if (a.date !== b.date) return a.date > b.date ? -1 : 1
         if (a.class_id !== b.class_id) return a.class_id > b.class_id ? 1 : -1
-        return (a.period || 0) - (b.period || 0)
+        return (a.period_number || 0) - (b.period_number || 0)
       })
-      
+
     filterData()
   } catch (error) {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ: ' + error.message)
@@ -169,8 +186,8 @@ function filterData() {
   displayData.value = allData.value.filter(item => {
     const matchDate = !filterDate.value || item.date === filterDate.value
     const matchClass = !filterClass.value || item.class_id === filterClass.value
-    const matchTeacher = !filterTeacher.value || item.teacher_plan_id === filterTeacher.value || item.subject_actual_teacher_id === filterTeacher.value
-    const matchSubject = !filterSubject.value || item.subject_plan_id === filterSubject.value || item.subject_actual_id === filterSubject.value
+    const matchTeacher = !filterTeacher.value || item.planned_teacher_id === filterTeacher.value || item.actual_teacher_id === filterTeacher.value
+    const matchSubject = !filterSubject.value || item.subject_id === filterSubject.value
     return matchDate && matchClass && matchTeacher && matchSubject
   })
 }
@@ -178,18 +195,18 @@ function filterData() {
 async function confirmDelete(row) {
   try {
     await ElMessageBox.confirm(
-      `ยืนยันการลบข้อมูลบันทึกเข้าสอน คาบ ${row.period} ห้อง ${row.class_id} ของ ${row.teacher_plan_name}?`,
+      `ยืนยันการลบข้อมูลบันทึกเข้าสอน คาบ ${row.period_number} ห้อง ${row.class_id} ของ ${row.planned_teacher_id}?`,
       'ยืนยันการลบ',
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
     loading.value = true
-    const db = getSchoolDb()
-    const term = schoolStore.currentTerm || '2568_1'
-    await deleteDoc(doc(db, `terms/${term}/teach_actual`, row.id))
-    
+    const { error } = await supabase.from('teach_actuals').delete().eq('id', row.id)
+    if (error) throw error
     ElMessage.success('ลบข้อมูลเรียบร้อยแล้ว')
     await loadData()
-  } catch { /* cancelled */ } finally {
+  } catch (e) {
+    if (e !== 'cancel' && e?.message) ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
+  } finally {
     loading.value = false
   }
 }
@@ -203,18 +220,16 @@ async function deleteSelected() {
       { confirmButtonText: 'ลบทั้งหมด', cancelButtonText: 'ยกเลิก', type: 'danger' }
     )
     loading.value = true
-    const db = getSchoolDb()
-    const term = schoolStore.currentTerm || '2568_1'
-    const batch = writeBatch(db.firestore || db)
-    
-    selectedRows.value.forEach(row => {
-      batch.delete(doc(db, `terms/${term}/teach_actual`, row.id))
-    })
-    
-    await batch.commit()
+    const ids = selectedRows.value.map(row => row.id)
+    const { error } = await supabase.from('teach_actuals').delete().in('id', ids)
+    if (error) throw error
     ElMessage.success('ลบข้อมูลที่เลือกเรียบร้อยแล้ว')
     await loadData()
-  } catch { /* cancelled */ } finally { loading.value = false }
+  } catch (e) {
+    if (e !== 'cancel' && e?.message) ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
+  } finally {
+    loading.value = false
+  }
 }
 
 async function deleteAll() {
@@ -225,24 +240,22 @@ async function deleteAll() {
       { confirmButtonText: 'ลบทั้งหมด', cancelButtonText: 'ยกเลิก', type: 'error' }
     )
     loading.value = true
-    const dbRef = getSchoolDb()
-    const termId = schoolStore.currentTerm || '2568_1'
-    const snap = await getDocs(collection(dbRef, `terms/${termId}/teach_actual`))
-    
-    const docs = snap.docs
-    // ลบทีละ 400 รายการ เพื่อไม่ให้เกินโควต้าของ Firestore Batch
-    for (let i = 0; i < docs.length; i += 400) {
-      const chunk = docs.slice(i, i + 400)
-      const batch = writeBatch(dbRef.firestore || dbRef)
-      chunk.forEach(d => batch.delete(d.ref))
-      await batch.commit()
-    }
-    
+    const schoolId = authStore.schoolId
+    const term = schoolStore.currentTerm || '2568_1'
+    const { error } = await supabase
+      .from('teach_actuals')
+      .delete()
+      .eq('school_id', schoolId)
+      .eq('term_id', term)
+    if (error) throw error
     ElMessage.success('ลบข้อมูลทั้งหมดเรียบร้อยแล้ว')
-    await loadData()
+    allData.value = []
+    displayData.value = []
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
-  } finally { loading.value = false }
+    if (e !== 'cancel' && e?.message) ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
+  } finally {
+    loading.value = false
+  }
 }
 
 onMounted(async () => {

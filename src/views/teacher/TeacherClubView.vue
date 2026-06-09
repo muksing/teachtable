@@ -101,8 +101,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { collection, doc, getDocs, setDoc, deleteDoc, serverTimestamp, query, where } from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 
@@ -110,9 +109,9 @@ const schoolStore = useSchoolStore()
 const authStore = useAuthStore()
 const router = useRouter()
 
-const db = () => getSchoolDb()
+const schoolId = computed(() => authStore.schoolId)
 const term = computed(() => schoolStore.currentTerm || '2568_1')
-const teacherId   = computed(() => authStore.profile?.uid || '')
+const teacherId   = computed(() => authStore.profile?.teacher_id || authStore.profile?.uid || '')
 const teacherName = computed(() => authStore.profile?.displayName || authStore.profile?.email || '')
 const isAdmin     = computed(() => authStore.isAdmin)
 
@@ -135,6 +134,35 @@ const form = reactive({
   description: '',
   is_active: true,
 })
+
+// --- helpers: read/write clubs stored in schools.settings.clubs[term] ---
+
+async function fetchAllClubs() {
+  const { data: row } = await supabase
+    .from('schools')
+    .select('settings')
+    .eq('id', schoolId.value)
+    .maybeSingle()
+  const allClubs = row?.settings?.clubs || {}
+  return allClubs[term.value] || []
+}
+
+async function persistClubs(clubList) {
+  const { data: row } = await supabase
+    .from('schools')
+    .select('settings')
+    .eq('id', schoolId.value)
+    .maybeSingle()
+  const settings = row?.settings || {}
+  const existing = settings.clubs || {}
+  existing[term.value] = clubList
+  await supabase
+    .from('schools')
+    .update({ settings: { ...settings, clubs: existing } })
+    .eq('id', schoolId.value)
+}
+
+// -----------------------------------------------------------------------
 
 function openDialog(club = null) {
   editingClub.value = club
@@ -164,20 +192,33 @@ async function saveClub() {
   }
   dialogLoading.value = true
   try {
+    const now = new Date().toISOString()
+    const list = await fetchAllClubs()
+
     if (editingClub.value) {
-      const clubRef = doc(db(), `terms/${term.value}/clubs`, editingClub.value.club_id)
-      await setDoc(clubRef, {
+      const idx = list.findIndex(c => c.club_id === editingClub.value.club_id)
+      if (idx !== -1) {
+        list[idx] = {
+          ...list[idx],
+          name: form.name,
+          type: form.type,
+          max_capacity: form.max_capacity,
+          description: form.description,
+          is_active: form.is_active,
+          updated_at: now,
+        }
+      }
+      await persistClubs(list)
+      Object.assign(editingClub.value, {
         name: form.name,
         type: form.type,
         max_capacity: form.max_capacity,
         description: form.description,
         is_active: form.is_active,
-        updated_at: serverTimestamp(),
-      }, { merge: true })
-      Object.assign(editingClub.value, { name: form.name, type: form.type, max_capacity: form.max_capacity, description: form.description, is_active: form.is_active })
+      })
     } else {
       const clubId = `club_${teacherId.value}_${Date.now()}`
-      const data = {
+      const newClub = {
         club_id: clubId,
         name: form.name,
         type: form.type,
@@ -190,11 +231,12 @@ async function saveClub() {
         session_count: 0,
         members: {},   // embedded map: { [student_id]: memberData }
         sessions: {},  // embedded map: { [session_id]: sessionData }
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
+        created_at: now,
+        updated_at: now,
       }
-      await setDoc(doc(db(), `terms/${term.value}/clubs`, clubId), data)
-      clubs.value.push({ ...data })
+      list.push(newClub)
+      await persistClubs(list)
+      clubs.value.push({ ...newClub })
     }
     ElMessage.success('บันทึกชุมนุมสำเร็จ')
     dialogVisible.value = false
@@ -213,7 +255,9 @@ async function deleteClub(club) {
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
     loading.value = true
-    await deleteDoc(doc(db(), `terms/${term.value}/clubs`, club.club_id))
+    const list = await fetchAllClubs()
+    const updated = list.filter(c => c.club_id !== club.club_id)
+    await persistClubs(updated)
     clubs.value = clubs.value.filter(c => c.club_id !== club.club_id)
     ElMessage.success('ลบชุมนุมแล้ว')
   } catch (e) {
@@ -230,14 +274,13 @@ function goDetail(club) {
 async function loadClubs() {
   loading.value = true
   try {
-    const col = collection(db(), `terms/${term.value}/clubs`)
-    const q = isAdmin.value
-      ? col
-      : query(col, where('teacher_id', '==', teacherId.value))
-    const snap = await getDocs(q)
-    clubs.value = snap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0))
+    const list = await fetchAllClubs()
+    const sorted = [...list].sort((a, b) =>
+      (b.created_at || '').localeCompare(a.created_at || '')
+    )
+    clubs.value = isAdmin.value
+      ? sorted
+      : sorted.filter(c => c.teacher_id === teacherId.value)
   } catch (e) {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ: ' + e.message)
   } finally {

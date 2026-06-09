@@ -1,4 +1,3 @@
-import { serverTimestamp } from '@/supabase/firestore'
 import { useAuthStore } from '@/stores/auth'
 
 /**
@@ -10,7 +9,7 @@ export function getAuditFields() {
   return {
     updated_by: authStore.profile?.uid || 'system',
     updated_by_name: authStore.profile?.displayName || 'ระบบ',
-    updated_at: serverTimestamp()
+    updated_at: new Date().toISOString()
   }
 }
 

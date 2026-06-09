@@ -164,16 +164,17 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { collection, doc, getDocs, setDoc, deleteDoc, serverTimestamp } from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
+import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 import * as XLSX from 'xlsx'
 
+const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
 const { getBehaviorSettings } = useSchoolDb()
 
-const db = () => getSchoolDb()
+const schoolId = computed(() => authStore.schoolId)
 const term = computed(() => schoolStore.currentTerm || '2568_1')
 
 const loading = ref(false)
@@ -251,11 +252,21 @@ function openDialog(status = null) {
   dialogVisible.value = true
 }
 
+async function persistStatuses(newList) {
+  const sid = schoolId.value
+  if (!sid) throw new Error('ไม่พบ schoolId')
+  const { data: schoolData } = await supabase.from('schools').select('settings').eq('id', sid).single()
+  const settings = schoolData?.settings || {}
+  const { error } = await supabase.from('schools').update({
+    settings: { ...settings, attendance_statuses: newList }
+  }).eq('id', sid)
+  if (error) throw error
+}
+
 async function saveStatus() {
   await formRef.value?.validate()
   dialogLoading.value = true
   try {
-    const id = form.status_code
     const data = {
       status_code: form.status_code,
       label: form.label,
@@ -267,17 +278,18 @@ async function saveStatus() {
       affects_behavior: form.affects_behavior,
       behavior_setting_id: form.affects_behavior ? form.behavior_setting_id : null,
       is_active: form.is_active,
-      updated_at: serverTimestamp(),
+      updated_at: new Date().toISOString(),
     }
-    await setDoc(doc(db(), `terms/${term.value}/attendance_status_settings`, id), data, { merge: true })
-    // update local
-    const idx = statuses.value.findIndex(s => s.status_code === id)
+    const idx = statuses.value.findIndex(s => s.status_code === form.status_code)
+    let newList
     if (idx >= 0) {
-      Object.assign(statuses.value[idx], data)
+      newList = statuses.value.map((s, i) => i === idx ? { ...s, ...data } : s)
     } else {
-      statuses.value.push({ id, ...data })
+      newList = [...statuses.value, data]
     }
-    statuses.value.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+    newList.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+    await persistStatuses(newList)
+    statuses.value = newList
     ElMessage.success('บันทึกสำเร็จ')
     dialogVisible.value = false
   } catch (e) {
@@ -289,10 +301,10 @@ async function saveStatus() {
 
 async function toggleStatus(row) {
   try {
-    await setDoc(doc(db(), `terms/${term.value}/attendance_status_settings`, row.status_code), {
-      is_active: row.is_active,
-      updated_at: serverTimestamp(),
-    }, { merge: true })
+    const newList = statuses.value.map(s =>
+      s.status_code === row.status_code ? { ...s, is_active: row.is_active } : s
+    )
+    await persistStatuses(newList)
     ElMessage.success(`${row.is_active ? 'เปิด' : 'ปิด'}ใช้งานสถานะ "${row.label}" แล้ว`)
   } catch (e) {
     row.is_active = !row.is_active
@@ -307,9 +319,9 @@ async function confirmDelete(row) {
       'ลบสถานะ',
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
-    await deleteDoc(doc(db(), `terms/${term.value}/attendance_status_settings`, row.status_code))
-    const idx = statuses.value.findIndex(s => s.status_code === row.status_code)
-    if (idx >= 0) statuses.value.splice(idx, 1)
+    const newList = statuses.value.filter(s => s.status_code !== row.status_code)
+    await persistStatuses(newList)
+    statuses.value = newList
     ElMessage.success('ลบสถานะแล้ว')
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
@@ -327,29 +339,25 @@ async function deleteSelected() {
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
     loading.value = true
-    for (const row of selectedRows.value) {
-      await deleteDoc(doc(db(), `terms/${term.value}/attendance_status_settings`, row.status_code))
-      const idx = statuses.value.findIndex(s => s.status_code === row.status_code)
-      if (idx >= 0) statuses.value.splice(idx, 1)
-    }
+    const codes = new Set(selectedRows.value.map(r => r.status_code))
+    const newList = statuses.value.filter(s => !codes.has(s.status_code))
+    await persistStatuses(newList)
+    statuses.value = newList
     selectedRows.value = []
     ElMessage.success('ลบรายการที่เลือกเรียบร้อย')
   } catch { /* cancelled */ } finally { loading.value = false }
 }
 
 async function deleteAll() {
-  const allRows = statuses.value
-  if (!allRows.length) return
+  if (!statuses.value.length) return
   try {
     await ElMessageBox.confirm(
-      `ยืนยันการลบทั้งหมด ${allRows.length} รายการ? ไม่สามารถกู้คืนได้`,
+      `ยืนยันการลบทั้งหมด ${statuses.value.length} รายการ? ไม่สามารถกู้คืนได้`,
       'ยืนยันการลบทั้งหมด',
       { confirmButtonText: 'ลบทั้งหมด', cancelButtonText: 'ยกเลิก', type: 'error' }
     )
     loading.value = true
-    for (const row of [...allRows]) {
-      await deleteDoc(doc(db(), `terms/${term.value}/attendance_status_settings`, row.status_code))
-    }
+    await persistStatuses([])
     statuses.value = []
     ElMessage.success('ลบทั้งหมดเรียบร้อย')
   } catch { /* cancelled */ } finally { loading.value = false }
@@ -358,9 +366,13 @@ async function deleteAll() {
 async function loadStatuses() {
   loading.value = true
   try {
-    const snap = await getDocs(collection(db(), `terms/${term.value}/attendance_status_settings`))
-    statuses.value = snap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
+    const sid = schoolId.value
+    if (!sid) return
+    const { data, error } = await supabase.from('schools').select('settings').eq('id', sid).single()
+    if (error) throw error
+    const raw = data?.settings?.attendance_statuses
+    statuses.value = (Array.isArray(raw) ? raw : [])
+      .slice()
       .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
   } catch (e) {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ')
@@ -411,11 +423,11 @@ async function onImportFile(e) {
     const wb = XLSX.read(buf, { type: 'array' })
     const ws = wb.Sheets[wb.SheetNames[0]]
     const rows = XLSX.utils.sheet_to_json(ws)
-    let imported = 0
+    const map = new Map(statuses.value.map(s => [s.status_code, s]))
     for (const row of rows) {
       const code = row['รหัสสถานะ']
       if (!code) continue
-      const data = {
+      map.set(String(code), {
         status_code: String(code),
         label: row['ชื่อ'] || '',
         color: row['สี'] || 'green',
@@ -425,13 +437,13 @@ async function onImportFile(e) {
         points_max: Number(row['คะแนนสูงสุด'] || 0),
         affects_behavior: row['มีผลต่อคะแนน'] === 'ใช่' || row['มีผลต่อคะแนน'] === true,
         is_active: true,
-        updated_at: serverTimestamp(),
-      }
-      await setDoc(doc(db(), `terms/${term.value}/attendance_status_settings`, String(code)), data, { merge: true })
-      imported++
+        updated_at: new Date().toISOString(),
+      })
     }
-    await loadStatuses()
-    ElMessage.success(`นำเข้า ${imported} รายการสำเร็จ`)
+    const newList = Array.from(map.values()).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+    await persistStatuses(newList)
+    statuses.value = newList
+    ElMessage.success(`นำเข้า ${rows.filter(r => r['รหัสสถานะ']).length} รายการสำเร็จ`)
   } catch (err) {
     ElMessage.error('นำเข้าไม่สำเร็จ: ' + err.message)
   } finally {

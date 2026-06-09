@@ -1,15 +1,10 @@
 // src/composables/useSchoolDb.js
-import {
-  collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
-  query, where, orderBy, limit, onSnapshot,
-  serverTimestamp, writeBatch, FieldPath
-} from '@/supabase/firestore'
-import { getSchoolDb } from '@/supabase/db'
+// Fully migrated to native Supabase — no Firestore compat imports
+import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
-import { supabase } from '@/supabase/client'
 
-// Day mapping: Thai day name to numeric value (1-7: Mon-Sun)
+// ─── Day mapping ────────────────────────────────────────────────────────────
 const THAI_DAY_TO_NUMBER = {
   จันทร์: 1,
   อังคาร: 2,
@@ -19,13 +14,14 @@ const THAI_DAY_TO_NUMBER = {
   เสาร์: 6,
   อาทิตย์: 7,
 }
+const THAI_DAYS_ARR = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์']
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 function normalizeDateKey(input) {
   if (typeof input === 'string') return input
   if (input instanceof Date && !Number.isNaN(input.getTime())) {
     return input.toISOString().split('T')[0]
   }
-  // รองรับ object วันที่จาก UI libs (เช่น dayjs) ที่มี format()
   if (input && typeof input.format === 'function') {
     return input.format('YYYY-MM-DD')
   }
@@ -42,63 +38,122 @@ function asText(value) {
   return typeof value === 'string' ? value : String(value)
 }
 
+function getThaiDayFromDate(dateStr) {
+  return THAI_DAYS_ARR[new Date(dateStr + 'T00:00:00').getDay()]
+}
+
+// ─── teach_actual mapper: DB row → legacy field names used by views ──────────
+function mapTeachActual(row) {
+  if (!row) return null
+  return {
+    ...row,
+    // legacy aliases expected by views
+    teach_actual_id: row.id,
+    period: row.period_number ?? row.period,
+    teacher_plan_id: row.planned_teacher_id ?? row.teacher_plan_id,
+    teacher_plan_name: row.teacher_plan_name ?? '',
+    subject_plan_id: row.subject_id ?? row.subject_plan_id,
+    subject_actual_teacher_id: row.actual_teacher_id ?? row.subject_actual_teacher_id ?? null,
+    is_substitute_mandatory: row.is_substitute_mandatory ?? false,
+    is_filled: row.is_filled ?? false,
+    activity_type: row.activity_type ?? 'บรรยาย',
+    topic: row.topic ?? '',
+  }
+}
+
+// ─── timetable_slots mapper: DB row → legacy field names ─────────────────────
+function mapTimetableSlot(row) {
+  if (!row) return null
+  return {
+    ...row,
+    // legacy aliases
+    day: row.day_of_week ?? row.day,
+    period: row.period_number ?? row.period,
+    teacher_id: row.teacher_id,
+    subject_code: row.subject_id ?? row.subject_code,
+    class_id: row.class_id,
+    room_id: row.room_id,
+    type: row.slot_type ?? row.type ?? 'normal',
+  }
+}
+
 export function useSchoolDb() {
   const authStore = useAuthStore()
   const schoolStore = useSchoolStore()
+
+  const term = () => schoolStore.currentTerm || '2568_1'
 
   function getAuditFields() {
     return {
       updated_by: authStore.profile?.uid || 'system',
       updated_by_name: authStore.profile?.displayName || 'ระบบ',
-      updated_at: serverTimestamp()
+      updated_at: new Date().toISOString(),
     }
   }
 
-  const db = () => getSchoolDb()
-  const batchDb = () => db().firestore || db()
-  const term = () => schoolStore.currentTerm || '2568_1'
-
-  async function syncCompatTeacherDoc(teacher) {
-    if (!teacher?.teacher_id) return
-    await setDoc(
-      doc(db(), `terms/${term()}/teachers`, teacher.teacher_id),
-      {
-        teacher_id: teacher.teacher_id,
-        prefix: teacher.prefix || '',
-        name: teacher.name || '',
-        surname: teacher.surname || '',
-        academic_rank: teacher.academic_rank || '',
-        dept: teacher.dept || teacher.department || '',
-        department: teacher.dept || teacher.department || '',
-        position: teacher.position || '',
-        is_dept_head: teacher.is_dept_head === true,
-        email: teacher.email || '',
-        phone: teacher.phone || '',
-        is_active: teacher.is_active !== false,
-        ...getAuditFields()
-      },
-      { merge: true }
-    )
+  // ─── Helper: get term_id (UUID or TEXT) for timetable_slots ───────────────
+  // The column is TEXT in our schema so we use the string directly.
+  // This helper is kept for safety — if an academic_terms table exists it looks
+  // up the UUID, otherwise falls back to the plain string.
+  async function getTermId() {
+    const t = term()
+    const schoolId = authStore.schoolId
+    if (!schoolId) return t
+    try {
+      const { data } = await supabase
+        .from('academic_terms')
+        .select('id')
+        .eq('school_id', schoolId)
+        .eq('term_name', t)
+        .maybeSingle()
+      return data?.id || t
+    } catch {
+      return t
+    }
   }
 
-  // ===== TEACHERS =====
+  // ─── Helper: get/update schools.settings JSONB ───────────────────────────
+  async function getSchoolSettings() {
+    const schoolId = authStore.schoolId
+    if (!schoolId) return {}
+    const { data, error } = await supabase
+      .from('schools')
+      .select('settings')
+      .eq('id', schoolId)
+      .maybeSingle()
+    if (error) throw error
+    return data?.settings || {}
+  }
+
+  async function updateSchoolSettings(partialSettings) {
+    const schoolId = authStore.schoolId
+    if (!schoolId) throw new Error('ไม่พบ schoolId')
+    const current = await getSchoolSettings()
+    const merged = { ...current, ...partialSettings }
+    const { error } = await supabase
+      .from('schools')
+      .update({ settings: merged })
+      .eq('id', schoolId)
+    if (error) throw error
+    return merged
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // TEACHERS
+  // ═════════════════════════════════════════════════════════════════════════
   async function getTeachers() {
     const { data, error } = await supabase
       .from('teachers')
       .select('*')
       .eq('school_id', authStore.schoolId)
       .order('first_name', { ascending: true })
-      
     if (error) throw error
-    
-    // Map SQL format กลับไปเป็นรูปแบบที่ Frontend ใช้
     return data.map(d => ({
       ...d,
-      id: d.id,
       teacher_id: d.teacher_code,
       name: d.first_name,
       surname: d.last_name,
-      dept: d.department || d.dept || '',
+      dept: d.department || '',
       academic_rank: d.academic_rank || '',
       position: d.position || '',
       email: d.email || '',
@@ -124,33 +179,48 @@ export function useSchoolDb() {
       is_active: teacher.is_active !== false,
     }
 
-    if (teacher.id && teacher.id.includes('-')) { // เช็คว่าเป็น UUID ของ Supabase แล้วหรือยัง
+    let savedId = teacher.id
+    if (teacher.id && teacher.id.includes('-')) {
       const { error } = await supabase.from('teachers').update(payload).eq('id', teacher.id)
       if (error) throw error
-      return teacher.id
+      savedId = teacher.id
     } else {
       const { data, error } = await supabase.from('teachers').insert([payload]).select().single()
       if (error) throw error
-      return data.id
+      savedId = data.id
     }
+    return savedId
   }
 
   async function deleteTeacher(id) {
-    if (!id || !id.includes('-')) return // ป้องกันการส่งค่า ID เก่า (Firebase) มาใช้ลบ
-    const { error } = await supabase.from('teachers').delete().eq('id', id)
+    if (!id) return
+    let targetId = id
+    if (!id.includes('-')) {
+      // received teacher_code, look up UUID
+      const { data } = await supabase
+        .from('teachers')
+        .select('id')
+        .eq('school_id', authStore.schoolId)
+        .eq('teacher_code', id)
+        .maybeSingle()
+      if (!data?.id) return
+      targetId = data.id
+    }
+    const { error } = await supabase.from('teachers').delete().eq('id', targetId)
     if (error) throw error
   }
 
-  // ===== SUBJECTS =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // SUBJECTS
+  // ═════════════════════════════════════════════════════════════════════════
   async function getSubjects() {
     const { data, error } = await supabase
       .from('subjects')
       .select('*')
       .eq('school_id', authStore.schoolId)
       .order('subject_code')
-      
     if (error) throw error
-    return data.map(d => ({ id: d.id, ...d }))
+    return data.map(d => ({ ...d }))
   }
 
   async function saveSubject(subject) {
@@ -159,7 +229,6 @@ export function useSchoolDb() {
       subject_code: subject.subject_code,
       name: subject.name,
     }
-
     if (subject.id && subject.id.includes('-')) {
       const { error } = await supabase.from('subjects').update(payload).eq('id', subject.id)
       if (error) throw error
@@ -177,11 +246,9 @@ export function useSchoolDb() {
     if (error) throw error
   }
 
-  // ===== CLASSES =====
-  function encodeClassId(classId) {
-    return (classId || '').replace(/\//g, '_')
-  }
-
+  // ═════════════════════════════════════════════════════════════════════════
+  // CLASSES
+  // ═════════════════════════════════════════════════════════════════════════
   async function getClasses() {
     if (!authStore.schoolId || authStore.schoolId === 'undefined') return []
     const { data, error } = await supabase
@@ -189,12 +256,10 @@ export function useSchoolDb() {
       .select('*')
       .eq('school_id', authStore.schoolId)
       .order('class_name')
-      
     if (error) throw error
-    return data.map(d => ({ 
+    return data.map(d => ({
       ...d,
-      id: d.id, 
-      class_id: d.class_name // Map กลับไปให้ตรงกับชื่อ field เก่าที่ Frontend ใช้
+      class_id: d.class_name,
     }))
   }
 
@@ -202,9 +267,8 @@ export function useSchoolDb() {
     const payload = {
       school_id: authStore.schoolId,
       class_name: cls.class_id,
-      homeroom_teacher_id: cls.homeroom_teacher_id || null
+      homeroom_teacher_id: cls.homeroom_teacher_id || null,
     }
-
     if (cls.id && cls.id.includes('-')) {
       const { error } = await supabase.from('classes').update(payload).eq('id', cls.id)
       if (error) throw error
@@ -217,44 +281,44 @@ export function useSchoolDb() {
   }
 
   async function deleteClass(classId) {
-    // เนื่องจาก UI ส่ง `class_id` หรือ `id` มา เราต้องเช็คเพื่อลบด้วย UUID ถ้ามี
-    // ฟังก์ชันนี้ใน UI เดิมอาจจะลบผ่าน classId ตรงๆ (ม.1/1)
-    const { data } = await supabase.from('classes').select('id').eq('school_id', authStore.schoolId).eq('class_name', classId).single()
-    if (data && data.id) {
+    const { data } = await supabase
+      .from('classes')
+      .select('id')
+      .eq('school_id', authStore.schoolId)
+      .eq('class_name', classId)
+      .maybeSingle()
+    if (data?.id) {
       await supabase.from('classes').delete().eq('id', data.id)
     }
   }
 
-  // ===== STUDENTS =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // STUDENTS
+  // ═════════════════════════════════════════════════════════════════════════
   async function getStudents(classId = null) {
-    let query = supabase
+    let q = supabase
       .from('students')
       .select('*')
       .eq('school_id', authStore.schoolId)
-
     if (classId) {
-      query = query.eq('class_id', classId)
+      q = q.eq('class_id', classId)
     } else {
-      query = query.order('class_id')
+      q = q.order('class_id')
     }
-    
-    const { data, error } = await query
+    const { data, error } = await q
     if (error) throw error
-    
-    let results = data.map(d => ({ 
-      ...d, 
-      id: d.id,
+    let results = data.map(d => ({
+      ...d,
       student_id: d.student_code,
       name: d.first_name,
       surname: d.last_name,
-      student_status: d.status
+      student_status: d.status,
     }))
-    
     if (classId) {
       results.sort((a, b) => {
-        const numA = parseInt(a.seat_number, 10); const valA = isNaN(numA) ? 999 : numA
-        const numB = parseInt(b.seat_number, 10); const valB = isNaN(numB) ? 999 : numB
-        return valA - valB
+        const numA = parseInt(a.seat_number, 10)
+        const numB = parseInt(b.seat_number, 10)
+        return (isNaN(numA) ? 999 : numA) - (isNaN(numB) ? 999 : numB)
       })
     }
     return results
@@ -263,7 +327,7 @@ export function useSchoolDb() {
   async function saveStudent(student) {
     const payload = {
       school_id: authStore.schoolId,
-      class_id: student.class_id || null, // Note: In full refactor, this should map to class UUID
+      class_id: student.class_id || null,
       student_code: student.student_id,
       seat_number: student.seat_number,
       prefix: student.prefix,
@@ -274,9 +338,8 @@ export function useSchoolDb() {
       total_behavior_score: student.total_behavior_score ?? 100,
       attendance_behavior_score: student.attendance_behavior_score ?? 0,
       learning_behavior_score: student.learning_behavior_score ?? 0,
-      photo_url: student.photo_url || null
+      photo_url: student.photo_url || null,
     }
-
     if (student.id && student.id.includes('-')) {
       const { error } = await supabase.from('students').update(payload).eq('id', student.id)
       if (error) throw error
@@ -288,181 +351,360 @@ export function useSchoolDb() {
     }
   }
 
-  // ===== ATTENDANCE STATUS SETTINGS =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // ATTENDANCE STATUS SETTINGS (stored in schools.settings.attendance_statuses)
+  // ═════════════════════════════════════════════════════════════════════════
   async function getAttendanceStatuses() {
-    const snap = await getDocs(
-      query(
-        collection(db(), `terms/${term()}/attendance_status_settings`),
-        where('is_active', '==', true),
-        orderBy('sort_order')
-      )
-    )
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const settings = await getSchoolSettings()
+    const statuses = settings.attendance_statuses || []
+    return statuses
+      .filter(s => s.is_active !== false)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
   }
 
   async function saveAttendanceStatus(status) {
-    const id = status.status_code
-    await setDoc(
-      doc(db(), `terms/${term()}/attendance_status_settings`, id),
-      { ...status, ...getAuditFields() },
-      { merge: true }
-    )
+    const settings = await getSchoolSettings()
+    const list = Array.isArray(settings.attendance_statuses) ? [...settings.attendance_statuses] : []
+    const idx = list.findIndex(s => s.status_code === status.status_code)
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], ...status }
+    } else {
+      list.push(status)
+    }
+    await updateSchoolSettings({ attendance_statuses: list })
   }
 
-  // ===== BEHAVIOR SETTINGS =====
-  // Load all without composite index; filter/sort in memory
+  // ═════════════════════════════════════════════════════════════════════════
+  // BEHAVIOR SETTINGS (stored in schools.settings.behavior_settings)
+  // ═════════════════════════════════════════════════════════════════════════
   async function getBehaviorSettings(type = null) {
-    const snap = await getDocs(collection(db(), `terms/${term()}/behavior_settings`))
-    let items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const settings = await getSchoolSettings()
+    let items = Array.isArray(settings.behavior_settings) ? settings.behavior_settings : []
     if (type) {
       items = items.filter(s => s.behavior_type === type && s.is_active !== false)
     }
     return items.sort((a, b) => (a.behavior_type || '').localeCompare(b.behavior_type || ''))
   }
 
-  // ===== TEACHING ASSIGNMENTS =====
+  async function saveBehaviorSetting(setting) {
+    const settings = await getSchoolSettings()
+    const list = Array.isArray(settings.behavior_settings) ? [...settings.behavior_settings] : []
+    const idx = list.findIndex(s => s.setting_id === setting.setting_id)
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], ...setting }
+    } else {
+      list.push(setting)
+    }
+    await updateSchoolSettings({ behavior_settings: list })
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // TEACHING ASSIGNMENTS (timetable_slots acts as the assignments source)
+  // Returns flattened rows compatible with what AssignmentsView / AttendanceReportView expect
+  // ═════════════════════════════════════════════════════════════════════════
   async function getTeachingAssignments() {
-    const snap = await getDocs(
-      collection(db(), `terms/${term()}/teaching_assignments`)
-    )
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const termId = await getTermId()
+    const { data, error } = await supabase
+      .from('timetable_slots')
+      .select('*')
+      .eq('term_id', termId)
+    if (error) throw error
+    return (data || []).map(row => ({
+      ...mapTimetableSlot(row),
+      assign_id: row.id,
+      subject_code: row.subject_id ?? '',
+      teacher_id: row.teacher_id ?? '',
+      periods_per_week: 1,
+    }))
   }
 
   async function saveTeachingAssignment(assignment) {
-    const id = assignment.assign_id
-    await setDoc(
-      doc(db(), `terms/${term()}/teaching_assignments`, id),
-      { ...assignment, ...getAuditFields() },
-      { merge: true }
-    )
+    // Map old assignment shape to timetable_slots
+    const termId = await getTermId()
+    const payload = {
+      term_id: termId,
+      class_id: assignment.class_id,
+      subject_id: assignment.subject_code || assignment.subject_id,
+      teacher_id: assignment.teacher_id,
+      room_id: assignment.room_id || null,
+      day_of_week: assignment.day || assignment.day_of_week,
+      period_number: Number(assignment.period || assignment.period_number),
+      slot_type: assignment.slot_type || 'normal',
+    }
+    const { data, error } = await supabase
+      .from('timetable_slots')
+      .upsert([payload], { onConflict: 'term_id,class_id,day_of_week,period_number' })
+      .select()
+      .single()
+    if (error) throw error
+    return data.id
   }
 
-  // ===== TIMETABLE =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // TIMETABLE
+  // ═════════════════════════════════════════════════════════════════════════
   async function getTimetable() {
-    const snap = await getDocs(
-      collection(db(), `terms/${term()}/timetable_grid`)
-    )
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const termId = await getTermId()
+    const { data, error } = await supabase
+      .from('timetable_slots')
+      .select('*')
+      .eq('term_id', termId)
+    if (error) throw error
+    return (data || []).map(mapTimetableSlot)
   }
 
-  // Get timetable slots from published snapshot (publish-only source)
+  // Get timetable slots from published snapshot in schools.settings
   async function getPublishedTimetableSlots() {
     try {
-      // Check if timetable is published
-      const schoolInfoSnap = await getDoc(doc(getSchoolDb(), 'school_info', 'main'))
-      const publishStatus = schoolInfoSnap.exists() ? schoolInfoSnap.data()?.timetable_publish?.status : null
+      const settings = await getSchoolSettings()
+      const publishStatus = settings.published_timetable?.status
       if (publishStatus !== 'published') {
         throw new Error('ตารางสอนยังไม่พร้อมใช้งาน กรุณารอให้ผู้บริหารอนุมัติก่อน')
       }
-      // Fetch published snapshot
-      const snapshotDoc = await getDoc(
-        doc(getSchoolDb(), 'public_timetable_snapshots', 'current')
-      )
-      if (!snapshotDoc.exists()) {
+      const timetable = settings.published_timetable?.timetable
+      if (!Array.isArray(timetable)) {
         throw new Error('ไม่พบสแนปชอตตารางสอน')
       }
-      const data = snapshotDoc.data()
-      return data.timetable || []
+      return timetable
     } catch (e) {
       throw new Error(`โหลดตารางสอนล้มเหลว: ${e.message}`)
     }
   }
 
   async function saveTimetableSlot(slot) {
-    const id = `${slot.day}_${slot.period}_${slot.class_id}`
-    await setDoc(
-      doc(db(), `terms/${term()}/timetable_grid`, id),
-      { ...slot, slot_id: id, ...getAuditFields() },
-      { merge: true }
-    )
+    const termId = await getTermId()
+    const payload = {
+      term_id: termId,
+      class_id: slot.class_id,
+      subject_id: slot.subject_code || slot.subject_id || null,
+      teacher_id: slot.teacher_id || null,
+      room_id: slot.room_id || null,
+      day_of_week: slot.day || slot.day_of_week,
+      period_number: Number(slot.period || slot.period_number),
+      slot_type: slot.type || slot.slot_type || 'normal',
+    }
+    const { error } = await supabase
+      .from('timetable_slots')
+      .upsert([payload], { onConflict: 'term_id,class_id,day_of_week,period_number' })
+    if (error) throw error
   }
 
-  // Save หลาย slots พร้อมกัน (Batch)
+  // Save multiple slots at once using upsert
   async function saveTimetableBatch(slots) {
-    const batch = writeBatch(batchDb())
-    slots.forEach(slot => {
-      const id = `${slot.day}_${slot.period}_${slot.class_id}`
-      batch.set(
-        doc(db(), `terms/${term()}/timetable_grid`, id),
-        { ...slot, slot_id: id, ...getAuditFields() },
-        { merge: true }
-      )
-    })
-    await batch.commit()
+    if (!slots || slots.length === 0) return
+    const termId = await getTermId()
+    const payloads = slots.map(slot => ({
+      term_id: termId,
+      class_id: slot.class_id,
+      subject_id: slot.subject_code || slot.subject_id || null,
+      teacher_id: slot.teacher_id || null,
+      room_id: slot.room_id || null,
+      day_of_week: slot.day || slot.day_of_week,
+      period_number: Number(slot.period || slot.period_number),
+      slot_type: slot.type || slot.slot_type || 'normal',
+    }))
+    // upsert in chunks of 400 to avoid request size limits
+    const CHUNK = 400
+    for (let i = 0; i < payloads.length; i += CHUNK) {
+      const { error } = await supabase
+        .from('timetable_slots')
+        .upsert(payloads.slice(i, i + CHUNK), { onConflict: 'term_id,class_id,day_of_week,period_number' })
+      if (error) throw error
+    }
   }
 
-  // ===== TEACHING LOGS =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // TEACHING LOGS — mapped from teach_actuals for backward compat
+  // AttendanceView uses getTeachingLogs(date, classId, teacherId)
+  // It reads: log.period, log.subject_code_snapshot, log.class_id, log.log_id|id
+  // ═════════════════════════════════════════════════════════════════════════
   async function getTeachingLogs(date, classId = null, teacherId = null) {
-    const filters = [where('date', '==', date)]
-    if (classId) {
-      filters.push(where('class_id', '==', classId))
-    }
+    const dateKey = normalizeDateKey(date)
+    const termId = await getTermId()
+
+    let q = supabase
+      .from('teach_actuals')
+      .select('*')
+      .eq('term_id', termId)
+      .eq('date', dateKey)
+
+    if (classId) q = q.eq('class_id', classId)
+
+    const { data, error } = await q
+    if (error) throw error
+
+    let rows = (data || []).map(row => ({
+      ...mapTeachActual(row),
+      log_id: row.id,
+      // backward compat fields for AttendanceView
+      subject_code_snapshot: row.subject_id ?? row.subject_plan_id ?? '',
+      teacher_id_snapshot: row.planned_teacher_id ?? '',
+    }))
+
     if (teacherId) {
-      filters.push(where('teacher_id_snapshot', '==', teacherId))
+      rows = rows.filter(r =>
+        r.planned_teacher_id === teacherId ||
+        r.actual_teacher_id === teacherId ||
+        r.teacher_plan_id === teacherId ||
+        r.teacher_id_snapshot === teacherId
+      )
     }
-    const q = query(collection(db(), `terms/${term()}/teaching_logs`), ...filters)
-    const snap = await getDocs(q)
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+
+    return rows.sort((a, b) => (a.period || 0) - (b.period || 0))
   }
 
   async function getTeachingLog(logId) {
-    const snap = await getDoc(doc(db(), `terms/${term()}/teaching_logs`, logId))
-    return snap.exists() ? { id: snap.id, ...snap.data() } : null
+    const { data, error } = await supabase
+      .from('teach_actuals')
+      .select('*')
+      .eq('id', logId)
+      .maybeSingle()
+    if (error) throw error
+    if (!data) return null
+    return { ...mapTeachActual(data), log_id: data.id }
   }
 
-  // ===== BEHAVIOR SUMMARY =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // BEHAVIOR SUMMARY — derived from students table
+  // ═════════════════════════════════════════════════════════════════════════
   async function getBehaviorSummary(studentId) {
-    const snap = await getDoc(
-      doc(db(), `terms/${term()}/behavior_summary`, studentId)
-    )
-    return snap.exists() ? snap.data() : {
-      total_score: 0,
-      general_score: 0,
-      attendance_score: 0,
-      learning_score: 0,
+    // student_id here can be the UUID or student_code; try UUID first
+    let row = null
+    if (studentId && studentId.includes('-')) {
+      const { data } = await supabase
+        .from('students')
+        .select('total_behavior_score, attendance_behavior_score, learning_behavior_score')
+        .eq('id', studentId)
+        .maybeSingle()
+      row = data
+    } else {
+      const { data } = await supabase
+        .from('students')
+        .select('total_behavior_score, attendance_behavior_score, learning_behavior_score')
+        .eq('school_id', authStore.schoolId)
+        .eq('student_code', studentId)
+        .maybeSingle()
+      row = data
+    }
+    if (!row) {
+      return {
+        total_score: 0,
+        general_score: 0,
+        attendance_score: 0,
+        learning_score: 0,
+        general_score_init: 0,
+        attendance_score_init: 0,
+        learning_score_init: 0,
+      }
+    }
+    return {
+      total_score: row.total_behavior_score ?? 0,
+      attendance_score: row.attendance_behavior_score ?? 0,
+      learning_score: row.learning_behavior_score ?? 0,
+      general_score: (row.total_behavior_score ?? 0) - (row.attendance_behavior_score ?? 0) - (row.learning_behavior_score ?? 0),
       general_score_init: 0,
       attendance_score_init: 0,
       learning_score_init: 0,
     }
   }
 
-  // ===== BEHAVIOR LOGS =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // BEHAVIOR LOGS
+  // ═════════════════════════════════════════════════════════════════════════
   async function getBehaviorLogs({ studentId, classId, type, startDate, endDate } = {}) {
-    let q = collection(db(), `terms/${term()}/behavior_logs`)
-    const conditions = []
-    if (studentId) conditions.push(where('student_id', '==', studentId))
-    if (classId)   conditions.push(where('class_id', '==', classId))
-    if (type)      conditions.push(where('behavior_type', '==', type))
-    if (startDate) conditions.push(where('date', '>=', startDate))
-    if (endDate)   conditions.push(where('date', '<=', endDate))
-    conditions.push(orderBy('date', 'desc'))
-    q = query(q, ...conditions)
-    const snap = await getDocs(q)
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const termId = await getTermId()
+    let q = supabase
+      .from('behavior_logs')
+      .select('*')
+      .eq('term_id', termId)
+
+    if (studentId) q = q.eq('student_id', studentId)
+    if (type)      q = q.eq('behavior_type', type)
+    if (startDate) q = q.gte('created_at', startDate)
+    if (endDate)   q = q.lte('created_at', endDate + 'T23:59:59')
+
+    q = q.order('created_at', { ascending: false })
+
+    const { data, error } = await q
+    if (error) throw error
+
+    let rows = data || []
+    // filter by class_id in memory (no class_id column in behavior_logs; join via students if needed)
+    if (classId) {
+      // If classId filtering is needed, get student IDs in that class first
+      const { data: students } = await supabase
+        .from('students')
+        .select('id, student_code')
+        .eq('school_id', authStore.schoolId)
+        .eq('class_id', classId)
+      const studentIds = new Set((students || []).map(s => s.id))
+      rows = rows.filter(r => studentIds.has(r.student_id))
+    }
+    return rows
   }
 
-  // ===== ACTIVITY BOOKING =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // ACTIVITY BOOKINGS
+  // ═════════════════════════════════════════════════════════════════════════
   async function getActivityBookings() {
-    const snap = await getDocs(
-      collection(db(), `terms/${term()}/activity_booking`)
-    )
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const termId = await getTermId()
+    const { data, error } = await supabase
+      .from('activity_bookings')
+      .select('*')
+      .eq('term_id', termId)
+      .order('created_at')
+    if (error) throw error
+    return data || []
   }
 
-  // ===== ROOMS =====
+  async function saveActivityBooking(booking) {
+    const termId = await getTermId()
+    const payload = {
+      term_id: termId,
+      name: booking.name,
+      days: booking.days,
+      start_period: booking.start_period,
+      duration_periods: booking.duration_periods,
+      target_classes: booking.target_classes,
+      color: booking.color || null,
+    }
+    if (booking.id && booking.id.includes('-')) {
+      const { error } = await supabase
+        .from('activity_bookings')
+        .update({ ...payload, updated_at: new Date().toISOString() })
+        .eq('id', booking.id)
+      if (error) throw error
+      return booking.id
+    } else {
+      const { data, error } = await supabase
+        .from('activity_bookings')
+        .insert([payload])
+        .select()
+        .single()
+      if (error) throw error
+      return data.id
+    }
+  }
+
+  async function deleteActivityBooking(id) {
+    if (!id || !id.includes('-')) return
+    const { error } = await supabase.from('activity_bookings').delete().eq('id', id)
+    if (error) throw error
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // ROOMS
+  // ═════════════════════════════════════════════════════════════════════════
   async function getRooms() {
     const { data, error } = await supabase
       .from('rooms')
       .select('*')
       .eq('school_id', authStore.schoolId)
       .order('room_code')
-      
     if (error) throw error
-    return data.map(d => ({ 
+    return data.map(d => ({
       ...d,
-      id: d.id,
       room_id: d.room_code,
-      room_name: d.room_name,
     }))
   }
 
@@ -479,7 +721,6 @@ export function useSchoolDb() {
         is_active: true,
       }))
       .sort((a, b) => (a.room_id || '').localeCompare(b.room_id || ''))
-
     return {
       version: 1,
       active_rooms: activeRooms,
@@ -492,18 +733,14 @@ export function useSchoolDb() {
   async function rebuildRoomCatalog() {
     const rooms = await getRooms()
     const catalog = buildRoomCatalog(rooms)
-    await setDoc(
-      doc(db(), `terms/${term()}/lookups`, 'room_catalog'),
-      { ...catalog, ...getAuditFields() },
-      { merge: true }
-    )
+    // Store in schools.settings.room_catalog
+    await updateSchoolSettings({ room_catalog: catalog })
     return catalog
   }
 
   async function getRoomCatalog() {
-    const ref = doc(db(), `terms/${term()}/lookups`, 'room_catalog')
-    const snap = await getDoc(ref)
-    if (snap.exists()) return snap.data()
+    const settings = await getSchoolSettings()
+    if (settings.room_catalog) return settings.room_catalog
     return rebuildRoomCatalog()
   }
 
@@ -513,10 +750,11 @@ export function useSchoolDb() {
       room_code: room.room_id,
       room_name: room.room_name,
       room_type: room.room_type || 'other',
+      building: room.building || null,
+      floor: room.floor || null,
       capacity: room.capacity || null,
-      is_active: room.is_active !== false
+      is_active: room.is_active !== false,
     }
-
     let savedId = room.id
     if (room.id && room.id.includes('-')) {
       const { error } = await supabase.from('rooms').update(payload).eq('id', room.id)
@@ -526,74 +764,80 @@ export function useSchoolDb() {
       if (error) throw error
       savedId = data.id
     }
-    
-    try {
-      await rebuildRoomCatalog()
-    } catch (e) {
-      console.warn('rebuildRoomCatalog failed:', e)
-    }
+    try { await rebuildRoomCatalog() } catch (e) { console.warn('rebuildRoomCatalog failed:', e) }
     return savedId
   }
 
   async function deleteRoom(roomId) {
     if (!roomId) return
-    const { data } = await supabase.from('rooms').select('id').eq('school_id', authStore.schoolId).eq('room_code', roomId).single()
-    if (data && data.id) {
+    const { data } = await supabase
+      .from('rooms')
+      .select('id')
+      .eq('school_id', authStore.schoolId)
+      .eq('room_code', roomId)
+      .maybeSingle()
+    if (data?.id) {
       await supabase.from('rooms').delete().eq('id', data.id)
     }
-    
-    try {
-      await rebuildRoomCatalog()
-    } catch (e) {
-      console.warn('rebuildRoomCatalog failed:', e)
-    }
+    try { await rebuildRoomCatalog() } catch (e) { console.warn('rebuildRoomCatalog failed:', e) }
   }
 
-  // ===== TEACH ACTUAL (บันทึกการสอนล่วงหน้า) =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // TEACH ACTUALS
+  // ═════════════════════════════════════════════════════════════════════════
   function encodeTeachActualId(date, classId, period) {
     const encodedClass = (classId || '').replace(/\//g, '_')
     return `${date}_${encodedClass}_${period}`
   }
 
-  // ดึง teach_actual รายวัน — รวมคาบที่สอนแทน (subject_actual_teacher_id)
+  // ดึง teach_actual รายวัน — รวมคาบที่สอนแทน
   async function getTeachActuals(date, teacherPlanId = null) {
     const dateKey = normalizeDateKey(date)
+    const termId = await getTermId()
+
     if (!teacherPlanId) {
-      const snap = await getDocs(query(
-        collection(db(), `terms/${term()}/teach_actual`),
-        where('date', '==', dateKey)
-      ))
-      return snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => (a.period || 0) - (b.period || 0))
+      const { data, error } = await supabase
+        .from('teach_actuals')
+        .select('*')
+        .eq('term_id', termId)
+        .eq('date', dateKey)
+      if (error) throw error
+      return (data || []).map(mapTeachActual).sort((a, b) => (a.period || 0) - (b.period || 0))
     }
-    // สองคิวรี่ขนานกัน: คาบของตัวเอง + คาบที่สอนแทน
-    const [snap1, snap2] = await Promise.all([
-      getDocs(query(
-        collection(db(), `terms/${term()}/teach_actual`),
-        where('date', '==', dateKey),
-        where('teacher_plan_id', '==', teacherPlanId)
-      )),
-      getDocs(query(
-        collection(db(), `terms/${term()}/teach_actual`),
-        where('date', '==', dateKey),
-        where('subject_actual_teacher_id', '==', teacherPlanId)
-      )),
+
+    // Two parallel queries: own slots + substitute slots
+    const [res1, res2] = await Promise.all([
+      supabase
+        .from('teach_actuals')
+        .select('*')
+        .eq('term_id', termId)
+        .eq('date', dateKey)
+        .eq('planned_teacher_id', teacherPlanId),
+      supabase
+        .from('teach_actuals')
+        .select('*')
+        .eq('term_id', termId)
+        .eq('date', dateKey)
+        .eq('actual_teacher_id', teacherPlanId),
     ])
+    if (res1.error) throw res1.error
+    if (res2.error) throw res2.error
+
     const seen = new Set()
     const items = []
-    // snap1: คาบของตัวเอง — ยกเว้นคาบที่มอบให้ครูสอนแทนแล้ว (is_substitute_mandatory)
-    for (const d of snap1.docs) {
-      const data = { id: d.id, ...d.data() }
-      if (!data.is_substitute_mandatory) {
-        seen.add(d.id)
-        items.push(data)
+    // Own slots — exclude those handed off to a substitute
+    for (const row of (res1.data || [])) {
+      const mapped = mapTeachActual(row)
+      if (!mapped.is_substitute_mandatory) {
+        seen.add(row.id)
+        items.push(mapped)
       }
     }
-    // snap2: คาบที่ teacher คนนี้รับสอนแทน — เพิ่มเสมอ (dedup)
-    for (const d of snap2.docs) {
-      if (!seen.has(d.id)) {
-        seen.add(d.id)
-        items.push({ id: d.id, ...d.data() })
+    // Substitute slots
+    for (const row of (res2.data || [])) {
+      if (!seen.has(row.id)) {
+        seen.add(row.id)
+        items.push(mapTeachActual(row))
       }
     }
     return items.sort((a, b) => (a.period || 0) - (b.period || 0))
@@ -603,14 +847,33 @@ export function useSchoolDb() {
   async function getTeachActualsRange(startDate, endDate) {
     const startKey = normalizeDateKey(startDate)
     const endKey = normalizeDateKey(endDate)
-    const q = query(
-      collection(db(), `terms/${term()}/teach_actual`),
-      where('date', '>=', startKey),
-      where('date', '<=', endKey),
-      orderBy('date')
-    )
-    const snap = await getDocs(q)
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const termId = await getTermId()
+    const { data, error } = await supabase
+      .from('teach_actuals')
+      .select('*')
+      .eq('term_id', termId)
+      .gte('date', startKey)
+      .lte('date', endKey)
+      .order('date')
+    if (error) throw error
+    return (data || []).map(mapTeachActual)
+  }
+
+  async function getTeachActualsRangeByClass(startDate, endDate, classId = null) {
+    const startKey = normalizeDateKey(startDate)
+    const endKey = normalizeDateKey(endDate)
+    const termId = await getTermId()
+    let q = supabase
+      .from('teach_actuals')
+      .select('*')
+      .eq('term_id', termId)
+      .gte('date', startKey)
+      .lte('date', endKey)
+      .order('date')
+    if (classId) q = q.eq('class_id', classId)
+    const { data, error } = await q
+    if (error) throw error
+    return (data || []).map(mapTeachActual)
   }
 
   // สร้าง teach_actual จาก timetable สำหรับวันที่กำหนด
@@ -618,185 +881,209 @@ export function useSchoolDb() {
     const dateKey = normalizeDateKey(date)
     const dayNumber = THAI_DAY_TO_NUMBER[dayName]
     if (!dayNumber) throw new Error(`วันที่ไม่รู้จัก: ${dayName}`)
+    const termId = await getTermId()
 
-    // กรองเฉพาะคาบสอนจริง — ข้ามคาบกิจกรรม (type === 'activity')
     const slotsForDay = (Array.isArray(timetableSlots) ? timetableSlots : [])
       .filter(s => {
-        if (s?.type === 'activity') return false
-        if (s?.day === dayName) return true
-        return normalizeDayNumber(s?.day) === dayNumber
+        if (s?.type === 'activity' || s?.slot_type === 'activity') return false
+        if (s?.day === dayName || s?.day_of_week === dayName) return true
+        return normalizeDayNumber(s?.day ?? s?.day_of_week) === dayNumber
       })
 
-    // โหลด homeroom_special_periods และ classes ขนานกัน
-    const [schoolInfoSnap, classesSnap] = await Promise.all([
-      getDoc(doc(db(), 'school_info', 'main')),
-      getDocs(query(collection(db(), `terms/${term()}/classes`), orderBy('class_id'))),
+    // Load school_info and classes in parallel
+    const [settingsResult, classesResult] = await Promise.all([
+      getSchoolSettings(),
+      supabase
+        .from('classes')
+        .select('*')
+        .eq('school_id', authStore.schoolId)
+        .order('class_name'),
     ])
-    const homeroomPeriods = Array.isArray(schoolInfoSnap.data()?.homeroom_special_periods)
-      ? schoolInfoSnap.data().homeroom_special_periods
+
+    const homeroomPeriods = Array.isArray(settingsResult.school_info?.homeroom_special_periods)
+      ? settingsResult.school_info.homeroom_special_periods
       : []
-    const classes = classesSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const classes = (classesResult.data || []).map(d => ({
+      ...d,
+      class_id: d.class_name,
+    }))
 
-    const batch = writeBatch(batchDb())
-    let created = 0
+    const payloads = []
 
-    // ── คาบสอนปกติจากตาราง ──────────────────────────────────────────
+    // Normal timetable slots
     for (const slot of slotsForDay) {
-      const period = Number(slot?.period)
+      const period = Number(slot?.period ?? slot?.period_number)
       if (!Number.isFinite(period)) continue
       const classId = asText(slot?.class_id)
       if (!classId) continue
 
-      const id = encodeTeachActualId(dateKey, classId, period)
-      batch.set(doc(db(), `terms/${term()}/teach_actual`, id), {
-        teach_actual_id: id,
-        date: dateKey,
+      payloads.push({
+        term_id: termId,
         class_id: classId,
-        class_name: asText(slot?.class_name || slot?.class_name_snapshot || classId),
-        day_of_week: asText(dayName),
-        period,
-        subject_plan_id: asText(slot?.subject_code || slot?.subject_code_snapshot),
-        subject_name: asText(slot?.subject_name || slot?.subject_name_snapshot),
-        teacher_plan_id: asText(slot?.teacher_id || slot?.teacher_id_snapshot),
-        teacher_plan_name: asText(slot?.teacher_name || slot?.teacher_name_snapshot),
-        generated_at: serverTimestamp(),
-      }, { merge: true })
-      created += 1
+        date: dateKey,
+        period_number: period,
+        planned_teacher_id: asText(slot?.teacher_id ?? slot?.teacher_id_snapshot),
+        actual_teacher_id: asText(slot?.teacher_id ?? slot?.teacher_id_snapshot),
+        subject_id: asText(slot?.subject_code ?? slot?.subject_id ?? slot?.subject_code_snapshot),
+        // legacy snapshot fields stored as jsonb or extra text (may not exist in schema — skipped)
+        // is_filled defaults false
+        is_filled: false,
+        slot_type: slot?.slot_type ?? slot?.type ?? 'normal',
+        // extra compat data stored in a note/metadata column if present, else ignored
+        teacher_plan_name: asText(slot?.teacher_name ?? slot?.teacher_name_snapshot ?? ''),
+        class_name: asText(slot?.class_name ?? slot?.class_name_snapshot ?? classId),
+      })
     }
 
-    // ── คาบพิเศษสำหรับครูที่ปรึกษา ──────────────────────────────────
+    // Homeroom special periods
     for (const cls of classes) {
       if (!cls.homeroom_teacher_id) continue
       for (const hp of homeroomPeriods) {
         const period = Number(hp.period)
         if (!Number.isFinite(period)) continue
-        // days: ['all'] หรือ ['จันทร์','อังคาร',...] หรือ [] = ทุกวัน
         const days = Array.isArray(hp.days) ? hp.days : []
         const appliesToday = !days.length || days.includes('all') || days.includes(dayName)
         if (!appliesToday) continue
-
         const classId = asText(cls.class_id)
         if (!classId) continue
-        // ID แบบพิเศษ (hr) เพื่อไม่ชนกับคาบสอนปกติ
-        const id = `${dateKey}_${classId.replace(/\//g, '_')}_hr${period}`
-        batch.set(doc(db(), `terms/${term()}/teach_actual`, id), {
-          teach_actual_id: id,
-          date: dateKey,
+        payloads.push({
+          term_id: termId,
           class_id: classId,
-          class_name: asText(cls.class_name || classId),
-          day_of_week: asText(dayName),
-          period,
-          subject_plan_id: '',
-          subject_name: asText(hp.name),
-          teacher_plan_id: asText(cls.homeroom_teacher_id),
-          teacher_plan_name: asText(cls.homeroom_teacher_name_snapshot || cls.homeroom_teacher_id),
+          date: dateKey,
+          period_number: period,
+          planned_teacher_id: asText(cls.homeroom_teacher_id),
+          actual_teacher_id: asText(cls.homeroom_teacher_id),
+          subject_id: null,
+          is_filled: false,
           slot_type: 'homeroom',
-          generated_at: serverTimestamp(),
-        }, { merge: true })
-        created += 1
+          teacher_plan_name: asText(cls.homeroom_teacher_name_snapshot ?? cls.homeroom_teacher_id),
+          class_name: asText(cls.class_name ?? classId),
+        })
       }
     }
 
-    if (created === 0) return 0
-    await batch.commit()
-    return created
+    if (payloads.length === 0) return 0
+
+    // Strip fields not in schema before upserting
+    const cleanPayloads = payloads.map(({ teacher_plan_name, class_name, ...rest }) => rest)
+
+    const CHUNK = 400
+    for (let i = 0; i < cleanPayloads.length; i += CHUNK) {
+      const { error } = await supabase
+        .from('teach_actuals')
+        .upsert(cleanPayloads.slice(i, i + CHUNK), { onConflict: 'term_id,class_id,date,period_number' })
+      if (error) throw error
+    }
+    return cleanPayloads.length
   }
 
   // บันทึก/อัพเดต teach_actual (ครูกรอก)
   async function saveTeachActual(data) {
-    const id = data.teach_actual_id
-    if (!id) throw new Error('teach_actual_id ไม่ถูกต้อง')
-    await setDoc(
-      doc(db(), `terms/${term()}/teach_actual`, id),
-      { ...data, ...getAuditFields() },
-      { merge: true }
-    )
+    const termId = await getTermId()
+    // Accept both old shape (teach_actual_id) and new shape (id)
+    const rowId = data.id && data.id.includes('-') ? data.id : null
+    const classId = data.class_id
+    const dateKey = normalizeDateKey(data.date)
+    const periodNum = Number(data.period ?? data.period_number)
+
+    const payload = {
+      term_id: termId,
+      class_id: classId,
+      date: dateKey,
+      period_number: periodNum,
+      planned_teacher_id: data.teacher_plan_id ?? data.planned_teacher_id ?? null,
+      actual_teacher_id: data.subject_actual_teacher_id ?? data.actual_teacher_id ?? data.teacher_plan_id ?? null,
+      subject_id: data.subject_plan_id ?? data.subject_id ?? null,
+      topic: data.topic ?? null,
+      activity_type: data.activity_type ?? null,
+      images: data.images ?? null,
+      is_filled: data.is_filled ?? false,
+      is_substitute_mandatory: data.is_substitute_mandatory ?? false,
+      leave_request_id: data.leave_request_id ?? null,
+      updated_at: new Date().toISOString(),
+    }
+
+    if (rowId) {
+      const { error } = await supabase.from('teach_actuals').update(payload).eq('id', rowId)
+      if (error) throw error
+    } else {
+      const { error } = await supabase
+        .from('teach_actuals')
+        .upsert([payload], { onConflict: 'term_id,class_id,date,period_number' })
+      if (error) throw error
+    }
   }
 
-  // ===== HOMEROOM CLASS =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // HOMEROOM CLASS
+  // ═════════════════════════════════════════════════════════════════════════
   async function getHomeroomClass(teacherId) {
-    const snap = await getDocs(collection(db(), `terms/${term()}/classes`))
-    const classes = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-    const hrClass = classes.find(c => 
-      c.homeroom_teacher_id === teacherId || 
-      (Array.isArray(c.homeroom_teacher_ids) && c.homeroom_teacher_ids.includes(teacherId))
-    )
-    return hrClass || null
+    const { data, error } = await supabase
+      .from('classes')
+      .select('*')
+      .eq('school_id', authStore.schoolId)
+      .eq('homeroom_teacher_id', teacherId)
+      .maybeSingle()
+    if (error) throw error
+    if (!data) return null
+    return { ...data, class_id: data.class_name }
   }
 
-  // ===== ATTENDANCE DAILY CLASS (ครูประจำชั้น เช็คชื่อรายวัน) =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // ATTENDANCE DAILY CLASS (stored in schools.settings.attendance_daily)
+  // ═════════════════════════════════════════════════════════════════════════
   function encodeAttendanceDailyId(date, classId) {
     return `${date}_${(classId || '').replace(/\//g, '_')}`
   }
 
   async function getAttendanceDailySummary(date, classId) {
-    const id = encodeAttendanceDailyId(date, classId)
-    const snap = await getDoc(doc(db(), `terms/${term()}/attendance_daily_class`, id))
-    return snap.exists() ? { id: snap.id, ...snap.data() } : null
+    const settings = await getSchoolSettings()
+    const key = encodeAttendanceDailyId(date, classId)
+    const record = (settings.attendance_daily || {})[key]
+    return record ? { id: key, ...record } : null
   }
 
   async function saveAttendanceDailySummary(date, classId, data) {
-    const id = encodeAttendanceDailyId(date, classId)
-    await setDoc(doc(db(), `terms/${term()}/attendance_daily_class`, id), {
-      ...data,
-      date,
-      class_id: classId,
-      ...getAuditFields()
-    }, { merge: true })
+    const key = encodeAttendanceDailyId(date, classId)
+    const settings = await getSchoolSettings()
+    const dailyMap = { ...(settings.attendance_daily || {}) }
+    dailyMap[key] = { ...data, date, class_id: classId }
+    await updateSchoolSettings({ attendance_daily: dailyMap })
   }
 
-  // ดึง teach_actual ช่วงวันที่ กรองห้องใน memory (ประหยัด index)
-  async function getTeachActualsRangeByClass(startDate, endDate, classId = null) {
-    const startKey = normalizeDateKey(startDate)
-    const endKey = normalizeDateKey(endDate)
-    const q = query(
-      collection(db(), `terms/${term()}/teach_actual`),
-      where('date', '>=', startKey),
-      where('date', '<=', endKey),
-      orderBy('date')
-    )
-    const snap = await getDocs(q)
-    let items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-    if (classId) items = items.filter(r => r.class_id === classId)
-    return items
-  }
-
-  // ===== LEAVE REQUESTS =====
-  const THAI_DAYS_ARR = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์']
-
-  function getThaiDayFromDate(dateStr) {
-    return THAI_DAYS_ARR[new Date(dateStr + 'T00:00:00').getDay()]
-  }
-
-  // กรองคาบสอนของครูคนนี้ในวันนั้นจากตาราง published
+  // ═════════════════════════════════════════════════════════════════════════
+  // LEAVE REQUESTS
+  // ═════════════════════════════════════════════════════════════════════════
   function filterSlotsForTeacherOnDate(timetableSlots, teacherId, dateStr) {
     const thaiDay = getThaiDayFromDate(dateStr)
     return (timetableSlots || []).filter(s => {
-      if (s?.type === 'activity') return false
-      const dayMatch = s.day === thaiDay || String(s.day) === String(THAI_DAY_TO_NUMBER[thaiDay])
-      const teacherMatch = (s.teacher_id || s.teacher_id_snapshot) === teacherId
+      if (s?.type === 'activity' || s?.slot_type === 'activity') return false
+      const dayMatch =
+        s.day === thaiDay ||
+        s.day_of_week === thaiDay ||
+        String(s.day) === String(THAI_DAY_TO_NUMBER[thaiDay])
+      const teacherMatch = (s.teacher_id ?? s.teacher_id_snapshot) === teacherId
       return dayMatch && teacherMatch
     })
   }
 
-  // สร้างคำขอลา พร้อม assignments สำเร็จรูปจากตาราง
   async function createLeaveRequest(data, timetableSlots) {
-    const leaveId = `lr_${data.teacher_id}_${Date.now()}`
+    const termId = await getTermId()
     const assignments = {}
     for (const dateStr of (data.dates || [])) {
       const slots = filterSlotsForTeacherOnDate(timetableSlots, data.teacher_id, dateStr)
       for (const s of slots) {
         const classId = s.class_id || s.class_id_snapshot || ''
-        const period   = Number(s.period)
+        const period = Number(s.period ?? s.period_number)
         if (!classId || !period) continue
         const key = encodeTeachActualId(dateStr, classId, period)
         assignments[key] = {
           date: dateStr,
           period_no: period,
           class_id: classId,
-          class_name: s.class_name || s.class_name_snapshot || classId,
-          subject_name: s.subject_name || s.subject_name_snapshot || '',
-          subject_plan_id: s.subject_code || s.subject_code_snapshot || '',
+          class_name: s.class_name ?? s.class_name_snapshot ?? classId,
+          subject_name: s.subject_name ?? s.subject_name_snapshot ?? '',
+          subject_plan_id: s.subject_code ?? s.subject_id ?? s.subject_code_snapshot ?? '',
           teach_actual_id: key,
           sub_teacher_id: null,
           sub_teacher_name: null,
@@ -807,8 +1094,9 @@ export function useSchoolDb() {
         }
       }
     }
-    const doc_ = {
-      leave_id: leaveId,
+
+    const payload = {
+      term_id: termId,
       teacher_id: data.teacher_id,
       teacher_name: data.teacher_name,
       leave_type: data.leave_type || 'sick',
@@ -816,211 +1104,321 @@ export function useSchoolDb() {
       note: data.note || '',
       status: 'pending',
       assignments,
-      created_at: serverTimestamp(),
-      updated_at: serverTimestamp(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     }
-    await setDoc(doc(db(), `terms/${term()}/leave_requests`, leaveId), doc_)
-    return leaveId
+
+    const { data: inserted, error } = await supabase
+      .from('leave_requests')
+      .insert([payload])
+      .select()
+      .single()
+    if (error) throw error
+    return inserted.id
   }
 
   async function getLeaveRequests({ teacherId, status } = {}) {
-    const filters = []
-    if (teacherId) filters.push(where('teacher_id', '==', teacherId))
-    if (status)    filters.push(where('status', '==', status))
-    const q = filters.length
-      ? query(collection(db(), `terms/${term()}/leave_requests`), ...filters)
-      : collection(db(), `terms/${term()}/leave_requests`)
-    const snap = await getDocs(q)
-    return snap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0))
-  }
-
-  // Realtime subscription — ใช้ db()/term() เดียวกันกับ write functions
-  function subscribeLeaveRequests(onData, onError) {
-    const colRef = collection(db(), `terms/${term()}/leave_requests`)
-    return onSnapshot(colRef,
-      snap => onData(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
-      err => onError && onError(err)
-    )
+    const termId = await getTermId()
+    let q = supabase
+      .from('leave_requests')
+      .select('*')
+      .eq('term_id', termId)
+    if (teacherId) q = q.eq('teacher_id', teacherId)
+    if (status)    q = q.eq('status', status)
+    q = q.order('created_at', { ascending: false })
+    const { data, error } = await q
+    if (error) throw error
+    return data || []
   }
 
   async function cancelLeaveRequest(leaveId) {
-    await updateDoc(doc(db(), `terms/${term()}/leave_requests`, leaveId), {
-      status: 'cancelled', ...getAuditFields(),
-    })
+    const { error } = await supabase
+      .from('leave_requests')
+      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+      .eq('id', leaveId)
+    if (error) throw error
   }
 
-  // จัดสอนแทน: บันทึก assignment + upsert teach_actual
+  // จัดสอนแทน: update teach_actual + update leave_request.assignments JSONB
   async function assignSubstituteTeacher(leaveId, assignmentKey, slotData, subTeacher, absentTeacher) {
-    const { date, period_no, class_id, class_name, subject_name, subject_plan_id } = slotData
-    const taId = encodeTeachActualId(date, class_id, period_no)
-    const thaiDay = getThaiDayFromDate(date)
+    const { date, period_no, class_id, subject_name, subject_plan_id } = slotData
+    const termId = await getTermId()
+    const periodNum = Number(period_no)
 
-    // upsert teach_actual: สร้างถ้ายังไม่มี แล้วตั้งค่า sub
-    await setDoc(doc(db(), `terms/${term()}/teach_actual`, taId), {
-      teach_actual_id: taId,
-      date,
+    // Upsert teach_actual
+    const taPayload = {
+      term_id: termId,
       class_id,
-      class_name,
-      day_of_week: thaiDay,
-      period: period_no,
-      subject_plan_id: subject_plan_id || '',
-      subject_name,
-      teacher_plan_id: absentTeacher.teacher_id,
-      teacher_plan_name: absentTeacher.teacher_name,
-      subject_actual_teacher_id: subTeacher.teacher_id,
-      sub_teacher_name: subTeacher.teacher_name,
+      date: normalizeDateKey(date),
+      period_number: periodNum,
+      planned_teacher_id: absentTeacher.teacher_id,
+      actual_teacher_id: subTeacher.teacher_id,
+      subject_id: subject_plan_id || null,
       is_substitute_mandatory: true,
       leave_request_id: leaveId,
-    }, { merge: true })
+      updated_at: new Date().toISOString(),
+    }
+    const { error: taError } = await supabase
+      .from('teach_actuals')
+      .upsert([taPayload], { onConflict: 'term_id,class_id,date,period_number' })
+    if (taError) throw taError
 
-    // update assignment in leave_request — use FieldPath to avoid dot-notation
-    // misparse when assignmentKey contains "." (e.g. "ม.4_1" from class_id "ม.4/1")
-    const now = new Date()
-    await updateDoc(doc(db(), `terms/${term()}/leave_requests`, leaveId),
-      new FieldPath('assignments', assignmentKey, 'sub_teacher_id'), subTeacher.teacher_id,
-      new FieldPath('assignments', assignmentKey, 'sub_teacher_name'), subTeacher.teacher_name,
-      new FieldPath('assignments', assignmentKey, 'assigned_by'), authStore.profile?.uid || '',
-      new FieldPath('assignments', assignmentKey, 'assigned_by_name'), authStore.profile?.displayName || '',
-      new FieldPath('assignments', assignmentKey, 'assigned_at'), now,
-      new FieldPath('assignments', assignmentKey, 'status'), 'assigned',
-      'updated_at', serverTimestamp(),
-    )
+    // Update leave_request.assignments using JSONB path update via RPC or read-modify-write
+    const { data: lr, error: lrFetchError } = await supabase
+      .from('leave_requests')
+      .select('assignments')
+      .eq('id', leaveId)
+      .single()
+    if (lrFetchError) throw lrFetchError
+
+    const assignments = { ...(lr.assignments || {}) }
+    assignments[assignmentKey] = {
+      ...(assignments[assignmentKey] || {}),
+      sub_teacher_id: subTeacher.teacher_id,
+      sub_teacher_name: subTeacher.teacher_name,
+      assigned_by: authStore.profile?.uid || '',
+      assigned_by_name: authStore.profile?.displayName || '',
+      assigned_at: new Date().toISOString(),
+      status: 'assigned',
+    }
+
+    const { error: lrUpdateError } = await supabase
+      .from('leave_requests')
+      .update({ assignments, updated_at: new Date().toISOString() })
+      .eq('id', leaveId)
+    if (lrUpdateError) throw lrUpdateError
   }
 
   // ยกเลิก assignment
   async function unassignSubstituteTeacher(leaveId, assignmentKey, taId) {
-    await setDoc(doc(db(), `terms/${term()}/teach_actual`, taId), {
-      subject_actual_teacher_id: null,
+    const termId = await getTermId()
+
+    // Clear teach_actual substitute fields; look up by UUID if given
+    if (taId && taId.includes('-')) {
+      await supabase
+        .from('teach_actuals')
+        .update({
+          actual_teacher_id: null,
+          is_substitute_mandatory: false,
+          leave_request_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', taId)
+    } else if (taId) {
+      // taId is encoded string like "2568-01-01_ม.4_1_3" — try to match by term+date+class+period
+      // best effort: just clear via leave_request_id
+      await supabase
+        .from('teach_actuals')
+        .update({
+          actual_teacher_id: null,
+          is_substitute_mandatory: false,
+          leave_request_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('leave_request_id', leaveId)
+        .eq('term_id', termId)
+    }
+
+    // Update leave_request.assignments
+    const { data: lr, error: lrFetchError } = await supabase
+      .from('leave_requests')
+      .select('assignments')
+      .eq('id', leaveId)
+      .single()
+    if (lrFetchError) throw lrFetchError
+
+    const assignments = { ...(lr.assignments || {}) }
+    assignments[assignmentKey] = {
+      ...(assignments[assignmentKey] || {}),
+      sub_teacher_id: null,
       sub_teacher_name: null,
-      is_substitute_mandatory: false,
-      leave_request_id: null,
-    }, { merge: true })
-    await updateDoc(doc(db(), `terms/${term()}/leave_requests`, leaveId),
-      new FieldPath('assignments', assignmentKey, 'sub_teacher_id'), null,
-      new FieldPath('assignments', assignmentKey, 'sub_teacher_name'), null,
-      new FieldPath('assignments', assignmentKey, 'assigned_by'), null,
-      new FieldPath('assignments', assignmentKey, 'assigned_by_name'), null,
-      new FieldPath('assignments', assignmentKey, 'assigned_at'), null,
-      new FieldPath('assignments', assignmentKey, 'status'), 'unassigned',
-      'updated_at', serverTimestamp(),
-    )
+      assigned_by: null,
+      assigned_by_name: null,
+      assigned_at: null,
+      status: 'unassigned',
+    }
+
+    const { error: lrUpdateError } = await supabase
+      .from('leave_requests')
+      .update({ assignments, updated_at: new Date().toISOString() })
+      .eq('id', leaveId)
+    if (lrUpdateError) throw lrUpdateError
   }
 
-  // ===== REAL-TIME LISTENERS =====
+  // ═════════════════════════════════════════════════════════════════════════
+  // REAL-TIME LISTENERS (Supabase Realtime)
+  // ═════════════════════════════════════════════════════════════════════════
   function listenTimetable(callback) {
-    return onSnapshot(
-      collection(db(), `terms/${term()}/timetable_grid`),
-      (snap) => {
-        const slots = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        callback(slots)
+    let latestData = []
+    const fetchAll = async () => {
+      try {
+        const termId = await getTermId()
+        const { data } = await supabase
+          .from('timetable_slots')
+          .select('*')
+          .eq('term_id', termId)
+        latestData = (data || []).map(mapTimetableSlot)
+        callback(latestData)
+      } catch (e) {
+        console.warn('listenTimetable fetch error:', e)
       }
-    )
+    }
+    fetchAll()
+
+    const channel = supabase
+      .channel(`timetable_slots_${term()}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'timetable_slots',
+          filter: `term_id=eq.${term()}`,
+        },
+        () => fetchAll()
+      )
+      .subscribe()
+
+    // Return unsubscribe function matching Firestore onSnapshot return shape
+    return () => supabase.removeChannel(channel)
   }
 
+  // listenTeachingLog subscribes to a single teach_actual row by UUID
   function listenTeachingLog(logId, callback) {
-    return onSnapshot(
-      doc(db(), `terms/${term()}/teaching_logs`, logId),
-      (snap) => callback(snap.exists() ? { id: snap.id, ...snap.data() } : null)
-    )
+    // Initial fetch
+    supabase
+      .from('teach_actuals')
+      .select('*')
+      .eq('id', logId)
+      .maybeSingle()
+      .then(({ data }) => callback(data ? { ...mapTeachActual(data), log_id: data.id } : null))
+      .catch(e => console.warn('listenTeachingLog initial fetch error:', e))
+
+    const channel = supabase
+      .channel(`teach_actual_${logId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'teach_actuals',
+          filter: `id=eq.${logId}`,
+        },
+        payload => {
+          const row = payload.new || payload.old
+          callback(row ? { ...mapTeachActual(row), log_id: row.id } : null)
+        }
+      )
+      .subscribe()
+
+    return () => supabase.removeChannel(channel)
   }
 
-  async function saveTeacherCompat(teacher) {
-    const payload = {
-      school_id: authStore.schoolId,
-      teacher_code: teacher.teacher_id,
-      prefix: teacher.prefix,
-      first_name: teacher.name,
-      last_name: teacher.surname,
-      academic_rank: teacher.academic_rank || null,
-      department: teacher.dept || teacher.department || null,
-      position: teacher.position || null,
-      email: teacher.email || null,
-      phone: teacher.phone || null,
-      is_dept_head: teacher.is_dept_head === true,
-      is_active: teacher.is_active !== false,
+  // Realtime subscription for leave_requests
+  function subscribeLeaveRequests(onData, onError) {
+    const fetchAll = async () => {
+      try {
+        const rows = await getLeaveRequests()
+        onData(rows)
+      } catch (e) {
+        if (onError) onError(e)
+      }
     }
+    fetchAll()
 
-    let savedId = teacher.id
-    if (teacher.id && teacher.id.includes('-')) {
-      const { error } = await supabase.from('teachers').update(payload).eq('id', teacher.id)
-      if (error) throw error
-      savedId = teacher.id
-    } else {
-      const { data, error } = await supabase.from('teachers').insert([payload]).select().single()
-      if (error) throw error
-      savedId = data.id
-    }
+    const channel = supabase
+      .channel(`leave_requests_${term()}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'leave_requests',
+          filter: `term_id=eq.${term()}`,
+        },
+        () => fetchAll()
+      )
+      .subscribe()
 
-    await syncCompatTeacherDoc({
-      ...teacher,
-      id: savedId,
-      dept: teacher.dept || teacher.department || '',
-    })
-
-    return savedId
+    return () => supabase.removeChannel(channel)
   }
 
-  async function deleteTeacherCompat(id) {
-    if (!id) return
-
-    let targetId = id
-    let teacherCode = ''
-
-    if (id.includes('-')) {
-      const { data, error: lookupError } = await supabase
-        .from('teachers')
-        .select('id,teacher_code')
-        .eq('id', id)
-        .maybeSingle()
-      if (lookupError) throw lookupError
-      if (!data?.id) return
-      targetId = data.id
-      teacherCode = data.teacher_code || ''
-    } else {
-      const { data, error: lookupError } = await supabase
-        .from('teachers')
-        .select('id,teacher_code')
-        .eq('school_id', authStore.schoolId)
-        .eq('teacher_code', id)
-        .maybeSingle()
-      if (lookupError) throw lookupError
-      if (!data?.id) return
-      targetId = data.id
-      teacherCode = data.teacher_code || id
-    }
-
-    const { error } = await supabase.from('teachers').delete().eq('id', targetId)
-    if (error) throw error
-
-    if (teacherCode) {
-      await deleteDoc(doc(db(), `terms/${term()}/teachers`, teacherCode)).catch(() => {})
-    }
-  }
-
+  // ═════════════════════════════════════════════════════════════════════════
+  // PUBLIC EXPORTS
+  // ═════════════════════════════════════════════════════════════════════════
   return {
     getAuditFields,
-    getTeachers, saveTeacher: saveTeacherCompat, deleteTeacher: deleteTeacherCompat,
-    getSubjects, saveSubject, deleteSubject,
-    getClasses, saveClass, deleteClass,
-    getStudents, saveStudent,
-    getAttendanceStatuses, saveAttendanceStatus,
+    // Teachers
+    getTeachers,
+    saveTeacher,
+    deleteTeacher,
+    // Subjects
+    getSubjects,
+    saveSubject,
+    deleteSubject,
+    // Classes
+    getClasses,
+    saveClass,
+    deleteClass,
+    // Students
+    getStudents,
+    saveStudent,
+    // Attendance status settings
+    getAttendanceStatuses,
+    saveAttendanceStatus,
+    // Behavior settings
     getBehaviorSettings,
-    getTeachingAssignments, saveTeachingAssignment,
-    getTimetable, getPublishedTimetableSlots, saveTimetableSlot, saveTimetableBatch,
-    getTeachingLogs, getTeachingLog,
-    getBehaviorSummary, getBehaviorLogs,
+    saveBehaviorSetting,
+    // Teaching assignments (timetable_slots)
+    getTeachingAssignments,
+    saveTeachingAssignment,
+    // Timetable
+    getTimetable,
+    getPublishedTimetableSlots,
+    saveTimetableSlot,
+    saveTimetableBatch,
+    // Teaching logs (alias → teach_actuals)
+    getTeachingLogs,
+    getTeachingLog,
+    // Behavior
+    getBehaviorSummary,
+    getBehaviorLogs,
+    // Activity bookings
     getActivityBookings,
-    listenTimetable, listenTeachingLog,
-    getRooms, getRoomCatalog, rebuildRoomCatalog, saveRoom, deleteRoom,
-    getTeachActuals, getTeachActualsRange, getTeachActualsRangeByClass,
-    generateTeachActualsForDate, saveTeachActual, encodeTeachActualId,
+    saveActivityBooking,
+    deleteActivityBooking,
+    // Rooms
+    getRooms,
+    getRoomCatalog,
+    rebuildRoomCatalog,
+    saveRoom,
+    deleteRoom,
+    // Teach actuals
+    getTeachActuals,
+    getTeachActualsRange,
+    getTeachActualsRangeByClass,
+    generateTeachActualsForDate,
+    saveTeachActual,
+    encodeTeachActualId,
+    // Homeroom
     getHomeroomClass,
-    getAttendanceDailySummary, saveAttendanceDailySummary,
-    filterSlotsForTeacherOnDate, getThaiDayFromDate,
-    createLeaveRequest, getLeaveRequests, cancelLeaveRequest,
-    assignSubstituteTeacher, unassignSubstituteTeacher,
+    // Attendance daily summary
+    getAttendanceDailySummary,
+    saveAttendanceDailySummary,
+    // Leave requests
+    filterSlotsForTeacherOnDate,
+    getThaiDayFromDate,
+    createLeaveRequest,
+    getLeaveRequests,
+    cancelLeaveRequest,
+    assignSubstituteTeacher,
+    unassignSubstituteTeacher,
+    // Realtime
+    listenTimetable,
+    listenTeachingLog,
     subscribeLeaveRequests,
+    // School settings helpers (exposed for views that need direct settings access)
+    getSchoolSettings,
+    updateSchoolSettings,
   }
 }

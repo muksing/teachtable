@@ -517,24 +517,15 @@ import { useSchoolDb } from '@/composables/useSchoolDb'
 import { useSchoolStore } from '@/stores/school'
 import { DEPT_OPTIONS, ACADEMIC_RANKS, TEACHER_PREFIXES, POSITION_OPTIONS } from '@/utils/constants'
 import { supabase } from '@/supabase/client'
-import { createClient } from '@supabase/supabase-js'
 import { useAuthStore } from '@/stores/auth'
 import { usePrintReport } from '@/composables/usePrintReport'
 import { cascadeService } from '@/composables/cascadeService'
-import { getSchoolDb, db as rootDb } from '@/supabase/db'
-import { getDocs, collection, query, where, doc, setDoc, serverTimestamp } from '@/supabase/firestore'
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from '@/supabase/auth'
 import { buildRolePayload, normalizeUserAccessRecord, toDisplayRole } from '@/utils/userRoles'
-
-function getSecondaryAuth() {
-  return getAuth({ name: 'Secondary' })
-}
 
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
 const { printReport } = usePrintReport()
 const { getTeachers, saveTeacher: saveTeacherDb, deleteTeacher: deleteTeacherDb } = useSchoolDb()
-const db = () => getSchoolDb()
 const schoolId = computed(() => authStore.schoolId || authStore.profile?.schoolId || authStore.profile?.school_id || null)
 const isTeacherOrScheduler = computed(() => {
   if (authStore.hasAnyRole(['school_admin', 'admin', 'superadmin'])) return false
@@ -679,33 +670,23 @@ function roleLabel(role) {
 async function loadAll() {
   loading.value = true
   try {
-    const [teacherData, termSnap] = await Promise.all([
+    const sid = schoolId.value
+    const [teacherData, usersRes, termIdsRes] = await Promise.all([
       getTeachers(),
-      getDocs(collection(db(), 'terms')),
+      sid ? supabase.from('users').select('*').eq('school_id', sid) : Promise.resolve({ data: [] }),
+      sid ? supabase.from('teachers').select('term_id').eq('school_id', sid) : Promise.resolve({ data: [] }),
     ])
     teachers.value = teacherData
-    availableTerms.value = termSnap.docs.map(d => d.id).sort((a, b) => b.localeCompare(a))
 
-    if (!schoolId.value) {
-      users.value = []
-      return
-    }
-
-    const [usersBySchoolIdSnap, usersByLegacySchoolIdSnap] = await Promise.all([
-      getDocs(query(collection(rootDb, 'users'), where('schoolId', '==', schoolId.value))),
-      getDocs(query(collection(rootDb, 'users'), where('school_id', '==', schoolId.value))),
-    ])
+    // Collect distinct term_ids for the pull dialog
+    const termSet = new Set([schoolStore.currentTerm || '2568_1'])
+    ;(termIdsRes.data || []).forEach(r => r.term_id && termSet.add(r.term_id))
+    availableTerms.value = Array.from(termSet).sort((a, b) => b.localeCompare(a))
 
     const map = new Map()
-    usersBySchoolIdSnap.docs.forEach(d => {
-      const data = normalizeUserAccessRecord({ uid: d.id, ...d.data() })
-      map.set(d.id, data)
-    })
-    usersByLegacySchoolIdSnap.docs.forEach(d => {
-      if (!map.has(d.id)) {
-        const data = normalizeUserAccessRecord({ uid: d.id, ...d.data() })
-        map.set(d.id, data)
-      }
+    ;(usersRes.data || []).forEach(u => {
+      const data = normalizeUserAccessRecord(u)
+      map.set(u.id || u.uid, data)
     })
     users.value = Array.from(map.values())
   } catch (e) {
@@ -870,69 +851,63 @@ async function handleSave() {
   }
 }
 
-// ─── Helper: Create auth account + user document ─────────────────────
+// ─── Helper: Create auth account + user document using Supabase ─────────────
 async function createAccountForTeacher(teacher, password, role = 'school_teacher', emailOverride = '') {
-  const secondAuth = getSecondaryAuth()
-  let uid
   const emailForAccount = (emailOverride || teacher.email || '').trim()
+  if (!emailForAccount) throw new Error('กรุณาระบุอีเมลสำหรับบัญชีผู้ใช้')
 
-  if (!emailForAccount) {
-    throw new Error('กรุณาระบุอีเมลสำหรับบัญชีผู้ใช้')
-  }
+  const sid = schoolId.value || ''
+  const displayName = `${teacher.prefix || ''}${teacher.name} ${teacher.surname}`
 
-  // 1. ลองค้นหาใน users collection ก่อน เผื่ออีเมลนี้มีอยู่แล้วในระบบ
-  let existingUid = null
-  try {
-    const q = query(collection(rootDb, 'users'), where('schoolId', '==', schoolId.value || ''), where('email', '==', emailForAccount))
-    const snap = await getDocs(q)
-    if (!snap.empty) {
-      existingUid = snap.docs[0].id
-    }
-  } catch (qErr) {
-    // หาก Indexing หรือ Rule มีปัญหา ให้ค้นหาจากข้อมูลที่โหลดมาแสดงบนตารางแทน
-    const localUser = users.value.find(u => u.email === emailForAccount)
-    if (localUser) existingUid = localUser.uid
-  }
+  // Check if user with this email already exists in users table
+  const { data: existing } = await supabase.from('users').select('id').eq('email', emailForAccount).eq('school_id', sid).maybeSingle()
+  let uid
 
-  if (existingUid) {
-    uid = existingUid
+  if (existing?.id) {
+    uid = existing.id
   } else {
-    // 2. ถ้าไม่พบ ค่อยสร้าง Auth ใหม่
-    try {
-      const cred = await createUserWithEmailAndPassword(secondAuth, emailForAccount, password)
-      uid = cred.user.uid
-    } catch (e) {
-      if (e.code === 'auth/email-already-in-use') {
-        try {
-          const cred2 = await signInWithEmailAndPassword(secondAuth, emailForAccount, password)
-          uid = cred2.user.uid
-        } catch {
-          await signOut(secondAuth).catch(() => {})
-          throw new Error('อีเมลนี้มีอยู่ในระบบ Auth แล้ว แต่รหัสผ่านไม่ตรงกัน กรุณาใช้รหัสผ่านเดิมที่เคยตั้งไว้เพื่อเชื่อมโยง')
+    // Also check in-memory
+    const local = users.value.find(u => u.email === emailForAccount)
+    if (local?.id || local?.uid) {
+      uid = local.id || local.uid
+    } else {
+      // Create new auth user via signUp
+      const { data, error } = await supabase.auth.signUp({
+        email: emailForAccount,
+        password,
+        options: { data: { displayName, school_id: sid } }
+      })
+      if (error) {
+        if (error.message?.includes('already registered') || error.message?.includes('already been registered')) {
+          throw new Error('อีเมลนี้มีอยู่ในระบบ Auth แล้ว กรุณาลองใช้รหัสผ่านเดิมหรือผูกบัญชีด้วยวิธีอื่น')
         }
-      } else {
-        throw e
+        throw error
       }
+      uid = data.user?.id
+      if (!uid) throw new Error('ไม่สามารถสร้างบัญชีได้')
     }
-    await signOut(secondAuth).catch(() => {})
   }
 
-  // สร้าง / อัปเดต user doc (merge เพื่อไม่ทับข้อมูลเดิม)
+  // Upsert user record in users table
   const rolePayload = buildRolePayload(role)
-  await setDoc(doc(rootDb, 'users', uid), {
+  const { error: upsertErr } = await supabase.from('users').upsert({
+    id: uid,
     uid,
     email: emailForAccount,
-    displayName: `${teacher.prefix || ''}${teacher.name} ${teacher.surname}`,
+    displayName,
+    display_name: displayName,
     ...rolePayload,
     teacher_id: teacher.teacher_id,
     teacherId: teacher.teacher_id,
-    schoolId: schoolId.value || '',
-    school_id: schoolId.value || '',
+    school_id: sid,
+    schoolId: sid,
     is_active: true,
-    updated_at: serverTimestamp(),
+    isActive: true,
+    updated_at: new Date().toISOString(),
     created_by: authStore.profile?.uid || '',
-  }, { merge: true })
-  
+  }, { onConflict: 'id' })
+  if (upsertErr) throw upsertErr
+
   return uid
 }
 
@@ -1246,15 +1221,18 @@ async function openPullDialog() {
 }
 
 async function loadPullSourceTeachers() {
-  if (!pullSourceTerm.value) {
-    pullRows.value = []
-    return
-  }
+  if (!pullSourceTerm.value) { pullRows.value = []; return }
   pullLoading.value = true
   try {
-    const snap = await getDocs(collection(db(), `terms/${pullSourceTerm.value}/teachers`))
+    const sid = schoolId.value
+    const { data, error } = await supabase
+      .from('teachers')
+      .select('*')
+      .eq('school_id', sid)
+      .eq('term_id', pullSourceTerm.value)
+    if (error) throw error
     const existingIds = new Set(teachers.value.map(t => t.teacher_id))
-    pullRows.value = snap.docs.map(d => ({ id: d.id, ...d.data() })).map(t => ({
+    pullRows.value = (data || []).map(t => ({
       teacher_id: t.teacher_id || '',
       prefix: t.prefix || 'นาย',
       name: t.name || '',

@@ -368,16 +368,19 @@
 </template>
 
 <script setup>
-import { reactive, ref, onMounted } from 'vue'
+import { reactive, ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { doc, getDoc, setDoc, serverTimestamp } from '@/supabase/firestore'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
+import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 
+const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
 const { getPublishedTimetableSlots, generateTeachActualsForDate } = useSchoolDb()
+
+const schoolId = computed(() => authStore.schoolId)
 
 const loading = ref(false)
 const saving = ref(false)
@@ -413,25 +416,18 @@ const THAI_DAY_OPTIONS = ['จันทร์', 'อังคาร', 'พุธ
 
 const newHomeroomPeriod = reactive({ period: 0, name: '', days: [] })
 
-const db = () => getSchoolDb()
-
 function normalizeHolidays(raw) {
   if (!Array.isArray(raw)) return []
   const map = new Map()
-
   for (const item of raw) {
     if (typeof item === 'string') {
       if (item) map.set(item, { date: item, name: '' })
       continue
     }
     if (item && typeof item === 'object' && item.date) {
-      map.set(item.date, {
-        date: item.date,
-        name: item.name || '',
-      })
+      map.set(item.date, { date: item.date, name: item.name || '' })
     }
   }
-
   return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date))
 }
 
@@ -445,22 +441,18 @@ function formatDateDisplay(iso) {
 function addHolidayDates() {
   if (!holidayPickerDates.value.length) return
   const existing = new Map(form.holidays.map(h => [h.date, h]))
-
   holidayPickerDates.value.forEach(date => {
     existing.set(date, {
       date,
       name: holidayName.value?.trim() || existing.get(date)?.name || '',
     })
   })
-
   form.holidays = Array.from(existing.values()).sort((a, b) => a.date.localeCompare(b.date))
   holidayPickerDates.value = []
   holidayName.value = ''
 }
 
-function removeHoliday(index) {
-  form.holidays.splice(index, 1)
-}
+function removeHoliday(index) { form.holidays.splice(index, 1) }
 
 function addHomeroomPeriod() {
   if (!newHomeroomPeriod.name.trim()) return
@@ -530,32 +522,35 @@ async function generateWeekRecords() {
   }
 }
 
+// ===== Supabase CRUD =====
 async function loadSettings() {
   loading.value = true
   try {
-    const snap = await getDoc(doc(db(), 'school_info', 'main'))
-    if (snap.exists()) {
-      const data = snap.data()
-      form.gdrive_client_id = data.gdrive_client_id || ''
-      form.gdrive_folder_id = data.gdrive_folder_id || ''
-      form.gas_web_app_url = data.gas_web_app_url || ''
-      form.gas_upload_web_app_url = data.gas_upload_web_app_url || ''
-      form.backdating_enabled = data.backdating_enabled !== false
-      form.backdating_days = Number(data.backdating_days || 3)
-      form.behavior_system_enabled = data.behavior_system_enabled !== false
-      form.holidays = normalizeHolidays(data.holidays)
-      form.homeroom_special_periods = normalizeHomeroomPeriods(data.homeroom_special_periods)
-      const ns = data.notification_settings || {}
-      const ch = ns.channels || {}
-      form.notification_settings.enabled = ns.enabled === true
-      form.notification_settings.daily_summary_time = ns.daily_summary_time || '08:30'
-      form.notification_settings.channels.line_notify.enabled = ch.line_notify?.enabled === true
-      form.notification_settings.channels.line_notify.token = ch.line_notify?.token || ''
-      form.notification_settings.channels.email.enabled = ch.email?.enabled === true
-      form.notification_settings.channels.telegram.enabled = ch.telegram?.enabled === true
-      form.notification_settings.channels.telegram.bot_token = ch.telegram?.bot_token || ''
-      form.notification_settings.channels.telegram.chat_id = ch.telegram?.chat_id || ''
-    }
+    const sid = schoolId.value
+    if (!sid) return
+    const { data, error } = await supabase.from('schools').select('settings').eq('id', sid).single()
+    if (error) throw error
+
+    const tl = data?.settings?.teaching_log_settings || {}
+    form.gdrive_client_id = tl.gdrive_client_id || ''
+    form.gdrive_folder_id = tl.gdrive_folder_id || ''
+    form.gas_web_app_url = tl.gas_web_app_url || ''
+    form.gas_upload_web_app_url = tl.gas_upload_web_app_url || ''
+    form.backdating_enabled = tl.backdating_enabled !== false
+    form.backdating_days = Number(tl.backdating_days || 3)
+    form.behavior_system_enabled = tl.behavior_system_enabled !== false
+    form.holidays = normalizeHolidays(tl.holidays)
+    form.homeroom_special_periods = normalizeHomeroomPeriods(tl.homeroom_special_periods)
+    const ns = tl.notification_settings || {}
+    const ch = ns.channels || {}
+    form.notification_settings.enabled = ns.enabled === true
+    form.notification_settings.daily_summary_time = ns.daily_summary_time || '08:30'
+    form.notification_settings.channels.line_notify.enabled = ch.line_notify?.enabled === true
+    form.notification_settings.channels.line_notify.token = ch.line_notify?.token || ''
+    form.notification_settings.channels.email.enabled = ch.email?.enabled === true
+    form.notification_settings.channels.telegram.enabled = ch.telegram?.enabled === true
+    form.notification_settings.channels.telegram.bot_token = ch.telegram?.bot_token || ''
+    form.notification_settings.channels.telegram.chat_id = ch.telegram?.chat_id || ''
   } catch (e) {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ: ' + e.message)
   } finally {
@@ -571,6 +566,9 @@ async function saveSettings() {
 
   saving.value = true
   try {
+    const sid = schoolId.value
+    if (!sid) throw new Error('ไม่พบ schoolId')
+
     const payload = {
       gdrive_client_id: form.gdrive_client_id?.trim() || '',
       gdrive_folder_id: form.gdrive_folder_id?.trim() || '',
@@ -589,9 +587,7 @@ async function saveSettings() {
             enabled: form.notification_settings.channels.line_notify.enabled,
             token: form.notification_settings.channels.line_notify.token?.trim() || '',
           },
-          email: {
-            enabled: form.notification_settings.channels.email.enabled,
-          },
+          email: { enabled: form.notification_settings.channels.email.enabled },
           telegram: {
             enabled: form.notification_settings.channels.telegram.enabled,
             bot_token: form.notification_settings.channels.telegram.bot_token?.trim() || '',
@@ -599,10 +595,16 @@ async function saveSettings() {
           },
         },
       },
-      updated_at: serverTimestamp(),
+      updated_at: new Date().toISOString(),
     }
 
-    await setDoc(doc(db(), 'school_info', 'main'), payload, { merge: true })
+    const { data: schoolData } = await supabase.from('schools').select('settings').eq('id', sid).single()
+    const currentSettings = schoolData?.settings || {}
+    const { error } = await supabase.from('schools').update({
+      settings: { ...currentSettings, teaching_log_settings: payload }
+    }).eq('id', sid)
+    if (error) throw error
+
     schoolStore.setSchool({
       ...(schoolStore.schoolInfo || {}),
       ...payload,
@@ -613,6 +615,18 @@ async function saveSettings() {
     ElMessage.error('บันทึกไม่สำเร็จ: ' + e.message)
   } finally {
     saving.value = false
+  }
+}
+
+// Exported for use by StudentsView and others
+export async function loadGasSettings(sid) {
+  const { data } = await supabase.from('schools').select('settings').eq('id', sid).single()
+  const tl = data?.settings?.teaching_log_settings || {}
+  return {
+    gas_web_app_url: tl.gas_web_app_url || '',
+    gas_upload_web_app_url: tl.gas_upload_web_app_url || '',
+    gdrive_client_id: tl.gdrive_client_id || '',
+    gdrive_folder_id: tl.gdrive_folder_id || '',
   }
 }
 
@@ -638,29 +652,12 @@ onMounted(loadSettings)
   overflow: hidden;
 }
 
-.section-card-drive {
-  border-top: 4px solid #00b8ff;
-}
-
-.section-card-controls {
-  border-top: 4px solid #ff7a00;
-}
-
-.section-card-homeroom {
-  border-top: 4px solid #8b5cf6;
-}
-
-.section-card-behavior {
-  border-top: 4px solid #eab308;
-}
-
-.section-card-notify {
-  border-top: 4px solid #f59e0b;
-}
-
-.section-card-holidays {
-  border-top: 4px solid #29d97f;
-}
+.section-card-drive { border-top: 4px solid #00b8ff; }
+.section-card-controls { border-top: 4px solid #ff7a00; }
+.section-card-homeroom { border-top: 4px solid #8b5cf6; }
+.section-card-behavior { border-top: 4px solid #eab308; }
+.section-card-notify { border-top: 4px solid #f59e0b; }
+.section-card-holidays { border-top: 4px solid #29d97f; }
 
 .notify-channel-card {
   background: #f8fafc;

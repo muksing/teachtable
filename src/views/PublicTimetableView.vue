@@ -102,9 +102,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { collection, query, getDocs, getDoc, doc, where, orderBy } from '@/supabase/firestore'
-import { ref as storageRef, getDownloadURL } from '@/supabase/storage'
-import { db, storage, getSchoolDb } from '@/supabase/db'
+import { supabase } from '@/supabase/client'
 import { Loading } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -143,35 +141,30 @@ async function loadSchoolData() {
   publishedMissing.value = false
   publishedMissingText.value = ''
   try {
-    // 1. Get School Info + publish meta
-    const sDoc = await getDoc(doc(db, 'schools', schoolId))
-    if (sDoc.exists()) {
-      schoolInfo.value = sDoc.data()
-      currentTerm.value = schoolInfo.value.currentTerm || '2568_1'
-    }
+    const { data: schoolRow, error } = await supabase
+      .from('schools')
+      .select('name, settings')
+      .eq('id', schoolId)
+      .maybeSingle()
 
-    const schoolRootRef = getSchoolDb(schoolId)
-    const infoSnap = await getDoc(doc(schoolRootRef, 'school_info', 'main'))
-    if (infoSnap.exists()) {
-      const info = infoSnap.data()
-      publishVersion.value = info.timetable_publish?.version || info.timetable_publish_version || ''
-      const publishedAtIso = info.timetable_publish?.published_at_iso || info.timetable_publish_at_iso || ''
-      if (publishedAtIso) {
-        publishAtLabel.value = new Date(publishedAtIso).toLocaleString('th-TH', {
+    if (error) throw error
+
+    if (schoolRow) {
+      schoolInfo.value = { name: schoolRow.name }
+      const settings = schoolRow.settings || {}
+      currentTerm.value = settings.current_term || '2568_1'
+
+      const publish = settings.timetable_publish || {}
+      publishVersion.value = publish.version || ''
+      if (publish.published_at_iso) {
+        publishAtLabel.value = new Date(publish.published_at_iso).toLocaleString('th-TH', {
           dateStyle: 'medium',
           timeStyle: 'short',
         })
       }
-      if (!currentTerm.value) {
-        currentTerm.value = info.current_term || ''
-      }
-    }
 
-    // 2. PRIMARY: Load from Firestore snapshot (no CORS issues)
-    try {
-      const snapshotDoc = await getDoc(doc(schoolRootRef, 'public_timetable_snapshots', 'current'))
-      if (snapshotDoc.exists()) {
-        const payload = snapshotDoc.data()
+      const payload = publish.payload || null
+      if (payload) {
         classes.value = Array.isArray(payload.classes) ? payload.classes : []
         teachers.value = Array.isArray(payload.teachers) ? payload.teachers : []
         timetable.value = Array.isArray(payload.timetable) ? payload.timetable : []
@@ -185,8 +178,6 @@ async function loadSchoolData() {
         }
         return
       }
-    } catch (snapshotErr) {
-      console.warn('Firestore snapshot unavailable:', snapshotErr?.message || snapshotErr)
     }
 
     publishedMissing.value = true
