@@ -98,15 +98,15 @@
 
 <script setup>
 import { computed, ref, onMounted } from 'vue'
-import { doc, getDoc } from 'firebase/firestore'
-import { ref as storageRef, getDownloadURL } from 'firebase/storage'
+import { doc, getDoc } from '@/supabase/firestore'
+import { ref as storageRef, getDownloadURL } from '@/supabase/storage'
 import html2canvas from 'html2canvas'
 import { ElMessage } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
-import { getSchoolDb, storage } from '@/firebase/db'
+import { getSchoolDb, storage } from '@/supabase/db'
 
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()

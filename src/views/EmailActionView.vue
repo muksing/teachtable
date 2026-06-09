@@ -90,12 +90,11 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { collection, getDocs, limit, query, where } from 'firebase/firestore'
 import {
   Loading, InfoFilled,
   CircleCheckFilled, CircleCloseFilled, WarningFilled
 } from '@element-plus/icons-vue'
-import { db } from '@/firebase/db'
+import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolManagement } from '@/composables/useSchoolManagement'
 
@@ -131,21 +130,21 @@ onMounted(async () => {
   }
 
   try {
-    const requestSnap = await getDocs(query(
-      collection(db, 'school_requests'),
-      where('approvalToken', '==', token),
-      limit(1)
-    ))
+    const { data: requestData, error } = await supabase
+      .from('school_requests')
+      .select('*')
+      .eq('approvalToken', String(token))
+      .limit(1)
+      .maybeSingle()
 
-    if (requestSnap.empty) {
+    if (error) throw error
+    if (!requestData) {
       errorMessage.value = 'ไม่พบคำขอ หรือลิงก์หมดอายุแล้ว'
       uiState.value = 'error'
       return
     }
 
-    const requestDoc = requestSnap.docs[0]
-    const requestData = requestDoc.data()
-    requestId.value = requestDoc.id
+    requestId.value = requestData.id
 
     if (requestData.status !== 'pending') {
       schoolInfo.value = {

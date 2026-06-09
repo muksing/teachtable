@@ -1,50 +1,39 @@
-import fs from 'fs'
-import path from 'path'
-import admin from 'firebase-admin'
+import { getSupabaseAdmin, listCompatChildren } from './supabase-admin.js'
 
-// ตั้งค่าตัวแปร
-const SERVICE_ACCOUNT_PATH = path.resolve('scripts/service-account.json')
-const TERM_ID = '2568_1' // เปลี่ยนให้ตรงกับเทอมปัจจุบันของคุณ
+const TERM_ID = process.env.CLEAR_TERM || '2568_1'
+const SCHOOL_ID = process.env.CLEAR_SCHOOL_ID || ''
 
 async function main() {
-  if (!fs.existsSync(SERVICE_ACCOUNT_PATH)) {
-    console.error('❌ ไม่พบไฟล์ Service Account ที่:', SERVICE_ACCOUNT_PATH)
-    process.exit(1)
-  }
+  const supabase = getSupabaseAdmin()
 
-  const serviceAccount = JSON.parse(fs.readFileSync(SERVICE_ACCOUNT_PATH, 'utf8'))
-  
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  })
+  const parentPath = SCHOOL_ID
+    ? `schools/${SCHOOL_ID}/terms/${TERM_ID}/teach_actual`
+    : `terms/${TERM_ID}/teach_actual`
 
-  const db = admin.firestore()
+  console.log(`🔍 กำลังค้นหา teach_actual ใน: ${parentPath}`)
 
-  console.log(`🚀 กำลังค้นหาข้อมูลบันทึกเข้าสอนในเทอม ${TERM_ID}...`)
-  
-  // หากระบบของคุณเป็น Multi-tenant (มีหลายโรงเรียน) ให้เปลี่ยน Path เป็น `schools/SCHOOL_ID/terms/${TERM_ID}/teach_actual`
-  const teachActualsRef = db.collection(`terms/${TERM_ID}/teach_actual`)
-  const snapshot = await teachActualsRef.get()
+  const rows = await listCompatChildren(supabase, parentPath)
 
-  if (snapshot.empty) {
-    console.log('ℹ️ ไม่พบข้อมูลบันทึกเข้าสอนให้ลบ')
+  if (rows.length === 0) {
+    console.log('ℹ️ ไม่พบข้อมูลบันทึกเข้าสอน')
     process.exit(0)
   }
 
-  console.log(`🗑️ พบข้อมูลทั้งหมด ${snapshot.size} รายการ กำลังดำเนินการลบ...`)
+  console.log(`🗑️ พบ ${rows.length} รายการ กำลังลบ...`)
 
-  const batch = db.batch()
-  snapshot.docs.forEach((doc) => {
-    batch.delete(doc.ref)
-  })
+  const paths = rows.map(r => r.path)
+  const { error } = await supabase
+    .from('firestore_documents')
+    .delete()
+    .in('path', paths)
 
-  await batch.commit()
+  if (error) throw error
 
-  console.log('🎉 ลบข้อมูลบันทึกเข้าสอนสมมุติทั้งหมดเรียบร้อยแล้ว!')
+  console.log(`✅ ลบข้อมูลบันทึกเข้าสอนเรียบร้อย ${rows.length} รายการ`)
   process.exit(0)
 }
 
-main().catch(error => {
-  console.error('❌ เกิดข้อผิดพลาด:', error)
+main().catch(err => {
+  console.error('❌ เกิดข้อผิดพลาด:', err.message)
   process.exit(1)
 })

@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { getFirestore, collection, doc, getDoc, addDoc, setDoc, query, where, getDocs, updateDoc, Timestamp } from 'firebase/firestore'
+import { getFirestore, collection, doc, getDoc, addDoc, setDoc, query, where, getDocs, updateDoc, Timestamp } from '@/supabase/firestore'
 import { usePricingFormula, calcFormulaMonthly, calcFormulaTotal, getDiscountPercent } from './usePricingFormula'
 import { useSchoolDb } from './useSchoolDb'
 

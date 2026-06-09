@@ -25,7 +25,11 @@
       "Bash(node -e \"const p=require\\('./node_modules/html2pdf.js/package.json'\\); console.log\\(p.version, p.main\\)\")",
       "Bash(xargs grep:*)",
       "Bash(findstr /i \"deploy\\\\|build\\\\|firebase\")",
-      "Bash(cmd.exe /c \"npm run build\")"
+      "Bash(cmd.exe /c \"npm run build\")",
+      "PowerShell(head -20)",
+      "PowerShell(Remove-Item \"c:\\\\TeachTable\\\\MasterSystemSupabase\\\\functions\" -Recurse -Force -Confirm:$false)",
+      "PowerShell(Remove-Item \"c:\\\\TeachTable\\\\MasterSystemSupabase\\\\src\\\\firebase\" -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue)",
+      "PowerShell($scripts = @\\(\"service-account.json\",\"fix-admin2.js\",\"fix-teacher.js\",\"unlock-admin.js\",\"update-school-mnwrsjpn.js\",\"init-school.js\",\"init-school.cjs\"\\); foreach \\($s in $scripts\\) { Remove-Item \"c:\\\\TeachTable\\\\MasterSystemSupabase\\\\scripts\\\\$s\" -Force -ErrorAction SilentlyContinue; Write-Host \"Deleted: $s\" }; Remove-Item \"c:\\\\TeachTable\\\\MasterSystemSupabase\\\\patch.js\" -Force -ErrorAction SilentlyContinue; Write-Host \"Deleted: patch.js\")"
     ]
   }
 }

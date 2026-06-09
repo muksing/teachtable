@@ -188,9 +188,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore'
-import { getSchoolDb, auth } from '@/firebase/db'
-import { EmailAuthProvider, reauthenticateWithCredential, updatePassword } from 'firebase/auth'
+import { doc, getDoc, updateDoc, serverTimestamp } from '@/supabase/firestore'
+import { auth, masterDb as rootDb } from '@/supabase/db'
+import { EmailAuthProvider, reauthenticateWithCredential, updatePassword } from '@/supabase/auth'
 import { useAuthStore } from '@/stores/auth'
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -282,8 +282,7 @@ async function savePhoto() {
 
   savingPhoto.value = true
   try {
-    const db = getSchoolDb()
-    await updateDoc(doc(db, 'users', uid), {
+    await updateDoc(doc(rootDb, 'users', uid), {
       photo_url: pendingPhotoBase64.value,
       updated_at: serverTimestamp()
     })
@@ -310,8 +309,7 @@ async function saveInfo() {
 
   savingInfo.value = true
   try {
-    const db = getSchoolDb()
-    await updateDoc(doc(db, 'users', uid), {
+    await updateDoc(doc(rootDb, 'users', uid), {
       displayName: form.value.displayName.trim(),
       phone:       form.value.phone.trim(),
       updated_at:  serverTimestamp()
@@ -384,8 +382,7 @@ onMounted(async () => {
   if (!uid) return
 
   try {
-    const db   = getSchoolDb()
-    const snap = await getDoc(doc(db, 'users', uid))
+    const snap = await getDoc(doc(rootDb, 'users', uid))
     if (snap.exists()) {
       const data = snap.data()
 

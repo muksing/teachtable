@@ -3,8 +3,8 @@
 // รองรับผู้จัดหลายคนพร้อมกัน
 
 import { ref, onUnmounted } from 'vue'
-import { collection, doc, onSnapshot, setDoc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
+import { collection, doc, onSnapshot, setDoc, deleteDoc, serverTimestamp, writeBatch } from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 

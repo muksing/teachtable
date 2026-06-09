@@ -32,6 +32,7 @@ const routes = [
   },
 
   // Admin routes
+  { path: '/admin/users', name: 'Users', component: () => import('@/views/admin/UsersView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/teachers', name: 'Teachers', component: () => import('@/views/admin/TeachersView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/subjects', name: 'Subjects', component: () => import('@/views/admin/SubjectsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_scheduler', 'scheduler'] } },
   { path: '/admin/classes', name: 'Classes', component: () => import('@/views/admin/ClassesView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },

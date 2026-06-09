@@ -91,7 +91,7 @@
           <el-table-column label="ชื่อ-นามสกุล" min-width="180">
             <template #default="{ row }">
               <div class="flex items-center gap-2">
-                <div class="avatar-sm" :style="`background:${userByTeacher[row.teacher_id] ? getRoleColor((userByTeacher[row.teacher_id].roles||[])[0]) : '#9ca3af'}`">
+                <div class="avatar-sm" :style="`background:${userByTeacher[row.teacher_id] ? getRoleColor(userByTeacher[row.teacher_id].role) : '#9ca3af'}`">
                   {{ (row.name||'?').charAt(0) }}
                 </div>
                 <div>
@@ -119,9 +119,9 @@
                   style="width:150px"
                   @change="val => changeRoles(row.teacher_id, val)"
                 >
-                  <el-option value="teacher" label="👨‍🏫 ครู" />
-                  <el-option value="scheduler" label="📅 Scheduler" />
-                  <el-option v-if="(userByTeacher[row.teacher_id].roles || []).includes('admin')" value="admin" label="👑 Admin" />
+                  <el-option value="school_teacher" label="👨‍🏫 ครู" />
+                  <el-option value="school_scheduler" label="📅 Scheduler" />
+                  <el-option v-if="(userByTeacher[row.teacher_id].roles || []).includes('school_admin')" value="school_admin" label="👑 Admin" />
                   <el-option value="sub_coordinator" label="🔄 ผู้จัดสอนแทน" />
                 </el-select>
                 <div v-if="row.is_dept_head" class="text-xs mt-0.5" style="color:#7c3aed">🏫 หน.สาระ → subject_head อัตโนมัติ</div>
@@ -451,8 +451,8 @@
         </template>
       </el-dialog>
 
-      <!-- ===== Real Firebase Users Audit ===== -->
-      <el-dialog v-model="auditDialogVisible" title="🔎 ตรวจสอบผู้ใช้จริงใน Firebase" width="760px" destroy-on-close>
+      <!-- ===== Real Users Audit ===== -->
+      <el-dialog v-model="auditDialogVisible" title="🔎 ตรวจสอบผู้ใช้จริงในระบบ" width="760px" destroy-on-close>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <div class="p-3 rounded-lg border" style="border-color:#e2e8f0;background:#f8fafc">
             <div class="text-xs text-gray-500">ครูในเทอมนี้</div>
@@ -516,13 +516,19 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 import { useSchoolStore } from '@/stores/school'
 import { DEPT_OPTIONS, ACADEMIC_RANKS, TEACHER_PREFIXES, POSITION_OPTIONS } from '@/utils/constants'
-import { collection, doc, getDocs, setDoc, updateDoc, addDoc, serverTimestamp, query, where, deleteDoc } from 'firebase/firestore'
-import { getSchoolDb, auth, db as rootDb, firebaseConfig } from '@/firebase/db'
-import { getApps, initializeApp } from 'firebase/app'
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, signOut } from 'firebase/auth'
+import { supabase } from '@/supabase/client'
+import { createClient } from '@supabase/supabase-js'
 import { useAuthStore } from '@/stores/auth'
 import { usePrintReport } from '@/composables/usePrintReport'
 import { cascadeService } from '@/composables/cascadeService'
+import { getSchoolDb, db as rootDb } from '@/supabase/db'
+import { getDocs, collection, query, where, doc, setDoc, serverTimestamp } from '@/supabase/firestore'
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from '@/supabase/auth'
+import { buildRolePayload, normalizeUserAccessRecord, toDisplayRole } from '@/utils/userRoles'
+
+function getSecondaryAuth() {
+  return getAuth({ name: 'Secondary' })
+}
 
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
@@ -530,15 +536,10 @@ const { printReport } = usePrintReport()
 const { getTeachers, saveTeacher: saveTeacherDb, deleteTeacher: deleteTeacherDb } = useSchoolDb()
 const db = () => getSchoolDb()
 const schoolId = computed(() => authStore.schoolId || authStore.profile?.schoolId || authStore.profile?.school_id || null)
-const isTeacherOrScheduler = computed(() => authStore.hasAnyRole(['school_teacher', 'teacher', 'school_scheduler', 'scheduler']))
-
-// ─── Secondary Firebase App — isolate auth state from current admin session ─
-const SECONDARY_APP_NAME = 'secondary-user-creation'
-function getSecondaryAuth() {
-  const existing = getApps().find(a => a.name === SECONDARY_APP_NAME)
-  const app2 = existing || initializeApp(firebaseConfig, SECONDARY_APP_NAME)
-  return getAuth(app2)
-}
+const isTeacherOrScheduler = computed(() => {
+  if (authStore.hasAnyRole(['school_admin', 'admin', 'superadmin'])) return false
+  return authStore.hasAnyRole(['school_teacher', 'teacher', 'school_scheduler', 'scheduler'])
+})
 
 // ─── State ────────────────────────────────────────────────────────────────
 const loading = ref(false)
@@ -546,7 +547,7 @@ const saving = ref(false)
 const creatingAccount = ref(false)
 const resetSending = ref(false)
 const teachers = ref([])
-const users = ref([])  // Firestore users collection
+const users = ref([])  // user documents for this school
 const searchText = ref('')
 const filterDept = ref('')
 const filterAccount = ref('')
@@ -658,10 +659,20 @@ const nextTeacherId = computed(() => {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 function getRoleColor(role) {
-  return { admin: '#7c3aed', scheduler: '#2563eb', teacher: '#059669' }[role] || '#9ca3af'
+  return {
+    admin: '#7c3aed',
+    scheduler: '#2563eb',
+    teacher: '#059669',
+    superadmin: '#dc2626',
+  }[toDisplayRole(role)] || '#9ca3af'
 }
 function roleLabel(role) {
-  return { admin: '👑 Admin', scheduler: '📅 Scheduler', teacher: '👨‍🏫 ครู' }[role] || role || '—'
+  return {
+    admin: '👑 Admin',
+    scheduler: '📅 Scheduler',
+    teacher: '👨‍🏫 ครู',
+    superadmin: '🛡️ Super Admin',
+  }[toDisplayRole(role)] || role || '—'
 }
 
 // ─── Load ──────────────────────────────────────────────────────────────────
@@ -687,15 +698,13 @@ async function loadAll() {
 
     const map = new Map()
     usersBySchoolIdSnap.docs.forEach(d => {
-      const data = d.data()
-      if (!Array.isArray(data.roles)) data.roles = data.role ? [data.role] : ['teacher']
-      map.set(d.id, { uid: d.id, ...data })
+      const data = normalizeUserAccessRecord({ uid: d.id, ...d.data() })
+      map.set(d.id, data)
     })
     usersByLegacySchoolIdSnap.docs.forEach(d => {
       if (!map.has(d.id)) {
-        const data = d.data()
-        if (!Array.isArray(data.roles)) data.roles = data.role ? [data.role] : ['teacher']
-        map.set(d.id, { uid: d.id, ...data })
+        const data = normalizeUserAccessRecord({ uid: d.id, ...d.data() })
+        map.set(d.id, data)
       }
     })
     users.value = Array.from(map.values())
@@ -738,14 +747,19 @@ async function handleSave() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
 
+  const duplicateTeacher = teachers.value.find(t => t.teacher_id === form.teacher_id && t.id !== editingTeacher.value?.id)
   if (!editingTeacher.value) {
     const exists = teachers.value.find(t => t.teacher_id === form.teacher_id)
     if (exists) { ElMessage.error('รหัสครูซ้ำ'); return }
+  } else if (duplicateTeacher) {
+    ElMessage.error('รหัสครูซ้ำ')
+    return
   }
 
   saving.value = true
   try {
     const teacherData = {
+      id: editingTeacher.value?.id || null,
       teacher_id: form.teacher_id, prefix: form.prefix,
       name: form.name, surname: form.surname,
       academic_rank: form.academic_rank, dept: form.dept,
@@ -757,7 +771,7 @@ async function handleSave() {
     const existingUser = userByTeacher.value[form.teacher_id]
     const alreadyHasAccount = !!existingUser
     const shouldCreateAccount = !editingTeacher.value && form.email && form.phone && !alreadyHasAccount
-    const autoRoles = form.is_dept_head ? ['teacher', 'subject_head'] : ['teacher']
+    const autoRoles = form.is_dept_head ? ['school_teacher', 'subject_head'] : ['school_teacher']
     
     let currentUid = existingUser?.uid
     let authWarning = ''
@@ -774,7 +788,7 @@ async function handleSave() {
       // 3. กรณีแก้ไขและอีเมลเปลี่ยน -> สร้างบัญชี Auth ใหม่ให้ตรงกับอีเมลใหม่ และลบ Document สิทธิ์เก่า
       let newUid = null
       try {
-        const curRoles = Array.isArray(existingUser.roles) ? [...existingUser.roles] : [existingUser.role || 'teacher']
+        const curRoles = Array.isArray(existingUser.roles) ? [...existingUser.roles] : [existingUser.role || 'school_teacher']
         let pwdToUse = (form.phone || '').replace(/[^0-9a-zA-Z]/g, '')
         if (pwdToUse.length < 6) pwdToUse = '123456'
 
@@ -782,16 +796,9 @@ async function handleSave() {
         
         // ลบข้อมูลสิทธิ์เชื่อมโยงของ UID เก่าทิ้ง เพื่อป้องกันใช้บัญชีเก่าเข้าใช้งาน
         if (existingUser.uid && existingUser.uid !== newUid) {
-          try {
-            await deleteDoc(doc(rootDb, 'users', existingUser.uid))
-          } catch (delErr) {
-            // ถ้า Rule ไม่ให้ลบ ให้ใช้วิธีเคลียร์ค่า teacher_id ทิ้งและระงับบัญชีแทน
-            await updateDoc(doc(rootDb, 'users', existingUser.uid), {
-              teacher_id: null,
-              teacherId: null,
-              is_active: false,
-              isActive: false
-            })
+          const { error: delErr } = await supabase.from('users').delete().eq('id', existingUser.uid)
+          if (delErr) {
+            await supabase.from('users').update({ teacher_id: null, "teacherId": null, is_active: false, "isActive": false }).eq('id', existingUser.uid)
           }
         }
         
@@ -801,10 +808,9 @@ async function handleSave() {
         
         // บังคับตัดการเชื่อมต่อบัญชีเก่าทิ้ง เพื่อให้แอดมินไปกดผูกบัญชีใหม่เองได้จากปุ่ม "🔑 บัญชี"
         if (existingUser.uid && existingUser.uid !== newUid) {
-          try {
-            await deleteDoc(doc(rootDb, 'users', existingUser.uid))
-          } catch (delErr) {
-            await updateDoc(doc(rootDb, 'users', existingUser.uid), { teacher_id: null, teacherId: null, is_active: false, isActive: false })
+          const { error: delErr2 } = await supabase.from('users').delete().eq('id', existingUser.uid)
+          if (delErr2) {
+            await supabase.from('users').update({ teacher_id: null, "teacherId": null, is_active: false, "isActive": false }).eq('id', existingUser.uid)
           }
         }
         currentUid = null
@@ -815,26 +821,32 @@ async function handleSave() {
     if (currentUid && !authWarning) {
       let curRoles = []
       if (existingUser) {
-        curRoles = Array.isArray(existingUser.roles) ? [...existingUser.roles] : [existingUser.role || 'teacher']
+        curRoles = Array.isArray(existingUser.roles) ? [...existingUser.roles] : [existingUser.role || 'school_teacher']
       } else {
         curRoles = [...autoRoles]
       }
       const hasSubjectHead = curRoles.includes('subject_head')
       if (form.is_dept_head && !hasSubjectHead) {
         const newRoles = [...new Set([...curRoles, 'subject_head'])]
-        await updateDoc(doc(rootDb, 'users', currentUid), { roles: newRoles, updated_at: serverTimestamp() })
+        await supabase.from('users').update({ roles: newRoles }).eq('id', currentUid)
       } else if (!form.is_dept_head && hasSubjectHead) {
         const newRoles = curRoles.filter(r => r !== 'subject_head')
-        await updateDoc(doc(rootDb, 'users', currentUid), { roles: newRoles, updated_at: serverTimestamp() })
+        await supabase.from('users').update({ roles: newRoles }).eq('id', currentUid)
       }
     }
 
     // 3. Save teacher data
     // ตรวจสอบว่าเป็นการแก้ไขหรือเพิ่มใหม่
+    const savedTeacherId = await saveTeacherDb(teacherData)
+    teacherData.id = savedTeacherId
     if (editingTeacher.value) {
-      await cascadeService.updateTeacher(schoolStore.currentTerm, editingTeacher.value.teacher_id, editingTeacher.value, teacherData)
-    } else {
-      await saveTeacherDb(teacherData)
+      const isTeacherIdChanged = editingTeacher.value.teacher_id !== teacherData.teacher_id
+      const oldFullName = `${editingTeacher.value.prefix || ''}${editingTeacher.value.name || ''} ${editingTeacher.value.surname || ''}`.trim()
+      const newFullName = `${teacherData.prefix || ''}${teacherData.name || ''} ${teacherData.surname || ''}`.trim()
+      const isTeacherNameChanged = oldFullName !== newFullName
+      if (isTeacherIdChanged || isTeacherNameChanged) {
+        await cascadeService.updateTeacher(schoolStore.currentTerm, editingTeacher.value.teacher_id, editingTeacher.value, teacherData)
+      }
     }
 
     if (authWarning) {
@@ -858,8 +870,8 @@ async function handleSave() {
   }
 }
 
-// ─── Helper: Create Firebase Auth + Firestore user doc ─────────────────────
-async function createAccountForTeacher(teacher, password, role = 'teacher', emailOverride = '') {
+// ─── Helper: Create auth account + user document ─────────────────────
+async function createAccountForTeacher(teacher, password, role = 'school_teacher', emailOverride = '') {
   const secondAuth = getSecondaryAuth()
   let uid
   const emailForAccount = (emailOverride || teacher.email || '').trim()
@@ -905,14 +917,13 @@ async function createAccountForTeacher(teacher, password, role = 'teacher', emai
     await signOut(secondAuth).catch(() => {})
   }
 
-  // สร้าง / อัปเดต Firestore users doc (merge เพื่อไม่ทับข้อมูลเดิม)
-  const rolesArr = Array.isArray(role) ? role : [role]
+  // สร้าง / อัปเดต user doc (merge เพื่อไม่ทับข้อมูลเดิม)
+  const rolePayload = buildRolePayload(role)
   await setDoc(doc(rootDb, 'users', uid), {
     uid,
     email: emailForAccount,
     displayName: `${teacher.prefix || ''}${teacher.name} ${teacher.surname}`,
-    roles: rolesArr,
-    role: rolesArr[0],
+    ...rolePayload,
     teacher_id: teacher.teacher_id,
     teacherId: teacher.teacher_id,
     schoolId: schoolId.value || '',
@@ -972,12 +983,10 @@ async function changeRoles(teacherId, newRoles) {
   const finalRoles = [...new Set(newRoles)]
   if (teacher?.is_dept_head && !finalRoles.includes('subject_head')) finalRoles.push('subject_head')
   try {
-    await updateDoc(doc(rootDb, 'users', user.uid), {
+    await supabase.from('users').update({
       roles: finalRoles,
-      role: finalRoles[0],
-      updated_at: serverTimestamp(),
-      updated_by: authStore.profile?.uid || '',
-    })
+      role: finalRoles[0]
+    }).eq('id', user.uid)
     user.roles = finalRoles
     ElMessage.success('อัปเดตสิทธิ์เรียบร้อย')
   } catch (e) {
@@ -991,9 +1000,7 @@ async function toggleActive(teacherId, newVal) {
   const user = userByTeacher.value[teacherId]
   if (!user?.uid) return
   try {
-    await updateDoc(doc(rootDb, 'users', user.uid), {
-      is_active: newVal, updated_at: serverTimestamp(),
-    })
+    await supabase.from('users').update({ is_active: newVal, "isActive": newVal }).eq('id', user.uid)
     ElMessage.success(newVal ? 'เปิดใช้งานบัญชีแล้ว' : 'ระงับบัญชีแล้ว')
   } catch (e) {
     user.is_active = !newVal
@@ -1018,7 +1025,7 @@ async function sendResetEmail() {
   }
   resetSending.value = true
   try {
-    await sendPasswordResetEmail(auth, email)
+    await supabase.auth.resetPasswordForEmail(email)
     ElMessage.success(`ส่งอีเมลรีเซ็ตรหัสผ่านไปยัง ${email} แล้ว`)
     resetDialogVisible.value = false
   } catch (e) {
@@ -1038,16 +1045,13 @@ async function changePasswordByAdmin() {
   try {
     const teacher = resetTarget.value
     const teacherName = `${teacher.prefix || ''}${teacher.name} ${teacher.surname}`
-    await addDoc(collection(rootDb, 'password_change_queue'), {
+    await supabase.from('password_change_queue').insert([{
       uid: user.uid,
       new_password: pwd,
       teacher_name: teacherName,
       admin_email: authStore.profile?.email || '',
-      school_id: schoolId.value || '',
-      status: 'pending',
-      created_at: serverTimestamp(),
-      created_by: authStore.profile?.uid || '',
-    })
+      school_id: schoolId.value || null
+    }])
     ElMessage.success(`ส่งคำขอเปลี่ยนรหัสผ่านสำหรับ ${teacherName} แล้ว — จะมีผลภายใน 1 นาที`)
     resetDialogVisible.value = false
   } catch (e) {
@@ -1063,9 +1067,10 @@ async function unlinkAccount() {
   resetChanging.value = true
   try {
     try {
-      await deleteDoc(doc(rootDb, 'users', user.uid))
+      const { error: delErr } = await supabase.from('users').delete().eq('id', user.uid)
+      if (delErr) throw delErr
     } catch (delErr) {
-      await updateDoc(doc(rootDb, 'users', user.uid), { teacher_id: null, teacherId: null, is_active: false, isActive: false })
+      await supabase.from('users').update({ teacher_id: null, "teacherId": null, is_active: false, "isActive": false }).eq('id', user.uid)
     }
     ElMessage.success('ตัดการเชื่อมต่อบัญชีเก่าเรียบร้อยแล้ว ตอนนี้คุณสามารถสร้าง/ผูกบัญชีใหม่ได้')
     resetDialogVisible.value = false

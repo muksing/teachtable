@@ -296,7 +296,10 @@ const { getRooms, saveRoom, deleteRoom } = useSchoolDb()
 const { printReport } = usePrintReport()
 const { isLocked } = useScheduleGuard()
 const authStore = useAuthStore()
-const isTeacherOrScheduler = computed(() => authStore.hasAnyRole(['school_teacher', 'teacher', 'school_scheduler', 'scheduler']))
+const isTeacherOrScheduler = computed(() => {
+  if (authStore.hasAnyRole(['school_admin', 'admin', 'superadmin'])) return false
+  return authStore.hasAnyRole(['school_teacher', 'teacher', 'school_scheduler', 'scheduler'])
+})
 
 // ===== Constants =====
 const ROOM_TYPES = [

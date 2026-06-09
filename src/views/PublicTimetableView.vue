@@ -102,9 +102,9 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { collection, query, getDocs, getDoc, doc, where, orderBy } from 'firebase/firestore'
-import { ref as storageRef, getDownloadURL } from 'firebase/storage'
-import { db, storage, getSchoolDb } from '@/firebase/db'
+import { collection, query, getDocs, getDoc, doc, where, orderBy } from '@/supabase/firestore'
+import { ref as storageRef, getDownloadURL } from '@/supabase/storage'
+import { db, storage, getSchoolDb } from '@/supabase/db'
 import { Loading } from '@element-plus/icons-vue'
 
 const route = useRoute()

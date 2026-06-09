@@ -3,8 +3,8 @@ import {
   collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
   query, where, orderBy, limit, onSnapshot,
   serverTimestamp, writeBatch, FieldPath
-} from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
+} from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { supabase } from '@/supabase/client'
@@ -58,12 +58,35 @@ export function useSchoolDb() {
   const batchDb = () => db().firestore || db()
   const term = () => schoolStore.currentTerm || '2568_1'
 
+  async function syncCompatTeacherDoc(teacher) {
+    if (!teacher?.teacher_id) return
+    await setDoc(
+      doc(db(), `terms/${term()}/teachers`, teacher.teacher_id),
+      {
+        teacher_id: teacher.teacher_id,
+        prefix: teacher.prefix || '',
+        name: teacher.name || '',
+        surname: teacher.surname || '',
+        academic_rank: teacher.academic_rank || '',
+        dept: teacher.dept || teacher.department || '',
+        department: teacher.dept || teacher.department || '',
+        position: teacher.position || '',
+        is_dept_head: teacher.is_dept_head === true,
+        email: teacher.email || '',
+        phone: teacher.phone || '',
+        is_active: teacher.is_active !== false,
+        ...getAuditFields()
+      },
+      { merge: true }
+    )
+  }
+
   // ===== TEACHERS =====
   async function getTeachers() {
     const { data, error } = await supabase
       .from('teachers')
       .select('*')
-      .eq('school_id', schoolStore.schoolId)
+      .eq('school_id', authStore.schoolId)
       .order('first_name', { ascending: true })
       
     if (error) throw error
@@ -75,17 +98,29 @@ export function useSchoolDb() {
       teacher_id: d.teacher_code,
       name: d.first_name,
       surname: d.last_name,
+      dept: d.department || d.dept || '',
+      academic_rank: d.academic_rank || '',
+      position: d.position || '',
+      email: d.email || '',
+      phone: d.phone || '',
+      is_dept_head: d.is_dept_head === true,
+      is_active: d.is_active !== false,
     }))
   }
 
   async function saveTeacher(teacher) {
     const payload = {
-      school_id: schoolStore.schoolId,
+      school_id: authStore.schoolId,
       teacher_code: teacher.teacher_id,
       prefix: teacher.prefix,
       first_name: teacher.name,
       last_name: teacher.surname,
-      department: teacher.department,
+      academic_rank: teacher.academic_rank || null,
+      department: teacher.dept || teacher.department || null,
+      position: teacher.position || null,
+      email: teacher.email || null,
+      phone: teacher.phone || null,
+      is_dept_head: teacher.is_dept_head === true,
       is_active: teacher.is_active !== false,
     }
 
@@ -111,7 +146,7 @@ export function useSchoolDb() {
     const { data, error } = await supabase
       .from('subjects')
       .select('*')
-      .eq('school_id', schoolStore.schoolId)
+      .eq('school_id', authStore.schoolId)
       .order('subject_code')
       
     if (error) throw error
@@ -120,7 +155,7 @@ export function useSchoolDb() {
 
   async function saveSubject(subject) {
     const payload = {
-      school_id: schoolStore.schoolId,
+      school_id: authStore.schoolId,
       subject_code: subject.subject_code,
       name: subject.name,
     }
@@ -148,10 +183,11 @@ export function useSchoolDb() {
   }
 
   async function getClasses() {
+    if (!authStore.schoolId || authStore.schoolId === 'undefined') return []
     const { data, error } = await supabase
       .from('classes')
       .select('*')
-      .eq('school_id', schoolStore.schoolId)
+      .eq('school_id', authStore.schoolId)
       .order('class_name')
       
     if (error) throw error
@@ -164,7 +200,7 @@ export function useSchoolDb() {
 
   async function saveClass(cls) {
     const payload = {
-      school_id: schoolStore.schoolId,
+      school_id: authStore.schoolId,
       class_name: cls.class_id,
       homeroom_teacher_id: cls.homeroom_teacher_id || null
     }
@@ -183,7 +219,7 @@ export function useSchoolDb() {
   async function deleteClass(classId) {
     // เนื่องจาก UI ส่ง `class_id` หรือ `id` มา เราต้องเช็คเพื่อลบด้วย UUID ถ้ามี
     // ฟังก์ชันนี้ใน UI เดิมอาจจะลบผ่าน classId ตรงๆ (ม.1/1)
-    const { data } = await supabase.from('classes').select('id').eq('school_id', schoolStore.schoolId).eq('class_name', classId).single()
+    const { data } = await supabase.from('classes').select('id').eq('school_id', authStore.schoolId).eq('class_name', classId).single()
     if (data && data.id) {
       await supabase.from('classes').delete().eq('id', data.id)
     }
@@ -194,7 +230,7 @@ export function useSchoolDb() {
     let query = supabase
       .from('students')
       .select('*')
-      .eq('school_id', schoolStore.schoolId)
+      .eq('school_id', authStore.schoolId)
 
     if (classId) {
       query = query.eq('class_id', classId)
@@ -226,7 +262,7 @@ export function useSchoolDb() {
 
   async function saveStudent(student) {
     const payload = {
-      school_id: schoolStore.schoolId,
+      school_id: authStore.schoolId,
       class_id: student.class_id || null, // Note: In full refactor, this should map to class UUID
       student_code: student.student_id,
       seat_number: student.seat_number,
@@ -418,7 +454,7 @@ export function useSchoolDb() {
     const { data, error } = await supabase
       .from('rooms')
       .select('*')
-      .eq('school_id', schoolStore.schoolId)
+      .eq('school_id', authStore.schoolId)
       .order('room_code')
       
     if (error) throw error
@@ -473,7 +509,7 @@ export function useSchoolDb() {
 
   async function saveRoom(room) {
     const payload = {
-      school_id: schoolStore.schoolId,
+      school_id: authStore.schoolId,
       room_code: room.room_id,
       room_name: room.room_name,
       room_type: room.room_type || 'other',
@@ -501,7 +537,7 @@ export function useSchoolDb() {
 
   async function deleteRoom(roomId) {
     if (!roomId) return
-    const { data } = await supabase.from('rooms').select('id').eq('school_id', schoolStore.schoolId).eq('room_code', roomId).single()
+    const { data } = await supabase.from('rooms').select('id').eq('school_id', authStore.schoolId).eq('room_code', roomId).single()
     if (data && data.id) {
       await supabase.from('rooms').delete().eq('id', data.id)
     }
@@ -890,9 +926,82 @@ export function useSchoolDb() {
     )
   }
 
+  async function saveTeacherCompat(teacher) {
+    const payload = {
+      school_id: authStore.schoolId,
+      teacher_code: teacher.teacher_id,
+      prefix: teacher.prefix,
+      first_name: teacher.name,
+      last_name: teacher.surname,
+      academic_rank: teacher.academic_rank || null,
+      department: teacher.dept || teacher.department || null,
+      position: teacher.position || null,
+      email: teacher.email || null,
+      phone: teacher.phone || null,
+      is_dept_head: teacher.is_dept_head === true,
+      is_active: teacher.is_active !== false,
+    }
+
+    let savedId = teacher.id
+    if (teacher.id && teacher.id.includes('-')) {
+      const { error } = await supabase.from('teachers').update(payload).eq('id', teacher.id)
+      if (error) throw error
+      savedId = teacher.id
+    } else {
+      const { data, error } = await supabase.from('teachers').insert([payload]).select().single()
+      if (error) throw error
+      savedId = data.id
+    }
+
+    await syncCompatTeacherDoc({
+      ...teacher,
+      id: savedId,
+      dept: teacher.dept || teacher.department || '',
+    })
+
+    return savedId
+  }
+
+  async function deleteTeacherCompat(id) {
+    if (!id) return
+
+    let targetId = id
+    let teacherCode = ''
+
+    if (id.includes('-')) {
+      const { data, error: lookupError } = await supabase
+        .from('teachers')
+        .select('id,teacher_code')
+        .eq('id', id)
+        .maybeSingle()
+      if (lookupError) throw lookupError
+      if (!data?.id) return
+      targetId = data.id
+      teacherCode = data.teacher_code || ''
+    } else {
+      const { data, error: lookupError } = await supabase
+        .from('teachers')
+        .select('id,teacher_code')
+        .eq('school_id', authStore.schoolId)
+        .eq('teacher_code', id)
+        .maybeSingle()
+      if (lookupError) throw lookupError
+      if (!data?.id) return
+      targetId = data.id
+      teacherCode = data.teacher_code || id
+    }
+
+    const { error } = await supabase.from('teachers').delete().eq('id', targetId)
+    if (error) throw error
+
+    if (teacherCode) {
+      await deleteDoc(doc(db(), `terms/${term()}/teachers`, teacherCode)).catch(() => {})
+    }
+  }
+
   return {
     getAuditFields,
-    getTeachers, saveTeacher, deleteTeacher,
+    getTeachers, saveTeacher: saveTeacherCompat, deleteTeacher: deleteTeacherCompat,
     getSubjects, saveSubject, deleteSubject,
     getClasses, saveClass, deleteClass,
     getStudents, saveStudent,

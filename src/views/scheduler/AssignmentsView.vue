@@ -335,11 +335,11 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { collection, doc, setDoc, deleteDoc, getDocs, serverTimestamp, writeBatch, query, where } from 'firebase/firestore'
+import { collection, doc, setDoc, deleteDoc, getDocs, serverTimestamp, writeBatch, query, where } from '@/supabase/firestore'
 import * as XLSX from 'xlsx'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useSchoolDb } from '@/composables/useSchoolDb'
-import { getSchoolDb } from '@/firebase/db'
+import { getSchoolDb } from '@/supabase/db'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { usePrintReport } from '@/composables/usePrintReport'

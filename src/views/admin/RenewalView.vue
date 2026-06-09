@@ -243,8 +243,8 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { doc, collection, setDoc, getDocs, query, orderBy, addDoc, serverTimestamp, getDoc } from 'firebase/firestore'
-import { getSchoolDb, db as masterDb } from '@/firebase/db'
+import { doc, collection, setDoc, getDocs, query, orderBy, addDoc, serverTimestamp, getDoc } from '@/supabase/firestore'
+import { getSchoolDb, db as masterDb } from '@/supabase/db'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import {

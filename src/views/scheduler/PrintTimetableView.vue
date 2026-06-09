@@ -237,14 +237,14 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { doc, getDoc } from 'firebase/firestore'
-import { ref as storageRef, getDownloadURL } from 'firebase/storage'
+import { doc, getDoc } from '@/supabase/firestore'
+import { ref as storageRef, getDownloadURL } from '@/supabase/storage'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import * as XLSX from 'xlsx'
 import ExcelJS from 'exceljs'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { getSchoolDb, storage } from '@/firebase/db'
+import { getSchoolDb, storage } from '@/supabase/db'
 import { useSchoolStore } from '@/stores/school'
 import { useTimetable } from '@/composables/useTimetable'
 import { useSignature } from '@/composables/useSignature'
@@ -376,7 +376,7 @@ async function loadData() {
     publishAtLabel.value = publishMeta?.published_at_iso
       ? new Date(publishMeta.published_at_iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
       : ''
-    const schoolId = schoolStore.schoolInfo?.school_id || schoolStore.schoolId
+    const schoolId = schoolStore.schoolInfo?.school_id || useAuthStore().schoolId
 
     let payload = null
 

@@ -521,13 +521,13 @@ function fixPhotoUrl(url) {
 
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { doc, getDoc, setDoc, writeBatch, serverTimestamp } from 'firebase/firestore'
+import { doc, getDoc, setDoc, writeBatch, serverTimestamp } from '@/supabase/firestore'
 import * as XLSX from 'xlsx'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 import { STUDENT_PREFIXES } from '@/utils/constants'
 import { usePrintReport } from '@/composables/usePrintReport'
-import { getSchoolDb } from '@/firebase/db'
+import { getSchoolDb } from '@/supabase/db'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 

@@ -1,77 +1,56 @@
-import fs from 'fs'
-import path from 'path'
-import admin from 'firebase-admin'
+import { getSupabaseAdmin, findAuthUserByEmail } from './supabase-admin.js'
 
-const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || path.resolve('scripts/service-account-master.json')
+const SUPERADMIN_EMAIL = process.env.SUPERADMIN_EMAIL || 'muksingapp@gmail.com'
+const SUPERADMIN_PASSWORD = process.env.SUPERADMIN_PASSWORD || 'SuperMuksing'
+const SUPERADMIN_DISPLAY_NAME = process.env.SUPERADMIN_DISPLAY_NAME || 'Super Admin'
 
-if (!fs.existsSync(keyPath)) {
-  console.error('Service account file not found. Set GOOGLE_APPLICATION_CREDENTIALS or place the file at scripts/service-account-master.json.')
-  process.exit(1)
-}
+async function main() {
+  const supabase = getSupabaseAdmin()
 
-const serviceAccount = JSON.parse(fs.readFileSync(keyPath, 'utf8'))
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: 'https://master-teachtable-default-rtdb.asia-southeast1.firebasedatabase.app'
-})
-
-const auth = admin.auth()
-const db = admin.firestore()
-
-const SUPERADMIN_EMAIL = 'muksingapp@gmail.com'
-const SUPERADMIN_PASSWORD = 'SuperMuksing'
-const SUPERADMIN_DISPLAY_NAME = 'Super Admin'
-
-async function createSuperAdmin() {
-  try {
-    let userRecord
-
-    try {
-      userRecord = await auth.getUserByEmail(SUPERADMIN_EMAIL)
-      console.log('SuperAdmin already exists:', userRecord.uid)
-    } catch (error) {
-      if (error.code === 'auth/user-not-found') {
-        userRecord = await auth.createUser({
-          email: SUPERADMIN_EMAIL,
-          emailVerified: true,
-          password: SUPERADMIN_PASSWORD,
-          displayName: SUPERADMIN_DISPLAY_NAME
-        })
-        console.log('Created SuperAdmin auth user:', userRecord.uid)
-      } else {
-        throw error
-      }
-    }
-
-    const userDocRef = db.collection('users').doc(userRecord.uid)
-    const userDoc = await userDocRef.get()
-
-    if (!userDoc.exists) {
-      await userDocRef.set({
-        uid: userRecord.uid,
-        email: SUPERADMIN_EMAIL,
-        displayName: SUPERADMIN_DISPLAY_NAME,
-        firstName: 'Super',
-        lastName: 'Admin',
-        globalRole: 'superadmin',
-        role: 'superadmin',
-        isActive: true,
-        permissions: ['all'],
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        lastLoginAt: null
-      })
-      console.log('Created SuperAdmin user profile in Firestore')
-    } else {
-      console.log('SuperAdmin user profile already exists in Firestore')
-    }
-
-    console.log('SuperAdmin setup complete.')
-    process.exit(0)
-  } catch (error) {
-    console.error('Failed to create SuperAdmin:', error)
-    process.exit(1)
+  let user = await findAuthUserByEmail(supabase, SUPERADMIN_EMAIL)
+  if (!user) {
+    const { data, error } = await supabase.auth.admin.createUser({
+      email: SUPERADMIN_EMAIL,
+      password: SUPERADMIN_PASSWORD,
+      email_confirm: true,
+      user_metadata: { displayName: SUPERADMIN_DISPLAY_NAME },
+    })
+    if (error) throw error
+    user = data.user
+    console.log('Created Supabase auth user:', user.id)
+  } else {
+    console.log('SuperAdmin auth user already exists:', user.id)
   }
+
+  const now = new Date().toISOString()
+  const { error } = await supabase.from('users').upsert({
+    id: user.id,
+    uid: user.id,
+    email: SUPERADMIN_EMAIL,
+    displayName: SUPERADMIN_DISPLAY_NAME,
+    display_name: SUPERADMIN_DISPLAY_NAME,
+    firstName: 'Super',
+    first_name: 'Super',
+    lastName: 'Admin',
+    last_name: 'Admin',
+    globalRole: 'superadmin',
+    global_role: 'superadmin',
+    role: 'superadmin',
+    roles: ['superadmin'],
+    isActive: true,
+    is_active: true,
+    permissions: ['all'],
+    createdAt: now,
+    created_at: now,
+    lastLoginAt: null,
+    last_login: null,
+  }, { onConflict: 'id' })
+  if (error) throw error
+
+  console.log('SuperAdmin setup complete.')
 }
 
-createSuperAdmin()
+main().catch((error) => {
+  console.error('Failed to create SuperAdmin:', error.message)
+  process.exit(1)
+})

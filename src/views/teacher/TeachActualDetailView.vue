@@ -385,8 +385,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   doc, getDoc, setDoc, writeBatch, serverTimestamp,
   collection, getDocs, query, where
-} from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
+} from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'

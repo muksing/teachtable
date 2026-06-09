@@ -9,12 +9,40 @@ export const useSchoolStore = defineStore('school', () => {
   function setCurrentTerm(term) { currentTerm.value = term }
   function clear() { schoolInfo.value = null; currentTerm.value = null }
 
-  const schoolName        = computed(() => schoolInfo.value?.name || '')
-  const isTimetableLocked = computed(() => schoolInfo.value?.timetable_locked === true)
+  const schoolName = computed(() => schoolInfo.value?.name || schoolInfo.value?.schoolName || '')
+  const schoolId = computed(() => schoolInfo.value?.id || schoolInfo.value?.schoolId || schoolInfo.value?.school_id || null)
+  
+  // รองรับข้อมูล Settings ที่ซ้อนอยู่ใน Supabase (settings JSONB) หรือแบบเดิม
+  const settingsObj = computed(() => ({
+    ...(schoolInfo.value || {}),
+    ...((schoolInfo.value?.settings && typeof schoolInfo.value.settings === 'object') ? schoolInfo.value.settings : {}),
+  }))
+  
+  const isTimetableLocked = computed(() => settingsObj.value.timetable_locked === true)
   const featureFlags = computed(() => {
-    const raw = schoolInfo.value?.feature_flags
-    if (!raw || typeof raw !== 'object') return {}
-    return raw
+    const raw = settingsObj.value.feature_flags
+    const nested = raw && typeof raw === 'object' ? raw : {}
+    return {
+      ...nested,
+      teaching_log_enabled:
+        nested.teaching_log_enabled ??
+        schoolInfo.value?.teaching_log_enabled ??
+        schoolInfo.value?.teachingLogEnabled ??
+        settingsObj.value?.teaching_log_enabled ??
+        settingsObj.value?.teachingLogEnabled,
+      behavior_system_enabled:
+        nested.behavior_system_enabled ??
+        schoolInfo.value?.behavior_system_enabled ??
+        schoolInfo.value?.behaviorSystemEnabled ??
+        settingsObj.value?.behavior_system_enabled ??
+        settingsObj.value?.behaviorSystemEnabled,
+      club_module_enabled:
+        nested.club_module_enabled ??
+        schoolInfo.value?.club_module_enabled ??
+        schoolInfo.value?.clubModuleEnabled ??
+        settingsObj.value?.club_module_enabled ??
+        settingsObj.value?.clubModuleEnabled,
+    }
   })
 
   function isFeatureEnabled(flagName) {
@@ -25,7 +53,7 @@ export const useSchoolStore = defineStore('school', () => {
   const isClubModuleEnabled = computed(() => isFeatureEnabled('club_module_enabled'))
 
   const pricingPlan = computed(() => {
-    const raw = schoolInfo.value?.pricing_plan
+    const raw = settingsObj.value.pricing_plan || schoolInfo.value?.pricing_plan
     if (!raw || typeof raw !== 'object') return null
     return {
       code: raw.code || '',
@@ -37,14 +65,24 @@ export const useSchoolStore = defineStore('school', () => {
     }
   })
 
+  const subscriptionStatus = computed(() => {
+    return (
+      settingsObj.value.subscription_status ||
+      settingsObj.value.subscriptionStatus ||
+      schoolInfo.value?.subscription_status ||
+      schoolInfo.value?.subscriptionStatus ||
+      'active'
+    )
+  })
+
   const schedulerLimit = computed(() => {
-    const override = Number(schoolInfo.value?.scheduler_limit_override || 0)
+    const override = Number(settingsObj.value.scheduler_limit_override || 0)
     if (override > 0) return override
     return Number(pricingPlan.value?.scheduler_limit || 0)
   })
 
   const planNotice = computed(() => {
-    const raw = schoolInfo.value?.plan_notice
+    const raw = settingsObj.value.plan_notice
     if (!raw || typeof raw !== 'object') return null
     return {
       title: raw.title || '',
@@ -63,7 +101,11 @@ export const useSchoolStore = defineStore('school', () => {
   })
 
   const isSubscriptionActive = computed(() => {
-    if (!subscriptionExpiry.value) return false
+    if (schoolInfo.value?.is_active === false || schoolInfo.value?.isActive === false) return false
+    if (['expired', 'suspended', 'cancelled', 'inactive'].includes(String(subscriptionStatus.value || '').toLowerCase())) {
+      return false
+    }
+    if (!subscriptionExpiry.value) return true
     return subscriptionExpiry.value.getTime() > Date.now()
   })
 
@@ -74,12 +116,14 @@ export const useSchoolStore = defineStore('school', () => {
     schoolInfo,
     currentTerm,
     schoolName,
+    schoolId,
     isTimetableLocked,
     featureFlags,
     isFeatureEnabled,
     isTeachingLogEnabled,
     isClubModuleEnabled,
     pricingPlan,
+    subscriptionStatus,
     schedulerLimit,
     planNotice,
     subscriptionExpiry,

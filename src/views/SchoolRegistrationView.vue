@@ -149,9 +149,8 @@
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore'
-import { db } from '@/firebase/db'
-import { SCHOOL_REQUEST_STATUS } from '@/firebase/masterSchema'
+import { supabase } from '@/supabase/client'
+import { SCHOOL_REQUEST_STATUS } from '@/supabase/schema'
 
 const router = useRouter()
 const registrationFormRef = ref()
@@ -224,7 +223,8 @@ async function handleSubmit() {
   try {
     const approvalToken = crypto.randomUUID()
 
-    await addDoc(collection(db, 'school_requests'), {
+    const now = new Date().toISOString()
+    const { error } = await supabase.from('school_requests').insert([{
       schoolName: form.schoolName,
       schoolAddress: form.schoolAddress,
       schoolPhone: form.schoolPhone,
@@ -235,16 +235,17 @@ async function handleSubmit() {
       adminEmail: form.adminEmail,
       adminPassword: form.adminPassword,
       status: SCHOOL_REQUEST_STATUS.PENDING,
-      submittedAt: serverTimestamp(),
+      submittedAt: now,
       reviewedAt: null,
       reviewedBy: null,
       rejectionReason: '',
       schoolId: null,
       approvedAt: null,
       approvalToken,
-      tokenCreatedAt: serverTimestamp(),
+      tokenCreatedAt: now,
       superAdminNotifiedAt: null
-    })
+    }])
+    if (error) throw error
 
     ElMessage.success('ขอบคุณสำหรับการสมัครสมาชิก และรอ SuperAdmin อนุมัติ ให้ตรวจสอบอีเมล')
     resetForm()

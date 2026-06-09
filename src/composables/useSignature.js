@@ -1,8 +1,8 @@
 // src/composables/useSignature.js
 // โมดูลลายเซ็น — ตั้งค่าแยกตามงาน ใช้ร่วมกันทุก report
 import { ref } from 'vue'
-import { doc, setDoc } from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
+import { doc, setDoc } from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
 import { useSchoolStore } from '@/stores/school'
 
 // ===== นิยาม module ทั้งหมดในระบบ =====

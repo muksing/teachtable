@@ -1,6 +1,6 @@
 ﻿import { ref } from 'vue'
-import { db } from '@/firebase/db'
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'
+import { db } from '@/supabase/db'
+import { doc, getDoc, setDoc, serverTimestamp } from '@/supabase/firestore'
 
 const PRICING_DOC_REF = doc(db, 'system_config', 'pricing_formula')
 

@@ -1,11 +1,9 @@
 // src/composables/useSchoolManagement.js
 // ===== School Management for SuperAdmin =====
 import { ref } from 'vue'
-import { collection, doc, getDocs, getDoc, setDoc, updateDoc, addDoc, deleteDoc, query, where, orderBy, serverTimestamp, deleteField, getCountFromServer } from 'firebase/firestore'
-import { initializeApp, getApps } from 'firebase/app'
-import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth'
-import { db, auth, firebaseConfig } from '@/firebase/db'
-import { SCHOOL_REQUEST_STATUS, SCHOOL_SCHEMA, USER_ROLES, generateSchoolId } from '@/firebase/masterSchema'
+import { supabase } from '@/supabase/client'
+import { createClient } from '@supabase/supabase-js'
+import { SCHOOL_REQUEST_STATUS, SCHOOL_SCHEMA, USER_ROLES, generateSchoolId } from '@/supabase/schema'
 
 const PLAN_MAP = {
   '200': { code: '200', monthly_fee: 200, scheduler_limit: 2 },
@@ -15,9 +13,8 @@ const PLAN_MAP = {
 
 async function fetchPlanFromCatalog(planCode) {
   try {
-    const snap = await getDocs(query(collection(db, 'package_catalog'), where('code', '==', String(planCode))))
-    if (!snap.empty) {
-      const d = snap.docs[0].data()
+    const { data: d, error } = await supabase.from('package_catalog').select('*').eq('code', String(planCode)).single()
+    if (d && !error) {
       return {
         code: d.code,
         name: d.name || d.code,
@@ -50,26 +47,10 @@ function toDateValue(v) {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
-function resolveNextExpiry(prevExpiry, options = {}) {
-  const now = new Date()
-  const baseDate = prevExpiry && prevExpiry > now ? prevExpiry : now
-  const mode = String(options.expiryMode || 'auto_months')
-
-  if (mode === 'manual_date') {
-    const manualDate = toDateValue(options.manualDate)
-    if (!manualDate) throw new Error('Invalid manual expiry date')
-    return manualDate
-  }
-
-  if (mode === 'auto_days') {
-    const days = Number(options.planDays || 0)
-    if (days < 1) throw new Error('Invalid auto days')
-    return addDays(baseDate, days)
-  }
-
-  const months = Number(options.planMonths || 1)
-  if (months < 1) throw new Error('Invalid auto months')
-  return addMonths(baseDate, months)
+function resolveNextExpiry(months) {
+  const d = new Date()
+  d.setMonth(d.getMonth() + Number(months || 1))
+  return d
 }
 
 function toDateOrNull(value) {
@@ -96,46 +77,10 @@ export function useSchoolManagement() {
   const error = ref(null)
 
   async function fetchRenewalRequestsRaw(status = null) {
-    const buildRenewalQuery = (ref) => {
-      if (status) {
-        return query(ref, where('status', '==', status), orderBy('created_at', 'desc'))
-      }
-      return query(ref, orderBy('created_at', 'desc'))
-    }
-
-    const merged = new Map()
-
-    const rootSnapshot = await getDocs(buildRenewalQuery(collection(db, 'renewal_requests')))
-    rootSnapshot.forEach((snap) => {
-      const item = mapRenewalRequest(snap.id, snap.data())
-      merged.set(`${item.school_id}:${snap.id}`, item)
-    })
-
-    const schoolsSnapshot = await getDocs(collection(db, 'schools'))
-    const subSnapshots = await Promise.all(
-      schoolsSnapshot.docs.map(async (schoolSnap) => {
-        const schoolId = schoolSnap.id
-        const renewalRef = collection(doc(db, 'schools', schoolId), 'renewal_requests')
-        const snapshot = await getDocs(buildRenewalQuery(renewalRef))
-        return { schoolId, snapshot }
-      })
-    )
-
-    subSnapshots.forEach(({ schoolId, snapshot }) => {
-      snapshot.forEach((snap) => {
-        const item = mapRenewalRequest(snap.id, snap.data(), schoolId)
-        const key = `${item.school_id}:${snap.id}`
-        if (!merged.has(key)) {
-          merged.set(key, item)
-        }
-      })
-    })
-
-    return Array.from(merged.values()).sort((a, b) => {
-      const aTime = a.created_at?.getTime?.() || 0
-      const bTime = b.created_at?.getTime?.() || 0
-      return bTime - aTime
-    })
+    let query = supabase.from('renewal_requests').select('*').order('created_at', { ascending: false })
+    if (status) query = query.eq('status', status)
+    const { data } = await query
+    return (data || []).map(d => mapRenewalRequest(d.id, d))
   }
 
   // ===== Get School Requests =====
@@ -144,38 +89,19 @@ export function useSchoolManagement() {
     error.value = null
 
     try {
-      let q
+      let query = supabase.from('school_requests').select('*').order('submittedAt', { ascending: false })
+      if (status) query = query.eq('status', status)
       
-      if (status) {
-        q = query(
-          collection(db, 'school_requests'),
-          where('status', '==', status),
-          orderBy('submittedAt', 'desc')
-        )
-      } else {
-        q = query(
-          collection(db, 'school_requests'),
-          orderBy('submittedAt', 'desc')
-        )
-      }
-
-      console.log('Fetching school requests with status:', status)
-      const snapshot = await getDocs(q)
-      const requests = []
-
-      console.log('Found', snapshot.size, 'requests')
-
-      snapshot.forEach(doc => {
-        const data = doc.data()
-        console.log('Request:', doc.id, data)
-        requests.push({
-          id: doc.id,
-          ...data,
-          submittedAt: data.submittedAt?.toDate(),
-          reviewedAt: data.reviewedAt?.toDate(),
-          approvedAt: data.approvedAt?.toDate()
-        })
-      })
+      const { data, error: err } = await query
+      if (err) throw err
+      
+      const requests = data.map(d => ({
+        id: d.id,
+        ...d,
+        submittedAt: d.submittedAt ? new Date(d.submittedAt) : null,
+        reviewedAt: d.reviewedAt ? new Date(d.reviewedAt) : null,
+        approvedAt: d.approvedAt ? new Date(d.approvedAt) : null
+      }))
 
       return { success: true, data: requests }
 
@@ -197,12 +123,9 @@ export function useSchoolManagement() {
       if (!requestId) throw new Error('requestId is required')
       if (!superAdminUid) throw new Error('superAdminUid is required')
 
-      // 1. Get request data
-      const requestDoc = await getDoc(doc(db, 'school_requests', requestId))
-      if (!requestDoc.exists()) throw new Error('School request not found in database.')
-      
-      const requestData = requestDoc.data()
-      console.log('Approve processing for:', requestData.schoolName)
+      // 1. Get request
+      const { data: requestData, error: reqErr } = await supabase.from('school_requests').select('*').eq('id', requestId).single()
+      if (reqErr || !requestData) throw new Error('School request not found in database.')
 
       if (requestData.status === SCHOOL_REQUEST_STATUS.APPROVED) {
         throw new Error('This school request has already been approved.')
@@ -215,93 +138,54 @@ export function useSchoolManagement() {
       if (!adminPassword) throw new Error('Admin Password is missing in the registration request data.')
       if (adminPassword.length < 6) throw new Error('Admin Password must be at least 6 characters for security.')
 
-      // 2. Generate / reuse school ID
-      const schoolId = requestData.schoolId || generateSchoolId(requestData.schoolName)
-
-      // 3. Create Auth account using SECONDARY APP (to avoid logging out SuperAdmin)
-      const secondaryApp = getApps().find(a => a.name === 'approval-app') || initializeApp(firebaseConfig, 'approval-app')
-      const secondaryAuth = getAuth(secondaryApp)
-
-      let userCred
-      try {
-        userCred = await createUserWithEmailAndPassword(
-          secondaryAuth,
-          adminEmail,
-          adminPassword
-        )
-      } catch (authError) {
-        if (authError?.code === 'auth/email-already-in-use') {
-          throw new Error('An account with this admin email already exists. Please use a different email.')
-        }
-        throw authError
-      }
-      const newUser = userCred.user
-
-      // Sign out from secondary app immediately to keep auth clean
-      await signOut(secondaryAuth)
-
-      // 4. Create school document in main DB (SuperAdmin is still authed here)
-      const schoolData = {
-        ...SCHOOL_SCHEMA,
-        schoolId: schoolId,
-        schoolName: requestData.schoolName,
-        schoolAddress: requestData.schoolAddress || '',
-        schoolPhone: requestData.schoolPhone || '',
-        schoolEmail: requestData.schoolEmail || '',
-        adminUid: newUser.uid,
-        adminEmail: adminEmail,
-        currentTerm: '2568_1',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        isActive: true,
-        subscriptionStatus: 'active'
-      }
-      await setDoc(doc(db, 'schools', schoolId), schoolData)
-
-      // 5. Create user document
-      const userData = {
-        uid: newUser.uid,
+      // 2. Auth: Create via secondary Supabase client so Superadmin session is not destroyed
+      const adminSupabase = createClient(
+        import.meta.env.VITE_SUPABASE_URL,
+        import.meta.env.VITE_SUPABASE_ANON_KEY,
+        { auth: { persistSession: false, autoRefreshToken: false } }
+      )
+      
+      const { data: authData, error: authError } = await adminSupabase.auth.signUp({
         email: adminEmail,
-        displayName: requestData.contactName,
-        role: USER_ROLES.SCHOOL_ADMIN,
-        schoolId: schoolId,
-        schoolRole: 'admin',
-        isActive: true,
-        createdAt: serverTimestamp()
+        password: adminPassword,
+      })
+      if (authError) throw new Error(authError.message)
+      const newUid = authData.user.id
+
+      // 3. Create school
+      const schoolData = {
+        name: requestData.schoolName,
+        code: 'SCH' + Math.floor(1000 + Math.random() * 9000),
+        is_active: true
       }
-      await setDoc(doc(db, 'users', newUser.uid), userData)
+      const { data: insertedSchool, error: schoolErr } = await supabase.from('schools').insert([schoolData]).select().single()
+      if (schoolErr) throw schoolErr
+      const schoolId = insertedSchool.id
 
-      // 6. Queue Approval Email (Do this BEFORE deleting password from request)
-      await addDoc(collection(db, 'email_queue'), {
-        to: adminEmail,
-        subject: `ยินดีด้วย! โรงเรียน ${requestData.schoolName} ได้รับการอนุมัติเข้าใช้งานแล้ว`,
-        htmlBody: `
-          <h3>การสมัครใช้งานได้รับการอนุมัติ</h3>
-          <p>สวัสดีคุณ ${requestData.contactName},</p>
-          <p>โรงเรียน <b>${requestData.schoolName}</b> ของคุณได้รับการอนุมัติให้ใช้งานระบบ Master-teachtable เรียบร้อยแล้ว</p>
-          <p><b>ข้อมูลการเข้าสู่ระบบ:</b></p>
-          <ul>
-            <li>อีเมล: ${adminEmail}</li>
-            <li>รหัสผ่านชั่วคราว: ${adminPassword}</li>
-          </ul>
-          <p>คุณสามารถเข้าสู่ระบบได้ที่: <a href="https://master-teachtable.web.app/login">https://master-teachtable.web.app/login</a></p>
-          <p><i>* กรุณาเปลี่ยนรหัสผ่านทันทีหลังจากเข้าสู่ระบบครั้งแรก</i></p>
-        `,
-        status: 'pending',
-        createdAt: serverTimestamp()
-      })
+      // 4. Create user
+      const userData = {
+        id: newUid,
+        email: adminEmail,
+        "displayName": requestData.contactName,
+        "firstName": "Admin",
+        "lastName": requestData.schoolName,
+        role: USER_ROLES.SCHOOL_ADMIN,
+        roles: [USER_ROLES.SCHOOL_ADMIN],
+        "schoolId": schoolId,
+        "school_id": schoolId,
+        "isActive": true,
+        is_active: true
+      }
+      await supabase.from('users').insert([userData])
 
-      // 7. Update request status and DELETE password (Final step)
-      await updateDoc(doc(db, 'school_requests', requestId), {
+      // 5. Update request status
+      await supabase.from('school_requests').update({
         status: SCHOOL_REQUEST_STATUS.APPROVED,
-        schoolId: schoolId,
-        reviewedAt: serverTimestamp(),
-        reviewedBy: superAdminUid,
-        approvedAt: serverTimestamp(),
-        adminPassword: deleteField(),
-        approvalToken: deleteField(),
-        tokenCreatedAt: deleteField()
-      })
+        "schoolId": schoolId,
+        "reviewedAt": new Date().toISOString(),
+        "approvedAt": new Date().toISOString(),
+        "adminPassword": null
+      }).eq('id', requestId)
 
       return { success: true, data: { schoolId } }
 
@@ -321,46 +205,46 @@ export function useSchoolManagement() {
 
     try {
       const [schoolsCountResult, requestsCountResult, usersCountResult, activeUsersCountResult, usersSnapshotResult, renewalsResult] = await Promise.allSettled([
-        getCountFromServer(query(collection(db, 'schools'), where('isActive', '==', true))),
-        getCountFromServer(query(collection(db, 'school_requests'), where('status', '==', 'pending'))),
-        getCountFromServer(collection(db, 'users')),
-        getCountFromServer(query(collection(db, 'users'), where('isActive', '==', true))),
-        getDocs(collection(db, 'users')),
+        supabase.from('schools').select('id', { count: 'exact', head: true }).or('isActive.eq.true,is_active.eq.true'),
+        supabase.from('school_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+        supabase.from('users').select('id', { count: 'exact', head: true }),
+        supabase.from('users').select('id', { count: 'exact', head: true }).or('isActive.eq.true,is_active.eq.true'),
+        supabase.from('users').select('*'),
         fetchRenewalRequestsRaw('pending'),
       ])
 
       const warnings = []
 
       const totalSchools = schoolsCountResult.status === 'fulfilled'
-        ? Number(schoolsCountResult.value.data().count || 0)
+        ? Number(schoolsCountResult.value.count || 0)
         : 0
       if (schoolsCountResult.status === 'rejected') {
         warnings.push(`totalSchools: ${schoolsCountResult.reason?.message || 'unknown error'}`)
       }
 
       const pendingRequests = requestsCountResult.status === 'fulfilled'
-        ? Number(requestsCountResult.value.data().count || 0)
+        ? Number(requestsCountResult.value.count || 0)
         : 0
       if (requestsCountResult.status === 'rejected') {
         warnings.push(`pendingRequests: ${requestsCountResult.reason?.message || 'unknown error'}`)
       }
 
       const usersFromSnapshot = usersSnapshotResult.status === 'fulfilled'
-        ? usersSnapshotResult.value.docs.map((snap) => snap.data() || {})
+        ? (usersSnapshotResult.value.data || [])
         : []
 
       const totalUsersFromSnapshot = usersFromSnapshot.length
       const activeUsersFromSnapshot = usersFromSnapshot.filter((u) => u?.isActive === true || u?.is_active === true).length
 
       const totalUsers = usersCountResult.status === 'fulfilled'
-        ? Number(usersCountResult.value.data().count || 0)
+        ? Number(usersCountResult.value.count || 0)
         : totalUsersFromSnapshot
       if (usersCountResult.status === 'rejected') {
         warnings.push(`totalUsers: ${usersCountResult.reason?.message || 'unknown error'}`)
       }
 
       const activeUsers = activeUsersCountResult.status === 'fulfilled'
-        ? Math.max(Number(activeUsersCountResult.value.data().count || 0), activeUsersFromSnapshot)
+        ? Math.max(Number(activeUsersCountResult.value.count || 0), activeUsersFromSnapshot)
         : activeUsersFromSnapshot
       if (activeUsersCountResult.status === 'rejected') {
         warnings.push(`activeUsers: ${activeUsersCountResult.reason?.message || 'unknown error'}`)
@@ -411,34 +295,11 @@ export function useSchoolManagement() {
     error.value = null
 
     try {
-      const requestDoc = await getDoc(doc(db, 'school_requests', requestId))
-      if (!requestDoc.exists()) throw new Error('School request not found')
-      const requestData = requestDoc.data()
-
-      await updateDoc(doc(db, 'school_requests', requestId), {
+      await supabase.from('school_requests').update({
         status: SCHOOL_REQUEST_STATUS.REJECTED,
-        rejectionReason: reason,
-        reviewedAt: serverTimestamp(),
-        reviewedBy: superAdminUid,
-        approvalToken: deleteField(),
-        tokenCreatedAt: deleteField()
-      })
-
-      // Queue Rejection Email
-      await addDoc(collection(db, 'email_queue'), {
-        to: requestData.contactEmail,
-        subject: `แจ้งผลการสมัครใช้งานระบบ Master-teachtable - ${requestData.schoolName}`,
-        htmlBody: `
-          <h3>แจ้งผลการพิจารณาการสมัคร</h3>
-          <p>สวัสดีคุณ ${requestData.contactName},</p>
-          <p>ตามที่ท่านได้ยื่นคำขอสมัครใช้งานสำหรับ <b>${requestData.schoolName}</b></p>
-          <p>ทางทีมงานขอแจ้งให้ทราบว่าคำขอของท่านได้รับการ <b>ปฏิเสธ</b></p>
-          <p><b>สาเหตุ:</b> ${reason}</p>
-          <p>ท่านสามารถสอบถามข้อมูลเพิ่มเติมหรือยื่นเรื่องใหม่ได้หากมีการแก้ไขข้อมูลตามที่แจ้งข้างต้น</p>
-        `,
-        status: 'pending',
-        createdAt: serverTimestamp()
-      })
+        "rejectionReason": reason,
+        "reviewedAt": new Date().toISOString()
+      }).eq('id', requestId)
 
       return { success: true }
 
@@ -456,46 +317,27 @@ export function useSchoolManagement() {
     error.value = null
 
     try {
-      const q = query(
-        collection(db, 'schools'),
-        orderBy('createdAt', 'desc')
-      )
+      const { data: schoolsData, error: err } = await supabase.from('schools').select('*').order('created_at', { ascending: false })
+      if (err) throw err
 
-      const snapshot = await getDocs(q)
-      const schools = []
-
-      const schoolRows = snapshot.docs.map(d => ({
-        id: d.id,
-        ...d.data(),
-        createdAt: d.data().createdAt?.toDate(),
-        updatedAt: d.data().updatedAt?.toDate()
-      }))
-
-      const infoDocs = await Promise.all(
-        schoolRows.map(async (s) => {
-          const infoSnap = await getDoc(doc(db, 'schools', s.id, 'school_info', 'main'))
-          return { schoolId: s.id, data: infoSnap.exists() ? infoSnap.data() : null }
-        })
-      )
-
-      const infoMap = Object.fromEntries(infoDocs.map(x => [x.schoolId, x.data]))
-
-      schoolRows.forEach((s) => {
-        const info = infoMap[s.id] || null
-        const plan = info?.pricing_plan || null
+      const schools = schoolsData.map((s) => {
+        const info = s.settings || {}
+        const plan = info.pricing_plan || null
         const override = Number(info?.scheduler_limit_override || 0)
         const defaultLimit = Number(plan?.scheduler_limit || 0)
-        schools.push({
+        return {
           ...s,
-          feature_flags: info?.feature_flags || {},
+          schoolName: s.name,
+          isActive: s.is_active,
+          createdAt: s.created_at ? new Date(s.created_at) : null,
+          feature_flags: info.feature_flags || {},
           pricing_plan: plan,
-          plan_notice: info?.plan_notice || null,
-          latest_renewal_approval: info?.latest_renewal_approval || null,
+          plan_notice: info.plan_notice || null,
           scheduler_limit_override: override > 0 ? override : null,
           scheduler_limit_effective: override > 0 ? override : defaultLimit,
           limit_source: override > 0 ? 'override' : 'package',
-          schoolInfoUpdatedAt: info?.updated_at?.toDate?.() || null,
-        })
+          schoolInfoUpdatedAt: toDateValue(info?.updated_at),
+        }
       })
 
       return { success: true, data: schools }
@@ -514,15 +356,10 @@ export function useSchoolManagement() {
     error.value = null
 
     try {
-      const schoolDoc = await getDoc(doc(db, 'schools', schoolId))
-      if (!schoolDoc.exists()) {
-        throw new Error('School not found')
-      }
-
-      await updateDoc(doc(db, 'schools', schoolId), {
-        isActive: isActive,
-        updatedAt: serverTimestamp()
-      })
+      const { error: err } = await supabase.from('schools').update({
+        is_active: isActive
+      }).eq('id', schoolId)
+      if (err) throw err
 
       return { success: true }
 
@@ -538,15 +375,12 @@ export function useSchoolManagement() {
     loading.value = true
     error.value = null
     try {
-      let q
-      if (activeOnly) {
-        q = query(collection(db, 'package_catalog'), where('is_active', '==', true), orderBy('sort_order', 'asc'))
-      } else {
-        q = query(collection(db, 'package_catalog'), orderBy('sort_order', 'asc'))
-      }
-      const snap = await getDocs(q)
-      const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-      return { success: true, data }
+      let query = supabase.from('package_catalog').select('*').order('sort_order', { ascending: true })
+      if (activeOnly) query = query.eq('is_active', true)
+      
+      const { data, error: err } = await query
+      if (err) throw err
+      return { success: true, data: data.map(d => ({ ...d, id: d.code })) }
     } catch (err) {
       error.value = err.message
       return { success: false, error: err.message }
@@ -561,21 +395,17 @@ export function useSchoolManagement() {
     try {
       const code = String(data.code || '').trim()
       if (!code) throw new Error('กรุณากรอกรหัสแพ็กเกจ')
-      const docRef = doc(collection(db, 'package_catalog'))
-      await setDoc(docRef, {
+      const { error: err } = await supabase.from('package_catalog').insert([{
         code,
         name: String(data.name || code).trim(),
         monthly_fee: Number(data.monthly_fee || 0),
         scheduler_limit: Number(data.scheduler_limit || 1),
         duration_months: Number(data.duration_months || 1),
         is_active: data.is_active !== false,
-        sort_order: Number(data.sort_order || 99),
-        created_at: serverTimestamp(),
-        created_by: superAdminUid || null,
-        updated_at: serverTimestamp(),
-        updated_by: superAdminUid || null,
-      })
-      return { success: true, id: docRef.id }
+        sort_order: Number(data.sort_order || 99)
+      }])
+      if (err) throw err
+      return { success: true }
     } catch (err) {
       error.value = err.message
       return { success: false, error: err.message }
@@ -589,16 +419,15 @@ export function useSchoolManagement() {
     error.value = null
     try {
       if (!packageId) throw new Error('packageId is required')
-      const payload = {
-        updated_at: serverTimestamp(),
-        updated_by: superAdminUid || null,
-      }
+      const payload = {}
       if (data.name !== undefined) payload.name = String(data.name || '').trim()
       if (data.monthly_fee !== undefined) payload.monthly_fee = Number(data.monthly_fee || 0)
       if (data.scheduler_limit !== undefined) payload.scheduler_limit = Number(data.scheduler_limit || 1)
       if (data.duration_months !== undefined) payload.duration_months = Number(data.duration_months || 1)
       if (data.sort_order !== undefined) payload.sort_order = Number(data.sort_order || 99)
-      await updateDoc(doc(db, 'package_catalog', packageId), payload)
+      
+      const { error: err } = await supabase.from('package_catalog').update(payload).eq('code', packageId)
+      if (err) throw err
       return { success: true }
     } catch (err) {
       error.value = err.message
@@ -613,11 +442,10 @@ export function useSchoolManagement() {
     error.value = null
     try {
       if (!packageId) throw new Error('packageId is required')
-      await updateDoc(doc(db, 'package_catalog', packageId), {
-        is_active: Boolean(isActive),
-        updated_at: serverTimestamp(),
-        updated_by: superAdminUid || null,
-      })
+      const { error: err } = await supabase.from('package_catalog').update({
+        is_active: Boolean(isActive)
+      }).eq('code', packageId)
+      if (err) throw err
       return { success: true }
     } catch (err) {
       error.value = err.message
@@ -638,19 +466,15 @@ export function useSchoolManagement() {
         throw new Error('Invalid plan code')
       }
 
-      const schoolDocRef = doc(db, 'schools', schoolId)
-      const schoolInfoRef = doc(db, 'schools', schoolId, 'school_info', 'main')
-      const [schoolSnap, infoSnap] = await Promise.all([getDoc(schoolDocRef), getDoc(schoolInfoRef)])
-
-      if (!schoolSnap.exists()) {
+      const { data: schoolData, error: schoolErr } = await supabase.from('schools').select('*').eq('id', schoolId).single()
+      if (schoolErr || !schoolData) {
         throw new Error('School not found')
       }
 
-      const info = infoSnap.exists() ? infoSnap.data() : {}
+      const info = schoolData.settings || {}
       const prevPlan = info?.pricing_plan || null
       const prevExpiry = toDateValue(prevPlan?.expires_at)
-      const nextExpiry = resolveNextExpiry(prevExpiry, options)
-      const expiryMode = String(options.expiryMode || 'auto_months')
+      const nextExpiry = resolveNextExpiry(options.planMonths || 1)
 
       const overrideValue = Number(options.schedulerLimitOverride || 0)
       const schedulerLimitOverride = overrideValue > 0 ? overrideValue : null
@@ -663,54 +487,17 @@ export function useSchoolManagement() {
         monthly_fee: displayFee,
         scheduler_limit: selected.scheduler_limit,
         expires_at: nextExpiry,
-        updated_at: serverTimestamp(),
-        updated_by: superAdminUid || null,
       }
 
-      const noticeSuffix = schedulerLimitOverride
-        ? ` (กำหนดเอง ${schedulerLimitOverride} คน)`
-        : ''
-
-      const writePayload = {
-        pricing_plan: pricingPlan,
-        limit_source: schedulerLimitOverride ? 'override' : 'package',
-        plan_notice: {
-          title: 'อัปเดตแพ็กเกจการใช้งาน',
-          message: `แพ็กเกจใหม่ ${displayFee} บาท/เดือน ใช้งานจัดตารางพร้อมกันได้ ${selected.scheduler_limit} คน${noticeSuffix}`,
-          unread: true,
-          updated_at: serverTimestamp(),
-        },
-        updated_at: serverTimestamp(),
-      }
-
+      info.pricing_plan = pricingPlan
       if (schedulerLimitOverride) {
-        writePayload.scheduler_limit_override = schedulerLimitOverride
+        info.scheduler_limit_override = schedulerLimitOverride
       } else {
-        writePayload.scheduler_limit_override = deleteField()
+        delete info.scheduler_limit_override
       }
 
-      await setDoc(schoolInfoRef, writePayload, { merge: true })
-
-      await addDoc(collection(db, 'plan_change_logs'), {
-        schoolId,
-        schoolName: schoolSnap.data()?.schoolName || '',
-        old_plan: prevPlan || null,
-        new_plan: {
-          ...selected,
-          monthly_fee: displayFee,
-          expiry_mode: expiryMode,
-          months: Number(options.planMonths || 0),
-          days: Number(options.planDays || 0),
-          manual_date: options.manualDate || null,
-          scheduler_limit_effective: effectiveLimit,
-          scheduler_limit_override: schedulerLimitOverride,
-          expires_at: nextExpiry,
-        },
-        note: options.note || '',
-        changed_by: superAdminUid || null,
-        changed_at: serverTimestamp(),
-        createdAt: serverTimestamp(),
-      })
+      const { error: updateErr } = await supabase.from('schools').update({ settings: info }).eq('id', schoolId)
+      if (updateErr) throw updateErr
 
       return {
         success: true,
@@ -718,7 +505,6 @@ export function useSchoolManagement() {
           pricing_plan: {
             ...selected,
             monthly_fee: displayFee,
-            expires_at: nextExpiry,
           },
           scheduler_limit_effective: effectiveLimit,
           scheduler_limit_override: schedulerLimitOverride,
@@ -740,24 +526,20 @@ export function useSchoolManagement() {
       if (!schoolId) throw new Error('schoolId is required')
       if (!flags || typeof flags !== 'object') throw new Error('flags object is required')
 
-      const infoRef = doc(db, 'schools', schoolId, 'school_info', 'main')
-      const infoSnap = await getDoc(infoRef)
-      const existing = infoSnap.exists() ? infoSnap.data() : {}
-
-      await setDoc(infoRef, {
-        feature_flags: {
-          ...(existing.feature_flags || {}),
-          ...flags,
-        },
-        updated_at: serverTimestamp(),
-        updated_by: superAdminUid || null,
-      }, { merge: true })
+      const { data: schoolData, error: getErr } = await supabase.from('schools').select('settings').eq('id', schoolId).single()
+      if (getErr) throw getErr
+      
+      const settings = schoolData.settings || {}
+      settings.feature_flags = { ...(settings.feature_flags || {}), ...flags }
+      
+      const { error: updateErr } = await supabase.from('schools').update({ settings }).eq('id', schoolId)
+      if (updateErr) throw updateErr
 
       return {
         success: true,
         data: {
           feature_flags: {
-            ...(existing.feature_flags || {}),
+            ...(settings.feature_flags || {}),
             ...flags,
           }
         }
@@ -794,12 +576,9 @@ export function useSchoolManagement() {
       if (!schoolId) throw new Error('schoolId is required')
       if (!superAdminUid) throw new Error('superAdminUid is required')
 
-      const rootRef = doc(db, 'renewal_requests', requestId)
-      const schoolRef = doc(db, 'schools', schoolId, 'renewal_requests', requestId)
-      const [rootSnap, schoolSnap] = await Promise.all([getDoc(rootRef), getDoc(schoolRef)])
-      const requestData = rootSnap.exists() ? rootSnap.data() : schoolSnap.exists() ? schoolSnap.data() : null
-
-      if (!requestData) throw new Error('Renewal request not found')
+      const { data: requestData, error: reqErr } = await supabase.from('renewal_requests').select('*').eq('id', requestId).single()
+      if (reqErr || !requestData) throw new Error('Renewal request not found')
+      
       if (requestData.status === 'approved') throw new Error('Renewal request has already been approved')
 
       let planCode = String(requestData.plan_code || requestData.current_plan_code || '')
@@ -818,8 +597,13 @@ export function useSchoolManagement() {
 
       // รองรับคำขอใหม่ที่ไม่ส่ง plan_code โดยต่อจากแพ็กเกจปัจจุบันของโรงเรียน
       if (!planCode) {
-        const schoolInfoSnap = await getDoc(doc(db, 'schools', schoolId, 'school_info', 'main'))
-        planCode = String(schoolInfoSnap.data()?.pricing_plan?.code || '')
+        const { data: schoolData, error: schoolErr } = await supabase
+          .from('schools')
+          .select('settings')
+          .eq('id', schoolId)
+          .single()
+        if (schoolErr) throw schoolErr
+        planCode = String(schoolData?.settings?.pricing_plan?.code || '')
       }
 
       if (!planCode) {
@@ -842,52 +626,10 @@ export function useSchoolManagement() {
         throw new Error(result.error || 'Failed to update pricing plan')
       }
 
-      const reviewPayload = {
+      await supabase.from('renewal_requests').update({
         status: 'approved',
-        reviewed_at: serverTimestamp(),
-        reviewed_by: superAdminUid,
-        approved_at: serverTimestamp(),
-        approved_plan_code: planCode,
-        applied_scheduler_limit: schedulerLimitOverride || Number(result.data?.scheduler_limit_effective || 0),
-        applied_calculated_monthly: calculatedMonthly,
-        applied_calculated_total: calculatedTotal,
-        rejection_reason: deleteField(),
-      }
-
-      const schoolInfoPatch = {
-        latest_renewal_approval: {
-          request_id: requestId,
-          renewal_mode: renewalMode,
-          approved_at: serverTimestamp(),
-          approved_by: superAdminUid,
-          months,
-          amount_paid: paidAmount,
-          calculated_monthly: calculatedMonthly,
-          calculated_total: calculatedTotal,
-          calculation_input: calculationInput,
-          scheduler_limit_applied: schedulerLimitOverride || Number(result.data?.scheduler_limit_effective || 0),
-          plan_code: planCode,
-        },
-      }
-
-      await Promise.all([
-        setDoc(rootRef, reviewPayload, { merge: true }),
-        setDoc(schoolRef, reviewPayload, { merge: true }),
-        setDoc(doc(db, 'schools', schoolId, 'school_info', 'main'), schoolInfoPatch, { merge: true }),
-        addDoc(collection(db, 'email_queue'), {
-          to: requestData.contact_email || '',
-          subject: `อนุมัติต่ออายุแพ็กเกจเรียบร้อย - ${requestData.school_name || schoolId}`,
-          htmlBody: `
-            <h3>คำขอต่ออายุได้รับการอนุมัติแล้ว</h3>
-            <p><b>โรงเรียน:</b> ${requestData.school_name || schoolId}</p>
-            <p><b>แพ็กเกจ:</b> ${planCode}</p>
-            <p><b>จำนวนเดือน:</b> ${months}</p>
-            <p>ระบบได้ต่ออายุการใช้งานให้เรียบร้อยแล้ว กรุณาเข้าสู่ระบบเพื่อตรวจสอบอีกครั้ง</p>
-          `,
-          status: 'pending',
-          createdAt: serverTimestamp(),
-        }),
-      ])
+        reviewed_at: new Date().toISOString()
+      }).eq('id', requestId)
 
       return { success: true, data: result.data }
     } catch (err) {
@@ -908,37 +650,11 @@ export function useSchoolManagement() {
       if (!reason || !String(reason).trim()) throw new Error('reason is required')
       if (!superAdminUid) throw new Error('superAdminUid is required')
 
-      const rootRef = doc(db, 'renewal_requests', requestId)
-      const schoolRef = doc(db, 'schools', schoolId, 'renewal_requests', requestId)
-      const [rootSnap, schoolSnap] = await Promise.all([getDoc(rootRef), getDoc(schoolRef)])
-      const requestData = rootSnap.exists() ? rootSnap.data() : schoolSnap.exists() ? schoolSnap.data() : null
-
-      if (!requestData) throw new Error('Renewal request not found')
-
-      const reviewPayload = {
+      await supabase.from('renewal_requests').update({
         status: 'rejected',
-        rejection_reason: String(reason).trim(),
-        reviewed_at: serverTimestamp(),
-        reviewed_by: superAdminUid,
-        approved_at: deleteField(),
-      }
-
-      await Promise.all([
-        setDoc(rootRef, reviewPayload, { merge: true }),
-        setDoc(schoolRef, reviewPayload, { merge: true }),
-        addDoc(collection(db, 'email_queue'), {
-          to: requestData.contact_email || '',
-          subject: `ผลการพิจารณาคำขอต่ออายุ - ${requestData.school_name || schoolId}`,
-          htmlBody: `
-            <h3>คำขอต่ออายุยังไม่ได้รับการอนุมัติ</h3>
-            <p><b>โรงเรียน:</b> ${requestData.school_name || schoolId}</p>
-            <p><b>เหตุผล:</b> ${String(reason).trim()}</p>
-            <p>กรุณาตรวจสอบข้อมูลการโอนเงินและส่งคำขอใหม่อีกครั้ง</p>
-          `,
-          status: 'pending',
-          createdAt: serverTimestamp(),
-        }),
-      ])
+        note: String(reason).trim(),
+        reviewed_at: new Date().toISOString()
+      }).eq('id', requestId)
 
       return { success: true }
     } catch (err) {
@@ -953,12 +669,8 @@ export function useSchoolManagement() {
     loading.value = true
     error.value = null
     try {
-      await deleteDoc(doc(db, 'renewal_requests', requestId))
-      if (schoolId) {
-        try {
-          await deleteDoc(doc(db, 'schools', schoolId, 'renewal_requests', requestId))
-        } catch {}
-      }
+      const { error: err } = await supabase.from('renewal_requests').delete().eq('id', requestId)
+      if (err) throw err
       return { success: true }
     } catch (err) {
       error.value = err.message

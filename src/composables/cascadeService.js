@@ -1,5 +1,5 @@
-import { collection, doc, query, where, getDocs, writeBatch, getDoc } from 'firebase/firestore'
-import { db, getSchoolDb } from '@/firebase/db'
+import { collection, doc, query, where, getDocs, writeBatch, getDoc } from '@/supabase/firestore'
+import { db, getSchoolDb } from '@/supabase/db'
 
 async function commitInChunks(dbInstance, operations) {
   const CHUNK_SIZE = 400

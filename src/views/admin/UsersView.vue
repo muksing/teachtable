@@ -54,6 +54,7 @@
           <template #prefix>🔍</template>
         </el-input>
         <el-select v-model="filterRole" placeholder="ทุกสิทธิ์" clearable style="width:160px">
+          <el-option label="👑 Admin" value="admin" />
           <el-option label="📅 Scheduler" value="scheduler" />
           <el-option label="👨‍🏫 Teacher" value="teacher" />
         </el-select>
@@ -71,7 +72,7 @@
           <el-table-column label="ชื่อ-นามสกุล" min-width="200">
             <template #default="{ row }">
               <div class="flex items-center gap-2">
-                <div class="avatar-circle" :style="`background:${row.user ? getRoleColor(row.user.role) : '#9ca3af'}`">
+                <div class="avatar-circle" :style="`background:${row.user ? getRoleColor(row.user.displayRole || row.user.role) : '#9ca3af'}`">
                   {{ avatarLetter(row) }}
                 </div>
                 <div>
@@ -104,19 +105,19 @@
             <template #default="{ row }">
               <template v-if="row.user">
                 <el-select
-                  v-model="row.user.role"
+                  v-model="row.user.displayRole"
                   size="small"
                   style="width:140px"
                   @change="val => changeRole(row, val)"
                   :loading="row._roleLoading"
-                  :disabled="row.user?.role === 'admin'"
+                  :disabled="row.user?.displayRole === 'admin'"
                 >
-                  <el-option v-if="row.user?.role === 'admin'" label="👑 Admin" value="admin" />
+                  <el-option v-if="row.user?.displayRole === 'admin'" label="👑 Admin" value="admin" />
                   <el-option label="📅 Scheduler" value="scheduler" />
                   <el-option label="👨‍🏫 Teacher" value="teacher" />
                 </el-select>
                 <!-- extra role toggles — เฉพาะ teacher -->
-                <div v-if="row.user.role === 'teacher'" class="mt-1 flex flex-col gap-0.5">
+                <div v-if="row.user.displayRole === 'teacher'" class="mt-1 flex flex-col gap-0.5">
                   <el-checkbox
                     :model-value="hasExtraRole(row.user, 'subject_head')"
                     size="small"
@@ -266,9 +267,13 @@
           <!-- สิทธิ์: แสดงเฉพาะกรณีสร้างบัญชีผู้ดูแล (ไม่ใช่ครู) -->
           <el-form-item v-if="!createTarget" label="สิทธิ์การใช้งาน" prop="role">
             <el-select v-model="createForm.role" class="w-full">
+              <el-option value="admin">
+                <span style="color:#7c3aed;font-weight:600">👑 Admin</span>
+                <span class="text-gray-400 text-xs ml-2">- จัดการทุกเมนูของโรงเรียน</span>
+              </el-option>
               <el-option value="scheduler">
                 <span style="color:#2563eb;font-weight:600">📅 Scheduler</span>
-                <span class="text-gray-400 text-xs ml-2">— วางแผนตารางสอน</span>
+                <span class="text-gray-400 text-xs ml-2">- วางแผนตารางสอน</span>
               </el-option>
               <el-option value="teacher">
                 <span style="color:#059669;font-weight:600">👨‍🏫 Teacher</span>
@@ -323,12 +328,12 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { collection, doc, getDocs, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore'
-import { getSchoolDb, auth } from '@/firebase/db'
-import { getApps, initializeApp } from 'firebase/app'
-import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut } from 'firebase/auth'
+import { collection, doc, getDocs, setDoc, updateDoc, serverTimestamp, query, where } from '@/supabase/firestore'
+import { getSchoolDb, masterDb as rootDb, auth } from '@/supabase/db'
+import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut } from '@/supabase/auth'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
+import { buildRolePayload, normalizeUserAccessRecord, toDisplayRole } from '@/utils/userRoles'
 
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
@@ -338,8 +343,8 @@ const term = () => schoolStore.currentTerm || '2568_1'
 const loading = ref(false)
 const creating = ref(false)
 const resetSending = ref(false)
-const teachers = ref([])   // from Firestore `teachers`
-const users = ref([])      // from Firestore `users`
+const teachers = ref([])   // teacher records for current term
+const users = ref([])      // user records for current school
 
 const search = ref('')
 const filterRole = ref('')
@@ -384,7 +389,7 @@ const PERMISSION_TABLE = [
 
 // ─── Secondary Auth No Longer Needed (Single Project) ─────────────────────
 function getSecondaryAuth() {
-  return auth
+  return getAuth({ name: 'SecondaryUsers' })
 }
 
 // ─── Computed: cross-reference rows ──────────────────────────────────────────
@@ -419,7 +424,7 @@ const filteredRows = computed(() => rows.value.filter(row => {
   }
 
   if (filterRole.value) {
-    if (!user || user.role !== filterRole.value) return false
+    if (!user || (user.displayRole || toDisplayRole(user.role)) !== filterRole.value) return false
   }
 
   if (filterAccount.value === 'linked' && !user) return false
@@ -430,12 +435,12 @@ const filteredRows = computed(() => rows.value.filter(row => {
 
 // ─── Stats ────────────────────────────────────────────────────────────────────
 const linkedCount = computed(() => rows.value.filter(r => r.user).length)
-const adminCount = computed(() => users.value.filter(u => u.role === 'admin').length)
-const schedulerCount = computed(() => users.value.filter(u => u.role === 'scheduler').length)
+const adminCount = computed(() => users.value.filter(u => (u.displayRole || toDisplayRole(u.role)) === 'admin').length)
+const schedulerCount = computed(() => users.value.filter(u => (u.displayRole || toDisplayRole(u.role)) === 'scheduler').length)
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getRoleColor(role) {
-  return { admin: '#7c3aed', scheduler: '#2563eb', teacher: '#059669' }[role] || '#9ca3af'
+  return { admin: '#7c3aed', scheduler: '#2563eb', teacher: '#059669', superadmin: '#dc2626' }[toDisplayRole(role)] || '#9ca3af'
 }
 
 function avatarLetter(row) {
@@ -448,18 +453,25 @@ async function loadData() {
   loading.value = true
   try {
     const db = getSchoolDb()
-    const [teacherSnap, userSnap] = await Promise.all([
+    const currentSchoolId = authStore.schoolId || schoolStore.schoolId
+    const [teacherSnap, usersBySchoolIdSnap, usersByLegacySchoolIdSnap] = await Promise.all([
       getDocs(collection(db, `terms/${term()}/teachers`)),
-      getDocs(collection(db, 'users')),
+      getDocs(query(collection(rootDb, 'users'), where('schoolId', '==', currentSchoolId))),
+      getDocs(query(collection(rootDb, 'users'), where('school_id', '==', currentSchoolId)))
     ])
-    teachers.value = teacherSnap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'th'))
-    users.value = userSnap.docs.map(d => {
-      const data = d.data()
-      if (!Array.isArray(data.roles)) data.roles = data.role ? [data.role] : ['teacher']
-      return { uid: d.id, ...data }
+    teachers.value = teacherSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'th'))
+    const map = new Map()
+    usersBySchoolIdSnap.docs.forEach(d => {
+      const data = normalizeUserAccessRecord({ uid: d.id, ...d.data() })
+      map.set(d.id, { uid: d.id, ...data })
     })
+    usersByLegacySchoolIdSnap.docs.forEach(d => {
+      if (!map.has(d.id)) {
+        const data = normalizeUserAccessRecord({ uid: d.id, ...d.data() })
+        map.set(d.id, { uid: d.id, ...data })
+      }
+    })
+    users.value = Array.from(map.values())
   } catch (e) {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ: ' + e.message)
   } finally {
@@ -470,14 +482,14 @@ async function loadData() {
 onMounted(loadData)
 
 // ─── Open dialogs ─────────────────────────────────────────────────────────────
-function openCreateDialog(teacher) {
+function openCreateDialog(teacher, defaultRole = 'scheduler') {
   createTarget.value = teacher || null
   Object.assign(createForm, {
     // auto-fill email from teacher record if available
     email: teacher?.email || '',
     password: '',
-    // teachers always get 'teacher' role, others default to scheduler
-    role: teacher ? 'teacher' : 'scheduler',
+    // teachers always get 'teacher' role, others use the requested default role
+    role: teacher ? 'teacher' : defaultRole,
     displayName: '',
   })
   showPwd.value = false
@@ -485,7 +497,7 @@ function openCreateDialog(teacher) {
 }
 
 function openAddAdminDialog() {
-  openCreateDialog(null)
+  openCreateDialog(null, 'admin')
 }
 
 function openResetDialog(row) {
@@ -512,14 +524,20 @@ async function handleCreate() {
       : createForm.displayName
 
     const db = getSchoolDb()
-    await setDoc(doc(db, 'users', newUid), {
+    const currentSchoolId = authStore.schoolId || schoolStore.schoolId
+    await setDoc(doc(rootDb, 'users', newUid), {
       uid: newUid,
       email: createForm.email,
       displayName,
-      role: createForm.role,
-      roles: [createForm.role],
+      ...buildRolePayload(createForm.role),
+      schoolId: currentSchoolId,
+      school_id: currentSchoolId,
+      schoolRole: teacher ? 'teacher' : createForm.role,
+      school_role: teacher ? 'teacher' : createForm.role,
       teacher_id: teacher ? teacher.teacher_id : '',
+      teacherId: teacher ? teacher.teacher_id : '',
       is_active: true,
+      isActive: true,
       created_at: serverTimestamp(),
       created_by: authStore.profile?.uid || '',
     })
@@ -544,22 +562,19 @@ async function changeRole(row, newRole) {
   if (!row.user?.uid) return
   row._roleLoading = true
   try {
-    const db = getSchoolDb()
     const currentRoles = Array.isArray(row.user.roles) ? row.user.roles : []
     const extraRoles = currentRoles.filter(r => ['subject_head', 'sub_coordinator'].includes(r))
-    const newRolesArray = [...new Set([newRole, ...extraRoles])]
+    const rolePayload = buildRolePayload([newRole, ...extraRoles])
 
-    await updateDoc(doc(db, 'users', row.user.uid), {
-      role: newRole,
-      roles: newRolesArray,
+    await updateDoc(doc(rootDb, 'users', row.user.uid), {
+      ...rolePayload,
       updated_at: serverTimestamp(),
       updated_by: authStore.profile?.uid || '',
     })
     // update local users array
     const u = users.value.find(u => u.uid === row.user.uid)
     if (u) {
-      u.role = newRole
-      u.roles = newRolesArray
+      Object.assign(u, normalizeUserAccessRecord({ ...u, ...rolePayload }))
     }
     ElMessage.success('อัปเดตสิทธิ์เรียบร้อย')
   } catch (e) {
@@ -583,18 +598,19 @@ async function toggleExtraRole(row, roleName, checked) {
   row._subCoordLoading = true
   try {
     const db = getSchoolDb()
-    const current = Array.isArray(row.user.roles) ? [...row.user.roles] : ['teacher']
+    const current = Array.isArray(row.user.roles) ? [...row.user.roles] : ['school_teacher']
     const base = current.filter(r => !EXTRA_ROLES.includes(r))
     if (!base.includes(row.user.role)) base.push(row.user.role)
     const newRoles = checked
       ? [...new Set([...base, roleName])]
       : base.filter(r => r !== roleName)
-    await updateDoc(doc(db, 'users', row.user.uid), {
-      roles: newRoles,
+    const rolePayload = buildRolePayload(newRoles)
+    await updateDoc(doc(rootDb, 'users', row.user.uid), {
+      ...rolePayload,
       updated_at: serverTimestamp(),
       updated_by: authStore.profile?.uid || '',
     })
-    row.user.roles = newRoles
+    Object.assign(row.user, normalizeUserAccessRecord({ ...row.user, ...rolePayload }))
     const labels = { subject_head:'หัวหน้ากลุ่มสาระ', sub_coordinator:'ผู้จัดสอนแทนรวม' }
     ElMessage.success((checked ? 'เพิ่ม' : 'ยกเลิก') + 'สิทธิ์ ' + (labels[roleName] || roleName))
   } catch (e) {
@@ -610,7 +626,7 @@ async function toggleActive(row, newVal) {
   row._activeLoading = true
   try {
     const db = getSchoolDb()
-    await updateDoc(doc(db, 'users', row.user.uid), {
+    await updateDoc(doc(rootDb, 'users', row.user.uid), {
       is_active: newVal,
       updated_at: serverTimestamp(),
       updated_by: authStore.profile?.uid || '',

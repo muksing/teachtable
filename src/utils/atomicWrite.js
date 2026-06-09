@@ -1,6 +1,6 @@
 // src/utils/atomicWrite.js
-import { writeBatch, doc, serverTimestamp } from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
+import { writeBatch, doc, serverTimestamp } from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
 
 /**
  * Batch Write สำหรับ School DB

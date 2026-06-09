@@ -1,4 +1,4 @@
-import { serverTimestamp } from 'firebase/firestore'
+import { serverTimestamp } from '@/supabase/firestore'
 import { useAuthStore } from '@/stores/auth'
 
 /**

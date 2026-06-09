@@ -2,8 +2,8 @@
 import {
   doc, getDoc, setDoc, updateDoc,
   collection, writeBatch, serverTimestamp
-} from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
+} from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 

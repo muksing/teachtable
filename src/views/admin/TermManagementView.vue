@@ -232,9 +232,9 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import {
   collection, doc, getDocs, setDoc, deleteDoc,
   getDoc, writeBatch, serverTimestamp
-} from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
-import { db as rootDb } from '@/firebase/db'
+} from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
+import { db as rootDb } from '@/supabase/db'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 

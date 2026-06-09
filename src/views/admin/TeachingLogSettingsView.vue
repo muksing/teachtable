@@ -370,9 +370,9 @@
 <script setup>
 import { reactive, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'
+import { doc, getDoc, setDoc, serverTimestamp } from '@/supabase/firestore'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { getSchoolDb } from '@/firebase/db'
+import { getSchoolDb } from '@/supabase/db'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 

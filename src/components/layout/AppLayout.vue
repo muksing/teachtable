@@ -121,14 +121,14 @@ import { ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
-import { useAuth } from '@/composables/useAuth'
-import { USER_ROLES as AUTH_ROLES } from '@/firebase/masterSchema'
+import { useMasterAuth } from '@/composables/useMasterAuth'
+import { USER_ROLES as AUTH_ROLES } from '@/supabase/schema'
 
 const authStore   = useAuthStore()
 const schoolStore = useSchoolStore()
 const router = useRouter()
 const route  = useRoute()
-const { logout } = useAuth()
+const { logout } = useMasterAuth()
 
 const mobileOpen = ref(false)
 const openGroup  = ref('')
@@ -175,6 +175,7 @@ const allGroups = computed(() => {
       items: [
         { to:'/admin/school-settings',   icon:'🏫', bg:'#ede9fe', label:'ข้อมูลโรงเรียน',    sub:'ชื่อ โลโก้ ปีการศึกษา' },
         { to:'/admin/terms',             icon:'📅', bg:'#e0e7ff', label:'จัดการเทอม',         sub:'ภาคเรียน ช่วงเวลา' },
+        { to:'/admin/users',             icon:'👤', bg:'#dbeafe', label:'จัดการสิทธิ์ผู้ใช้',  sub:'บัญชีครู บุคลากร สิทธิ์' },
         { to:'/admin/signatures',        icon:'✍️', bg:'#fce7f3', label:'ตั้งค่าลายเซ็น',     sub:'ผู้ลงนาม ภาพลายเซ็น' },
         { to:'/admin/renewal',           icon:'💳', bg:'#fce7f3', label:'ต่ออายุการใช้งาน',   sub:'ส่งหลักฐานชำระเงิน' },
       ],
@@ -248,7 +249,8 @@ const visibleGroups = computed(() => allGroups.value.filter(g => {
   if (!g.roles || g.roles.length === 0) return true;
   // ต้องใช้ hasAnyRole เพื่อรองรับทั้ง role เก่าและใหม่ (admin/school_admin)
   if (!authStore.hasAnyRole(g.roles)) return false;
-  if (!schoolStore.isViewOnlyMode || authStore.isSuperAdmin) return true;
+  // school_admin และ superadmin เห็นได้ทุก group แม้ subscription หมดอายุ
+  if (!schoolStore.isViewOnlyMode || authStore.isAdmin) return true;
   return g.items.some(i => isAllowedWhenViewOnly(i));
 }))
 
@@ -269,7 +271,8 @@ function isSchedulerRole() {
 
 function itemVisible(item) {
   if (!item) return false;
-  if (schoolStore.isViewOnlyMode && !authStore.isSuperAdmin && !isAllowedWhenViewOnly(item)) {
+  // school_admin และ superadmin เห็นได้ทุก item แม้ subscription หมดอายุ
+  if (schoolStore.isViewOnlyMode && !authStore.isAdmin && !isAllowedWhenViewOnly(item)) {
     return false;
   }
   if (schoolStore.isTimetableLocked && !authStore.isAdmin && isDeniedByTimetableLock(item)) {
@@ -281,13 +284,13 @@ function itemVisible(item) {
     }
   }
   if (item.roles) return authStore.hasAnyRole(item.roles);
-  if (item.adminOnly) return authStore.hasAnyRole([AUTH_ROLES.ADMIN, AUTH_ROLES.SUPERADMIN]);
+  if (item.adminOnly) return authStore.hasAnyRole([AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN]);
   return true;
 }
 
 // auto-open group ที่มี route ปัจจุบัน
 function findGroupByRoute(path) {
-  return visibleGroups.value.find(g => g.items.some(i => path.startsWith(i.to)))?.key || ''
+  return visibleGroups.value.find(g => g.items.some(i => i?.to && path.startsWith(i.to)))?.key || ''
 }
 openGroup.value = findGroupByRoute(route.path)
 watch(() => route.path, (p) => {

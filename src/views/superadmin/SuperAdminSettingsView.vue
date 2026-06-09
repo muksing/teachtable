@@ -137,38 +137,40 @@
       </div>
     </el-card>
 
-    <el-card class="settings-card firebase-card">
+    <el-card class="settings-card backend-card">
       <template #header>
         <div class="card-header">
           <el-icon class="card-icon"><CircleCheck /></el-icon>
-          <span>Firebase Configuration</span>
+          <span>Backend Configuration</span>
         </div>
       </template>
 
       <div class="config-grid">
         <div class="config-item">
-          <span class="config-label">Project ID</span>
-          <span class="config-value">master-teachtable</span>
+          <span class="config-label">Backend</span>
+          <span class="config-value">
+            <el-tag type="primary" effect="light">Supabase</el-tag>
+          </span>
         </div>
 
         <div class="config-item">
           <span class="config-label">Database</span>
           <span class="config-value">
-            <el-tag type="primary" effect="light">Firestore</el-tag>
+            <el-tag type="primary" effect="light">PostgreSQL</el-tag>
           </span>
         </div>
 
         <div class="config-item">
           <span class="config-label">Authentication</span>
           <span class="config-value">
-            <el-tag type="info" effect="light">Firebase Auth</el-tag>
+            <el-tag type="info" effect="light">Supabase Auth</el-tag>
           </span>
         </div>
 
         <div class="config-item">
           <span class="config-label">Storage</span>
           <span class="config-value">
-            <el-tag type="success" effect="light">Cloud Storage</el-tag>
+            <el-tag type="success" effect="light">Supabase Storage</el-tag>
           </span>
         </div>
       </div>
@@ -182,7 +184,7 @@
         class="config-alert"
       >
         <template #default>
-          Firebase project is properly configured for multi-tenant operations. All collections are prefixed with school IDs for complete data isolation and security.
+          The backend is configured for multi-tenant operations. All school data is separated by school ID for isolation and security.
         </template>
       </el-alert>
     </el-card>
@@ -337,7 +339,7 @@ onMounted(() => {
   border-bottom-color: #e0e7ff;
 }
 
-.firebase-card :deep(.el-card__header) {
+.backend-card :deep(.el-card__header) {
   border-bottom-color: #dbeafe;
 }
 

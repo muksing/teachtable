@@ -3,8 +3,8 @@
 // Algorithm: Pre-lock → Most Constrained First → Double Period First → Greedy + Retry → AI Mode
 
 import { ref } from 'vue'
-import { collection, doc, getDocs, query, where, serverTimestamp, writeBatch } from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
+import { collection, doc, getDocs, query, where, serverTimestamp, writeBatch } from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 import { useQuotaTracking, calculateScheduleQuota } from '@/composables/useQuotaTracking'

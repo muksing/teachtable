@@ -354,13 +354,13 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore'
+import { doc, setDoc, serverTimestamp } from '@/supabase/firestore'
 import { useRouter } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
-import { getSchoolDb } from '@/firebase/db'
+import { getSchoolDb } from '@/supabase/db'
 
 const router     = useRouter()
 const authStore  = useAuthStore()

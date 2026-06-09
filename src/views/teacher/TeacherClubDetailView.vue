@@ -314,8 +314,8 @@ import * as XLSX from 'xlsx'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import {
   doc, getDoc, updateDoc, deleteField, serverTimestamp, writeBatch
-} from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
+} from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolDb } from '@/composables/useSchoolDb'

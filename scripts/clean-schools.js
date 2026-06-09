@@ -1,8 +1,8 @@
 /**
- * scripts/clean-users.mjs
- * ลบ school_admin users ออกจาก Supabase Auth + firestore_documents
+ * scripts/clean-schools.js
+ * ลบ school_admin users และข้อมูลโรงเรียนออกจาก Supabase
  *
- * รัน: node scripts/clean-users.mjs
+ * รัน: node scripts/clean-schools.js
  * ตัวเลือก:
  *   --dry-run   แสดงรายการแต่ไม่ลบจริง
  */
@@ -16,7 +16,7 @@ async function main() {
   console.log('=== ลบ school_admin users ===\n')
   if (DRY_RUN) console.log('(dry-run mode — ไม่ลบจริง)\n')
 
-  // ดึง users จาก firestore_documents
+  // ดึง users ที่เป็น school_admin จาก firestore_documents
   const { data: userDocs, error: fetchErr } = await supabase
     .from('firestore_documents')
     .select('path,id,data')
@@ -31,9 +31,9 @@ async function main() {
     process.exit(0)
   }
 
-  console.log(`พบ ${admins.length} accounts:\n`)
+  console.log(`พบ ${admins.length} school_admin accounts:\n`)
   for (const u of admins) {
-    console.log(`  - ${u.data?.email || u.id} (UID: ${u.id})`)
+    console.log(`  - ${u.data?.email || u.id} (path: ${u.path})`)
   }
 
   if (DRY_RUN) {
@@ -43,26 +43,28 @@ async function main() {
 
   // ลบ firestore_documents records
   const paths = admins.map(u => u.path)
-  const { error: delDocErr } = await supabase
+  const { error: delErr } = await supabase
     .from('firestore_documents')
     .delete()
     .in('path', paths)
 
-  if (delDocErr) throw delDocErr
-  console.log(`\n✅ ลบ DB records เรียบร้อย ${admins.length} รายการ`)
+  if (delErr) throw delErr
+
+  console.log(`\n✅ ลบ Supabase DB records เรียบร้อย ${admins.length} รายการ`)
 
   // ลบ Supabase Auth accounts
   let authDeleted = 0
   for (const u of admins) {
-    const { error } = await supabase.auth.admin.deleteUser(u.id)
+    const uid = u.id
+    const { error } = await supabase.auth.admin.deleteUser(uid)
     if (error) {
-      console.warn(`  ⚠️ ลบ Auth ไม่ได้: ${u.id} — ${error.message}`)
+      console.warn(`  ⚠️ ลบ Auth ไม่ได้: ${uid} — ${error.message}`)
     } else {
       authDeleted++
     }
   }
 
-  console.log(`✅ ลบ Auth accounts ${authDeleted}/${admins.length} รายการ`)
+  console.log(`✅ ลบ Supabase Auth accounts ${authDeleted}/${admins.length} รายการ`)
   console.log('\n=== เรียบร้อย ===')
   process.exit(0)
 }

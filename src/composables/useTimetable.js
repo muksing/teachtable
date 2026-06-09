@@ -4,8 +4,8 @@ import { ref, computed } from 'vue'
 import {
   collection, doc, getDocs, setDoc, deleteDoc,
   writeBatch, query, where, serverTimestamp
-} from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
+} from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 

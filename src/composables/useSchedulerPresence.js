@@ -1,5 +1,5 @@
-import { collection, doc, getDocs, query, serverTimestamp, setDoc, deleteDoc } from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
+import { collection, doc, getDocs, query, serverTimestamp, setDoc, deleteDoc } from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
 import { useAuthStore } from '@/stores/auth'
 
 const HEARTBEAT_MS = 30000

@@ -2,8 +2,8 @@
 // ระบบติดตามการใช้ Quota ของการจัดตารางอัตโนมัติ
 
 import { ref } from 'vue'
-import { collection, doc, getDoc, getDocs, setDoc, query, orderBy, serverTimestamp, addDoc } from 'firebase/firestore'
-import { getSchoolDb } from '@/firebase/db'
+import { collection, doc, getDoc, getDocs, setDoc, query, orderBy, serverTimestamp, addDoc } from '@/supabase/firestore'
+import { getSchoolDb } from '@/supabase/db'
 import { useSchoolStore } from '@/stores/school'
 
 /**
@@ -61,7 +61,7 @@ export const QUOTA_SUMMARY_SCHEMA = {
 
 export function useQuotaTracking() {
   const schoolStore = useSchoolStore()
-  const schoolId = () => schoolStore.schoolId
+  const schoolId = () => useAuthStore().schoolId
   const db = () => getSchoolDb()
 
   const loading = ref(false)

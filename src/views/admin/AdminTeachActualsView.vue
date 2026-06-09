@@ -101,8 +101,8 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { getSchoolDb } from '@/firebase/db'
-import { collection, query, where, getDocs, deleteDoc, doc, writeBatch } from 'firebase/firestore'
+import { getSchoolDb } from '@/supabase/db'
+import { collection, query, where, getDocs, deleteDoc, doc, writeBatch } from '@/supabase/firestore'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 

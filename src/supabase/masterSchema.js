@@ -1,4 +1,4 @@
-// src/firebase/masterSchema.js
+// src/supabase/masterSchema.js
 // ===== Master-teachtable Firestore Schema =====
 
 /**

@@ -304,11 +304,11 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { doc, getDoc } from 'firebase/firestore'
+import { doc, getDoc } from '@/supabase/firestore'
 import * as XLSX from 'xlsx'
 import html2pdf from 'html2pdf.js'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { getSchoolDb } from '@/firebase/db'
+import { getSchoolDb } from '@/supabase/db'
 import { useSchoolStore } from '@/stores/school'
 
 const schoolStore = useSchoolStore()
