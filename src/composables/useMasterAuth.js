@@ -77,7 +77,13 @@ export function useMasterAuth() {
     error.value = null
 
     try {
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password })
+      const authResult = await Promise.race([
+        supabase.auth.signInWithPassword({ email, password }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('การเชื่อมต่อหมดเวลา กรุณาตรวจสอบการตั้งค่า Supabase')), 15000)
+        ),
+      ])
+      const { data: authData, error: authError } = authResult
       if (authError) throw authError
 
       const uid = authData.user.id
