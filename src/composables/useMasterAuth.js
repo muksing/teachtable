@@ -77,13 +77,7 @@ export function useMasterAuth() {
     error.value = null
 
     try {
-      const authResult = await Promise.race([
-        supabase.auth.signInWithPassword({ email, password }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('การเชื่อมต่อหมดเวลา กรุณาตรวจสอบการตั้งค่า Supabase')), 15000)
-        ),
-      ])
-      const { data: authData, error: authError } = authResult
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password })
       if (authError) throw authError
 
       const uid = authData.user.id
@@ -92,10 +86,10 @@ export function useMasterAuth() {
       const isSuperAdmin = normalizedUser.roles.includes(USER_ROLES.SUPERADMIN)
 
       if (!isSuperAdmin) {
-        if (!userSchoolId) throw new Error('Not a school user')
+        if (!userSchoolId) throw new Error('ไม่พบโรงเรียนที่สังกัด กรุณาติดต่อผู้ดูแลระบบ')
         const { data: schoolDoc } = await supabase.from('schools').select('*').eq('id', userSchoolId).single()
         if (!schoolDoc || schoolDoc.is_active === false) {
-          throw new Error('School is not active')
+          throw new Error('โรงเรียนนี้ยังไม่ได้เปิดใช้งาน กรุณาติดต่อผู้ดูแลระบบ')
         }
       }
 
@@ -109,7 +103,7 @@ export function useMasterAuth() {
       return { success: true }
     } catch (err) {
       error.value = err.message
-      await supabase.auth.signOut()
+      supabase.auth.signOut().catch(() => {})
       return { success: false, error: err.message }
     } finally {
       loading.value = false
