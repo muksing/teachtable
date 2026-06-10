@@ -13,15 +13,15 @@
         </div>
       </div>
 
-      <div v-if="!slots.length && !loading" class="publish-source-banner publish-source-warn mb-5">
+      <div v-if="!subjectSlotCount && !loading" class="publish-source-banner publish-source-warn mb-5">
         <div class="publish-source-title">⚠️ ยังไม่มีข้อมูลตารางสอน</div>
         <div class="publish-source-text">จัดตารางสอนในหน้า "จัดตารางสอน" ก่อนแล้วค่อยพิมพ์</div>
       </div>
-      <div v-else-if="slots.length" class="publish-source-banner publish-source-ok mb-5">
+      <div v-else-if="subjectSlotCount" class="publish-source-banner publish-source-ok mb-5">
         <div class="publish-source-title">✅ ข้อมูลจากตารางสอนปัจจุบัน</div>
         <div class="publish-source-text">
           <span class="publish-chip">ภาคเรียน: {{ term }}</span>
-          <span class="publish-chip">{{ slots.length }} คาบ / {{ classes.length }} ห้อง / {{ teachers.length }} ครู</span>
+          <span class="publish-chip">{{ subjectSlotCount }} คาบ / {{ classes.length }} ห้อง / {{ teachers.length }} ครู</span>
         </div>
       </div>
 
@@ -285,6 +285,8 @@ const totalPages = computed(() =>
   selectedClasses.value.length + selectedTeachers.value.length + selectedLabs.value.length
 )
 
+const subjectSlotCount = computed(() => slots.value.filter(s => s.type === 'subject').length)
+
 // ── ระดับชั้น ──────────────────────────────────────────────────────────
 // ดึง level จาก c.level (field จากระบบ) หรือ fallback parse จาก class_id
 function getClassLevel(c) {
@@ -373,15 +375,14 @@ async function loadData() {
         .select('*')
         .eq('school_id', schoolId)
         .eq('term_id', t)
-        .eq('slot_type', 'subject')
-        .not('class_id', 'is', null),
+        .not('class_id', 'is', null),  // ดึงทุก slot_type (subject + activity + manual_lock)
     ])
     if (slotErr) throw slotErr
 
     classes.value = classData.sort((a, b) => (a.class_id || '').localeCompare(b.class_id || '', 'th'))
     teachers.value = teacherData.sort((a, b) => (a.teacher_id || '').localeCompare(b.teacher_id || ''))
 
-    // Map DB columns → format ที่ component ใช้งาน
+    // กรองออก synthetic supervisor slots (__teacher_xxx, __room_xxx)
     const rawSlots = (slotData || []).filter(row => !String(row.class_id || '').startsWith('__'))
     slots.value = rawSlots.map(row => ({
       ...row,
@@ -393,9 +394,15 @@ async function loadData() {
       is_coteach:     false,
     }))
 
-    // Labs = room IDs ที่มี slot จริง
-    const occupiedRoomIds = new Set(slots.value.map(s => s.preferred_room).filter(Boolean))
+    // Labs = room IDs จาก subject slots เท่านั้น
+    const occupiedRoomIds = new Set(
+      slots.value.filter(s => s.type === 'subject').map(s => s.preferred_room).filter(Boolean)
+    )
     labs.value = [...occupiedRoomIds].sort((a, b) => a.localeCompare(b, 'th'))
+
+    // banner: นับเฉพาะ subject slots
+    const subjectCount = slots.value.filter(s => s.type === 'subject').length
+    if (!subjectCount) ElMessage.warning('ยังไม่มีคาบวิชา — จัดตารางสอนก่อนแล้วค่อยพิมพ์')
   } catch (e) {
     ElMessage.error('โหลดข้อมูลล้มเหลว: ' + e.message)
   } finally {
@@ -732,35 +739,28 @@ async function exportPDF(section) {
   `
   document.body.appendChild(container)
 
-  // แบ่ง batch ทุก BATCH_SIZE หน้า → ป้องกัน heap overflow
-  const BATCH_SIZE = 15
-  const batches = []
-  for (let b = 0; b < items.length; b += BATCH_SIZE) {
-    batches.push(items.slice(b, b + BATCH_SIZE))
-  }
-
   try {
     await document.fonts.ready
 
-    let fileCount = 0
+    // สร้าง PDF เดียว รวมทุกหน้า
+    const pdf = new jsPDF({
+      unit: 'mm',
+      format: 'a4',
+      orientation: isPortrait ? 'portrait' : 'landscape',
+    })
 
-    for (const batch of batches) {
-      fileCount++
-      const batchLabel = batches.length > 1 ? `_ชุด${fileCount}` : ''
+    // Render ทีละ BATCH_SIZE เพื่อป้องกัน heap overflow แต่ใส่ใน PDF เดียว
+    const BATCH_SIZE = 10
+    let pageIndex = 0
 
-      const pdf = new jsPDF({
-        unit: 'mm',
-        format: 'a4',
-        orientation: isPortrait ? 'portrait' : 'landscape',
-      })
+    for (let b = 0; b < items.length; b += BATCH_SIZE) {
+      const batch = items.slice(b, b + BATCH_SIZE)
 
       for (let i = 0; i < batch.length; i++) {
         const { id, type } = batch[i]
-        const globalIdx = (fileCount - 1) * BATCH_SIZE + i + 1
+        pageIndex++
 
-        progressEl.textContent =
-          `หน้า ${globalIdx}/${items.length} (${id})` +
-          (batches.length > 1 ? ` — ไฟล์ ${fileCount}/${batches.length}` : '')
+        progressEl.textContent = `หน้า ${pageIndex}/${items.length} (${id})`
 
         container.innerHTML = buildPageHTML(id, type)
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
@@ -769,7 +769,7 @@ async function exportPDF(section) {
         if (!el) continue
 
         const canvas = await html2canvas(el, {
-          scale: 1.5,           // ลดจาก 2 → 1.5: ลด memory ~44% ยังคมสำหรับพิมพ์
+          scale: 1.5,
           useCORS: true,
           allowTaint: true,
           logging: false,
@@ -780,28 +780,23 @@ async function exportPDF(section) {
         })
 
         const imgData = canvas.toDataURL('image/jpeg', 0.92)
-        // clamp ≤ pH เพื่อป้องกันหน้าเปล่าจาก sub-pixel overflow (min-height ทำให้ div = A4 พอดี)
         const imgH = Math.min((canvas.height / canvas.width) * pW, pH)
 
-        // ── คืน memory ทันทีหลัง toDataURL ──
+        // คืน memory canvas ทันทีหลัง encode
         canvas.width  = 0
         canvas.height = 0
 
-        if (i > 0) pdf.addPage([pW, pH], isPortrait ? 'portrait' : 'landscape')
+        if (pageIndex > 1) pdf.addPage([pW, pH], isPortrait ? 'portrait' : 'landscape')
         pdf.addImage(imgData, 'JPEG', 0, 0, pW, imgH)
       }
 
-      const filename = `timetable_${section}${batchLabel}.pdf`
-      pdf.save(filename)
-
-      // คืน memory ของ jsPDF object ก่อนสร้างชุดถัดไป
-      await new Promise(r => setTimeout(r, 300))
+      // หยุดสั้นๆ ระหว่าง batch ให้ browser GC ทำงาน
+      if (b + BATCH_SIZE < items.length) await new Promise(r => setTimeout(r, 200))
     }
 
-    const msg = batches.length > 1
-      ? `✅ สร้าง PDF ${batches.length} ไฟล์ (รวม ${items.length} หน้า) เรียบร้อย`
-      : `✅ PDF ${items.length} หน้า เรียบร้อย`
-    ElMessage.success(msg)
+    const termLabel = term.value || 'timetable'
+    pdf.save(`ตารางสอน_${section}_${termLabel}.pdf`)
+    ElMessage.success(`✅ PDF รวม ${items.length} หน้า — ดาวน์โหลดเรียบร้อย`)
 
   } catch (e) {
     console.error(e)
