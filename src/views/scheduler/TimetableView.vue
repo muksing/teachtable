@@ -1047,24 +1047,26 @@ onMounted(async () => {
     window.addEventListener('beforeunload', onBeforeUnload)
   }
 
-  // Start real-time subscription first
-  rt.subscribe()
-
-  const [c, t, r] = await Promise.all([getClasses(), getTeachers(), loadRoomMasterIds()])
+  // โหลดข้อมูลตารางสอน + ภาระงาน + ครู/ห้อง พร้อมกัน
+  const [c, tArr, r] = await Promise.all([getClasses(), getTeachers(), loadRoomMasterIds()])
   classes.value = c
-  teachers.value = t
+  teachers.value = tArr
   roomMasterIds.value = r
+
+  // await subscribe เพื่อให้ timetableSlots โหลดเสร็จก่อนตรวจ
+  await rt.subscribe()
   await loadAssignmentsWithProgress()
 
   // Auto-select first items so tables are never blank on first load
   if (!selectedClass.value   && c.length)  selectedClass.value   = c[0].class_id
-  if (!selectedTeacher.value && t.length)  selectedTeacher.value = t[0].teacher_id
+  if (!selectedTeacher.value && tArr.length)  selectedTeacher.value = tArr[0].teacher_id
 
   // Auto-select first room after a tick (computed roomList needs timetableSlots)
   if (!selectedRoom.value && roomList.value.length) selectedRoom.value = roomList.value[0]
 
-  // ถ้าตารางว่างเปล่า (ยังไม่เคยจัด) → แสดง workflow ขั้น 1 ทันที
-  if (rt.timetableSlots.value.length === 0 && assignments.value.length > 0) {
+  // แสดง workflow ก็ต่อเมื่อตารางว่างจริง (ไม่มี subject slot เลย) และมีภาระงานรอจัด
+  const hasSubjectSlots = rt.timetableSlots.value.some(s => s.type === 'subject' || s.slot_type === 'subject')
+  if (!hasSubjectSlots && assignments.value.length > 0) {
     workflowStep.value = '1'
   }
 
@@ -1332,16 +1334,24 @@ async function doApplyAllActivities() {
       })
     })
 
+    // deduplicate: กันกรณีกิจกรรมซ้อนกัน → ON CONFLICT error
+    const dedupMap = new Map()
+    payloads.forEach(p => {
+      const key = `${p.class_id}_${p.day_of_week}_${p.period_number}`
+      dedupMap.set(key, p)
+    })
+    const uniquePayloads = Array.from(dedupMap.values())
+
     const CHUNK = 400
-    for (let i = 0; i < payloads.length; i += CHUNK) {
+    for (let i = 0; i < uniquePayloads.length; i += CHUNK) {
       const { error } = await supabase
         .from('timetable_slots')
-        .upsert(payloads.slice(i, i + CHUNK), { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+        .upsert(uniquePayloads.slice(i, i + CHUNK), { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
       if (error) throw error
     }
 
     workflowStep.value = '2'
-    ElMessage.success(`✅ ลงกิจกรรม ${payloads.length} คาบ (${acts.length} กิจกรรม) เรียบร้อย — กดปุ่ม ② ครูคุม`)
+    ElMessage.success(`✅ ลงกิจกรรม ${uniquePayloads.length} คาบ (${acts.length} กิจกรรม) เรียบร้อย — กดปุ่ม ② ครูคุม`)
   } catch (e) {
     ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
   } finally {
@@ -1357,13 +1367,15 @@ async function doApplySupervisions() {
     const t = term()
     const [{ data: actData, error: actErr }, { data: supData, error: supErr }] = await Promise.all([
       supabase.from('activity_bookings').select('*').eq('school_id', schoolId).eq('term_id', t),
-      supabase.from('activity_supervisions').select('*').eq('school_id', schoolId).eq('term_id', t),
+      supabase.from('activity_supervisions').select('*'),  // ไม่มี school_id column
     ])
     if (actErr) throw actErr
     if (supErr) throw supErr
 
     const acts = actData || []
-    const checkedSups = (supData || []).filter(s => s.teacher_id)
+    // กรองเฉพาะ supervision ของกิจกรรมในโรงเรียน/ภาคเรียนนี้
+    const actIds = new Set(acts.map(a => String(a.act_id || a.id)))
+    const checkedSups = (supData || []).filter(s => s.teacher_id && actIds.has(String(s.act_id)))
     if (!checkedSups.length) { ElMessage.warning('ยังไม่มีครูคุมกิจกรรม — กำหนดครูคุมในหน้า ActivityBooking ก่อน'); return }
 
     const payloads = []
