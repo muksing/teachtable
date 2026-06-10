@@ -317,6 +317,17 @@
               🤖 จัด AI
             </el-button>
 
+            <!-- Export / Import — SchoolAdmin only -->
+            <template v-if="authStore.isAdmin">
+              <input ref="importFileRef" type="file" accept=".json" class="hidden" @change="handleImportFile" />
+              <el-button size="small" plain @click="exportTimetable" title="ส่งออกตารางสอนเป็นไฟล์ JSON สำรอง">
+                📤 ส่งออก
+              </el-button>
+              <el-button size="small" plain @click="importFileRef?.click()" title="นำเข้าตารางสอนจากไฟล์ JSON ที่สำรองไว้">
+                📥 นำเข้า
+              </el-button>
+            </template>
+
             <!-- Clear All button — SchoolAdmin only -->
             <el-button v-if="!isLocked && authStore.isAdmin" type="danger" size="small" plain @click="handleClearAll">
               🗑️ ล้างตาราง
@@ -805,6 +816,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
+import * as XLSX from 'xlsx'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { supabase } from '@/supabase/client'
 import { useTimetable } from '@/composables/useTimetable'
@@ -897,6 +909,9 @@ const cardSortBy = ref('class')
 
 // Workflow: null = normal edit, '1' = post-clear (show activity btn), '2' = show supervision btn
 const workflowStep = ref(null)
+
+// Import file input ref
+const importFileRef = ref(null)
 
 // Workflow loading: '1' = applying activities, '2' = applying supervisions
 const workflowLoading = ref('')
@@ -2238,6 +2253,100 @@ async function handleClearAuto() {
     await loadAssignmentsWithProgress()
   } catch (e) {
     ElMessage.error(e.message)
+  }
+}
+
+// ===== Export / Import =====
+async function exportTimetable() {
+  const schoolId = authStore.schoolId
+  const t = term()
+  const { data, error } = await supabase
+    .from('timetable_slots')
+    .select('*')
+    .eq('school_id', schoolId)
+    .eq('term_id', t)
+  if (error) { ElMessage.error('ส่งออกล้มเหลว: ' + error.message); return }
+  if (!data?.length) { ElMessage.warning('ไม่มีข้อมูลตารางสอนที่จะส่งออก'); return }
+
+  const payload = {
+    version: 1,
+    school_id: schoolId,
+    term_id: t,
+    exported_at: new Date().toISOString(),
+    slots: data,
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `timetable_${t}_${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+  ElMessage.success(`ส่งออก ${data.length} slot เรียบร้อย`)
+}
+
+async function handleImportFile(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  event.target.value = ''
+
+  let payload
+  try {
+    const text = await file.text()
+    payload = JSON.parse(text)
+  } catch {
+    ElMessage.error('ไฟล์ไม่ถูกต้อง — ต้องเป็น JSON ที่ส่งออกจากระบบนี้')
+    return
+  }
+
+  const slots = payload.slots || (Array.isArray(payload) ? payload : null)
+  if (!slots?.length) { ElMessage.error('ไม่พบข้อมูล slot ในไฟล์'); return }
+
+  const srcTerm = payload.term_id || '?'
+  try {
+    await ElMessageBox.confirm(
+      `นำเข้าตารางสอน ${slots.length} slot จากไฟล์ "${file.name}"\n(ภาคเรียน: ${srcTerm})\n\nตารางสอนปัจจุบันจะถูกแทนที่ทั้งหมด — ยืนยัน?`,
+      'นำเข้าตารางสอน',
+      { type: 'warning', confirmButtonText: 'นำเข้า', cancelButtonText: 'ยกเลิก' }
+    )
+  } catch { return }
+
+  try {
+    const schoolId = authStore.schoolId
+    const t = term()
+
+    // Delete current slots
+    const { error: delErr } = await supabase
+      .from('timetable_slots').delete()
+      .eq('school_id', schoolId).eq('term_id', t)
+    if (delErr) throw delErr
+
+    // Prepare: strip auto-generated columns, force current school/term
+    const importSlots = slots.map(({ id, created_at, updated_at, ...rest }) => ({
+      ...rest,
+      school_id: schoolId,
+      term_id: t,
+    }))
+
+    const CHUNK = 400
+    for (let i = 0; i < importSlots.length; i += CHUNK) {
+      const { error } = await supabase.from('timetable_slots').insert(importSlots.slice(i, i + CHUNK))
+      if (error) throw error
+    }
+
+    // Reload state
+    await rt.subscribe()
+    await loadAssignmentsWithProgress()
+
+    // Re-detect workflow step
+    const allSlots = rt.timetableSlots.value
+    const hasAct = allSlots.some(s => (s.slot_type === 'activity' || s.type === 'activity') && s.class_id && !String(s.class_id).startsWith('__'))
+    const hasSup = allSlots.some(s => (s.slot_type === 'activity' || s.type === 'activity') && String(s.class_id || '').startsWith('__'))
+    workflowStep.value = (hasAct && hasSup) ? null : (hasAct ? '2' : '1')
+
+    ElMessage.success(`นำเข้าตารางสอน ${importSlots.length} slot เรียบร้อย`)
+  } catch (e) {
+    ElMessage.error('นำเข้าล้มเหลว: ' + e.message)
   }
 }
 
