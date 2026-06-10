@@ -3,11 +3,10 @@
     <div class="my-timetable-page">
       <div class="header-card">
         <h1 class="title">ตารางสอนของฉัน</h1>
-        <p class="subtitle">อ่านจากตารางที่เผยแพร่ล่าสุดของโรงเรียน</p>
+        <p class="subtitle">ตารางสอนสำหรับภาคเรียนปัจจุบัน</p>
         <div class="meta-row">
           <span v-if="currentTerm" class="meta-chip">ภาคเรียน: {{ currentTerm }}</span>
-          <span v-if="publishVersion" class="meta-chip">เวอร์ชัน: {{ publishVersion }}</span>
-          <span v-if="publishAtLabel" class="meta-chip">เผยแพร่เมื่อ: {{ publishAtLabel }}</span>
+          <span v-if="isLocked" class="meta-chip" style="background:#d1fae5;color:#065f46;">✅ จัดตารางเสร็จแล้ว</span>
         </div>
       </div>
 
@@ -23,9 +22,9 @@
         <p>กำลังโหลดตารางสอน...</p>
       </div>
 
-      <div v-else-if="publishedMissing" class="state-card warning">
-        <h2>Admin ยังไม่ได้ Publish</h2>
-        <p>{{ publishedMissingText }}</p>
+      <div v-else-if="!isLocked" class="state-card warning">
+        <h2>🕐 อยู่ระหว่างจัดตารางสอน</h2>
+        <p>Admin กำลังดำเนินการจัดตารางสอน — จะแสดงตารางของคุณเมื่อจัดเสร็จแล้ว</p>
       </div>
 
       <div v-else-if="slots.length === 0" class="state-card">
@@ -52,10 +51,6 @@
             <div v-if="printedAtLabel" class="doc-meta-item">
               <span class="label">วันที่พิมพ์</span>
               <span class="value">{{ printedAtLabel }}</span>
-            </div>
-            <div v-if="publishAtLabel" class="doc-meta-item">
-              <span class="label">วันที่ Publish</span>
-              <span class="value">{{ publishAtLabel }}</span>
             </div>
           </div>
         </div>
@@ -97,7 +92,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { supabase } from '@/supabase/client'
 import html2canvas from 'html2canvas'
 import { ElMessage } from 'element-plus'
@@ -112,13 +107,9 @@ const schoolStore = useSchoolStore()
 const loading = ref(false)
 const slots = ref([])
 const captureRef = ref(null)
-
 const currentTerm = ref('')
-const publishVersion = ref('')
-const publishAtLabel = ref('')
 
-const publishedMissing = ref(false)
-const publishedMissingText = ref('')
+const isLocked = computed(() => schoolStore.isTimetableLocked)
 
 const ALL_DAYS = [
   { label: 'จันทร์', short: 'จ.', value: 1 },
@@ -129,10 +120,6 @@ const ALL_DAYS = [
   { label: 'เสาร์', short: 'ส.', value: 6 },
   { label: 'อาทิตย์', short: 'อา.', value: 7 },
 ]
-
-const payloadDayValues = ref([])
-const payloadPeriodCount = ref(0)
-const payloadPeriodTimes = ref({})
 
 const teacherId = computed(() => String(authStore.profile?.teacher_id || authStore.profile?.uid || ''))
 const schoolId = computed(() => authStore.schoolId)
@@ -206,17 +193,6 @@ function buildPeriodTimesMap(times) {
   return map
 }
 
-async function fetchJsonWithTimeout(url, timeoutMs = 9000) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const resp = await fetch(url, { cache: 'no-store', signal: controller.signal })
-    if (!resp.ok) throw new Error(`โหลดไฟล์เผยแพร่ไม่สำเร็จ (${resp.status})`)
-    return await resp.json()
-  } finally {
-    clearTimeout(timer)
-  }
-}
 
 const displayDays = computed(() => {
   const fromSchool = schoolStore.schoolInfo?.school_days
@@ -225,126 +201,53 @@ const displayDays = computed(() => {
     if (mapped.length) return mapped
   }
 
-  if (payloadDayValues.value.length) {
-    const set = new Set(payloadDayValues.value)
-    const mapped = ALL_DAYS.filter(d => set.has(d.value))
-    if (mapped.length) return mapped
-  }
-
   return ALL_DAYS.slice(0, 5)
 })
 
 const displayPeriods = computed(() => {
-  const fromSchool = Number(schoolStore.schoolInfo?.periods_per_day || 0)
-  if (fromSchool > 0) return Array.from({ length: fromSchool }, (_, i) => i + 1)
-
-  const fromPayload = Number(payloadPeriodCount.value || 0)
-  if (fromPayload > 0) return Array.from({ length: fromPayload }, (_, i) => i + 1)
-
-  return Array.from({ length: 8 }, (_, i) => i + 1)
+  const n = Number(schoolStore.schoolInfo?.periods_per_day
+    || schoolStore.schoolInfo?.settings?.school_info?.periods_per_day || 8)
+  return Array.from({ length: n }, (_, i) => i + 1)
 })
 
-const periodTimes = computed(() => {
-  const fromSchool = buildPeriodTimesMap(schoolStore.schoolInfo?.period_times)
-  if (Object.keys(fromSchool).length) return fromSchool
-
-  if (Object.keys(payloadPeriodTimes.value).length) return payloadPeriodTimes.value
-  return {}
-})
-
-function applyPayload(payload) {
-  const timetable = Array.isArray(payload?.timetable) ? payload.timetable : []
-
-  const daySet = new Set()
-  let maxPeriod = 0
-  for (const s of timetable) {
-    const day = Number(s?.day)
-    const period = Number(s?.period)
-    if (!Number.isNaN(day) && day >= 1 && day <= 7) daySet.add(day)
-    if (!Number.isNaN(period) && period > maxPeriod) maxPeriod = period
-  }
-  payloadDayValues.value = [...daySet].sort((a, b) => a - b)
-  payloadPeriodCount.value = maxPeriod
-  payloadPeriodTimes.value = buildPeriodTimesMap(payload?.period_times)
-
-  slots.value = timetable.filter(s => String(s.teacher_id || '') === teacherId.value)
-  currentTerm.value = payload?.current_term || ''
-  publishVersion.value = payload?.version || ''
-  if (payload?.published_at_iso) {
-    publishAtLabel.value = new Date(payload.published_at_iso).toLocaleString('th-TH', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    })
-  }
-}
+const periodTimes = computed(() => buildPeriodTimesMap(schoolStore.schoolInfo?.period_times))
 
 async function loadMyTimetable() {
-  if (!schoolId.value) {
-    publishedMissing.value = true
-    publishedMissingText.value = 'ไม่พบข้อมูลโรงเรียนของบัญชีผู้ใช้'
-    slots.value = []
-    return
-  }
+  if (!isLocked.value) { slots.value = []; return }
+  const sId = schoolId.value
+  if (!sId) { slots.value = []; return }
 
   loading.value = true
-  publishedMissing.value = false
-  publishedMissingText.value = ''
-
+  slots.value = []
   try {
-    // Read published timetable payload from schools.settings.timetable_publish.payload
-    const { data: schoolRow, error } = await supabase
-      .from('schools')
-      .select('settings')
-      .eq('id', schoolId.value)
-      .maybeSingle()
-    if (error) throw error
+    const t = schoolStore.currentTerm || '2568_1'
+    currentTerm.value = t
 
-    const settings = schoolRow?.settings || {}
-    const publishMeta = settings.timetable_publish || null
-    const payload = publishMeta?.payload || null
-
-    if (payload) {
-      applyPayload(payload)
-      return
-    }
-
-    // Fallback: query timetable_slots directly for this teacher
-    const currentTermVal = schoolStore.currentTerm || '2568_1'
-    const { data: slotsData, error: slotsErr } = await supabase
+    const { data, error } = await supabase
       .from('timetable_slots')
       .select('*')
-      .eq('school_id', schoolId.value)
-      .eq('term_id', currentTermVal)
+      .eq('school_id', sId)
+      .eq('term_id', t)
       .eq('teacher_id', teacherId.value)
-    if (slotsErr) throw slotsErr
+    if (error) throw error
 
-    if (slotsData && slotsData.length) {
-      const THAI_DAY_MAP = { จันทร์: 1, อังคาร: 2, พุธ: 3, พฤหัสบดี: 4, ศุกร์: 5, เสาร์: 6, อาทิตย์: 7 }
-      slots.value = slotsData.map(row => ({
-        ...row,
-        day: typeof row.day_of_week === 'number' ? row.day_of_week : (THAI_DAY_MAP[row.day_of_week] ?? 0),
-        period: row.period_number,
-        teacher_id: row.teacher_id,
-        subject_code: row.subject_id,
-        class_id: row.class_id,
-        type: row.slot_type || 'normal',
-      }))
-      currentTerm.value = currentTermVal
-      return
-    }
-
-    publishedMissing.value = true
-    publishedMissingText.value = 'Admin ยังไม่ได้ Publish'
-    slots.value = []
-  } catch (error) {
-    console.error('Error loading my timetable:', error)
-    publishedMissing.value = true
-    publishedMissingText.value = 'Admin ยังไม่ได้ Publish'
-    slots.value = []
+    slots.value = (data || []).map(row => ({
+      ...row,
+      day:            row.day_of_week,
+      period:         row.period_number,
+      subject_code:   row.subject_id || '',
+      preferred_room: row.room_id || '',
+      type:           row.slot_type,
+    }))
+  } catch (e) {
+    ElMessage.error('โหลดตารางสอนไม่สำเร็จ: ' + e.message)
   } finally {
     loading.value = false
   }
 }
+
+// โหลดใหม่อัตโนมัติเมื่อ admin ล็อคตาราง
+watch(isLocked, val => { if (val) loadMyTimetable() })
 
 async function saveAsImage() {
   if (!captureRef.value) return

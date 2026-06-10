@@ -13,6 +13,23 @@
         </div>
       </div>
 
+      <!-- Gate: ยังจัดตารางอยู่ (non-admin ไม่เห็น) -->
+      <div v-if="!isLocked && !authStore.isAdmin" class="publish-source-banner publish-source-warn mb-5"
+        style="text-align:center;padding:32px 20px;">
+        <div style="font-size:40px;margin-bottom:8px;">🕐</div>
+        <div class="publish-source-title" style="font-size:16px;">อยู่ระหว่างจัดตารางสอน</div>
+        <div class="publish-source-text" style="margin-top:6px;">Admin กำลังดำเนินการจัดตาราง — จะพิมพ์ได้เมื่อจัดเสร็จแล้ว</div>
+      </div>
+
+      <template v-else>
+
+      <!-- Preview banner when admin views while still editing -->
+      <div v-if="!isLocked && authStore.isAdmin" class="publish-source-banner mb-5"
+        style="border-color:#f59e0b;background:#fffbeb;">
+        <div class="publish-source-title" style="color:#92400e;">⚠️ โหมด Preview — ตารางยังไม่ล็อค</div>
+        <div class="publish-source-text" style="color:#78350f;">Admin ดู Preview ได้ แต่ครูยังมองไม่เห็น — ล็อคตารางเมื่อจัดเสร็จแล้ว</div>
+      </div>
+
       <div v-if="!subjectSlotCount && !loading" class="publish-source-banner publish-source-warn mb-5">
         <div class="publish-source-title">⚠️ ยังไม่มีข้อมูลตารางสอน</div>
         <div class="publish-source-text">จัดตารางสอนในหน้า "จัดตารางสอน" ก่อนแล้วค่อยพิมพ์</div>
@@ -230,6 +247,8 @@
         <span class="text-gray-400 text-sm ml-2">= {{ totalPages }} หน้า</span>
       </div>
 
+      </template><!-- end v-else (isLocked or admin) -->
+
     </div>
   </AppLayout>
 </template>
@@ -254,6 +273,7 @@ const authStore = useAuthStore()
 const { buildSignatureHTML, getModuleSignatures } = useSignature()
 const { getRooms, getTeachers, getClasses } = useSchoolDb()
 const term = computed(() => schoolStore.currentTerm || '2568_1')
+const isLocked = computed(() => schoolStore.isTimetableLocked)
 const { DAYS, PERIODS, PERIOD_TIMES } = useTimetable()
 
 const loading         = ref(false)
