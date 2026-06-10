@@ -461,6 +461,13 @@
           พบข้อมูล <strong>{{ importRows.length }}</strong> รายการ
           <span v-if="importErrors.length" class="ml-2 text-red-500">มีข้อผิดพลาด {{ importErrors.length }} รายการ</span>
         </div>
+        <div v-if="saving && importTotal > 0" class="mb-3">
+          <div class="flex justify-between text-xs text-gray-500 mb-1">
+            <span>กำลังนำเข้า...</span>
+            <span>{{ importProgress }} / {{ importTotal }} รายการ</span>
+          </div>
+          <el-progress :percentage="Math.round(importProgress / importTotal * 100)" :stroke-width="10" />
+        </div>
         <el-table :data="importRows" border stripe max-height="400" size="small">
           <el-table-column prop="class_id" label="ห้อง" width="80" align="center" />
           <el-table-column prop="student_id" label="รหัส" width="100" />
@@ -587,6 +594,8 @@ const fileInputRef = ref()
 const importDialogVisible = ref(false)
 const importRows = ref([])
 const importErrors = ref([])
+const importProgress = ref(0)
+const importTotal = ref(0)
 
 // Photo upload (in dialog)
 const photoInputRef = ref()
@@ -1162,19 +1171,38 @@ async function confirmImport() {
   const validRows = importRows.value.filter(r => !r._error)
   if (!validRows.length) return
   saving.value = true
+  importProgress.value = 0
+  importTotal.value = validRows.length
+  let imported = 0
+  const rowErrors = []
   try {
     for (const row of validRows) {
       const { _error, _isUpdate, ...data } = row
-      await saveStudent(data)
+      try {
+        await saveStudent(data)
+        imported++
+      } catch (e) {
+        rowErrors.push(`${data.student_id || '?'}: ${e.message}`)
+      }
+      importProgress.value++
     }
 
-    ElMessage.success(`นำเข้าข้อมูล ${validRows.length} รายการเรียบร้อย`)
     students.value = await getStudents()
     importDialogVisible.value = false
+    if (rowErrors.length) {
+      ElMessage.warning({
+        message: `นำเข้า ${imported} รายการ — ล้มเหลว ${rowErrors.length} รายการ\n${rowErrors.slice(0, 3).join('\n')}${rowErrors.length > 3 ? '...' : ''}`,
+        duration: 8000,
+      })
+    } else {
+      ElMessage.success(`นำเข้าข้อมูล ${imported} รายการเรียบร้อย`)
+    }
   } catch (e) {
     ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
   } finally {
     saving.value = false
+    importProgress.value = 0
+    importTotal.value = 0
   }
 }
 
