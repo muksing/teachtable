@@ -1365,22 +1365,30 @@ async function doApplySupervisions() {
   try {
     const schoolId = authStore.schoolId
     const t = term()
-    const [{ data: actData, error: actErr }, { data: supData, error: supErr }] = await Promise.all([
+    const [{ data: actData, error: actErr }, { data: schoolRow, error: schErr }] = await Promise.all([
       supabase.from('activity_bookings').select('*').eq('school_id', schoolId).eq('term_id', t),
-      supabase.from('activity_supervisions').select('*'),  // ไม่มี school_id column
+      supabase.from('schools').select('settings').eq('id', schoolId).maybeSingle(),
     ])
     if (actErr) throw actErr
-    if (supErr) throw supErr
+    if (schErr) throw schErr
 
     const acts = actData || []
-    // กรองเฉพาะ supervision ของกิจกรรมในโรงเรียน/ภาคเรียนนี้
-    const actIds = new Set(acts.map(a => String(a.act_id || a.id)))
-    const checkedSups = (supData || []).filter(s => s.teacher_id && actIds.has(String(s.act_id)))
+    // Supervisions stored in schools.settings.activity_supervisions JSONB, filtered by term_id
+    const allSups = schoolRow?.settings?.activity_supervisions || []
+    const supData = allSups.filter(s => s.term_id === t)
+
+    // Build actIds from both id and act_id fields of bookings
+    const actIds = new Set()
+    acts.forEach(a => {
+      if (a.id) actIds.add(String(a.id))
+      if (a.act_id) actIds.add(String(a.act_id))
+    })
+    const checkedSups = supData.filter(s => s.teacher_id && actIds.has(String(s.act_id)))
     if (!checkedSups.length) { ElMessage.warning('ยังไม่มีครูคุมกิจกรรม — กำหนดครูคุมในหน้า ActivityBooking ก่อน'); return }
 
     const payloads = []
     checkedSups.forEach(sup => {
-      const act = acts.find(a => (a.act_id || a.id) === sup.act_id)
+      const act = acts.find(a => String(a.id) === String(sup.act_id) || String(a.act_id) === String(sup.act_id))
       if (!act) return
       const days = Array.isArray(act.days) && act.days.length ? act.days : (act.day != null ? [act.day] : [])
 
@@ -1429,16 +1437,31 @@ async function doApplySupervisions() {
       })
     })
 
+    // Deduplicate: teacher slot key = teacher+day+period, room slot key = room+day+period
+    const dedupMap = new Map()
+    payloads.forEach(p => {
+      const key = p.lock_type === 'room'
+        ? `room_${p.room_id}_${p.day_of_week}_${p.period_number}`
+        : `teacher_${p.teacher_id}_${p.day_of_week}_${p.period_number}`
+      dedupMap.set(key, p)
+    })
+    const uniquePayloads = Array.from(dedupMap.values())
+
+    // Delete existing teacher/room activity slots first (class_id IS NULL → can't rely on ON CONFLICT)
+    await supabase.from('timetable_slots')
+      .delete()
+      .eq('school_id', schoolId).eq('term_id', t).is('class_id', null).eq('slot_type', 'activity')
+
     const CHUNK = 400
-    for (let i = 0; i < payloads.length; i += CHUNK) {
+    for (let i = 0; i < uniquePayloads.length; i += CHUNK) {
       const { error } = await supabase
         .from('timetable_slots')
-        .upsert(payloads.slice(i, i + CHUNK), { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+        .insert(uniquePayloads.slice(i, i + CHUNK))
       if (error) throw error
     }
 
     workflowStep.value = null  // เข้าสู่โหมดจัดตารางปกติ
-    ElMessage.success(`✅ ล็อกครูคุม ${checkedSups.length} คน → ${payloads.length} slot — พร้อมจัดตารางสอน!`)
+    ElMessage.success(`✅ ล็อกครูคุม ${checkedSups.length} คน → ${uniquePayloads.length} slot — พร้อมจัดตารางสอน!`)
   } catch (e) {
     ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
   } finally {
