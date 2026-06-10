@@ -40,7 +40,7 @@
               <!-- Filter by teacher -->
               <template v-else-if="filterMode==='teacher'">
                 <el-select v-model="filterTeachers" placeholder="ทุกครู" class="w-full" size="small" multiple collapse-tags :collapse-tags-tooltip="true" clearable filterable>
-                  <el-option v-for="t in teachers" :key="t.teacher_id" :label="`${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
+                  <el-option v-for="t in sortedTeachers" :key="t.teacher_id" :label="`${t.teacher_id}  ${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
                 </el-select>
                 <div class="flex gap-1">
                   <button class="flex-1 text-xs py-0.5 rounded text-white font-medium transition-all hover:opacity-80" style="background:#1d4ed8;font-size:10px" @click="filterTeachers = teachers.map(t => t.teacher_id)">ทั้งหมด</button>
@@ -317,6 +317,15 @@
               🤖 จัด AI
             </el-button>
 
+            <!-- Scheduling lock toggle — Admin only -->
+            <el-button v-if="authStore.isAdmin" size="small"
+              :type="isLocked ? 'danger' : 'success'" plain
+              :loading="lockSaving"
+              :title="isLocked ? 'ระบบล็อคอยู่ — คลิกเพื่อเปิดให้แก้ไข' : 'เปิดแก้ไขได้ — คลิกเพื่อล็อค'"
+              @click="toggleSchedulingLock">
+              {{ isLocked ? '🔒 ล็อคอยู่' : '🔓 เปิดแก้ไข' }}
+            </el-button>
+
             <!-- Export / Import — SchoolAdmin only -->
             <template v-if="authStore.isAdmin">
               <input ref="importFileRef" type="file" accept=".json" class="hidden" @change="handleImportFile" />
@@ -452,10 +461,23 @@
         <div class="bg-white rounded-xl shadow-sm border overflow-hidden">
           <div class="flex items-center gap-3 px-4 py-2.5 border-b panel-header-teacher flex-wrap">
             <span class="font-bold text-blue-700">👨‍🏫 อาจารย์</span>
-            <el-select v-model="selectedTeacher" placeholder="เลือกอาจารย์" size="small" style="width:210px" filterable>
-              <el-option v-for="t in teachers" :key="t.teacher_id"
-                :label="`${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
+            <el-select v-model="selectedTeacher" placeholder="เลือกอาจารย์" size="small" style="width:240px" filterable>
+              <template v-if="teacherSortBy === 'dept'">
+                <el-option-group v-for="(group, dept) in teachersByDept" :key="dept" :label="dept">
+                  <el-option v-for="t in group" :key="t.teacher_id"
+                    :label="`${t.teacher_id}  ${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
+                </el-option-group>
+              </template>
+              <template v-else>
+                <el-option v-for="t in sortedTeachers" :key="t.teacher_id"
+                  :label="`${t.teacher_id}  ${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
+              </template>
             </el-select>
+            <el-button size="small" plain
+              :title="teacherSortBy === 'code' ? 'เรียงตามรหัสครู — คลิกเพื่อเรียงตามกลุ่มสาระ' : 'เรียงตามกลุ่มสาระ — คลิกเพื่อเรียงตามรหัส'"
+              @click="teacherSortBy = teacherSortBy === 'code' ? 'dept' : 'code'">
+              {{ teacherSortBy === 'code' ? '🔢' : '📚' }}
+            </el-button>
             <div class="flex items-center gap-1">
               <el-button size="small" plain :disabled="!canSelectPrevTeacher" @click="selectPrevTeacher" title="ครูก่อนหน้า">↑</el-button>
               <el-button size="small" plain :disabled="!canSelectNextTeacher" @click="selectNextTeacher" title="ครูถัดไป">↓</el-button>
@@ -916,6 +938,9 @@ const importFileRef = ref(null)
 // Workflow loading: '1' = applying activities, '2' = applying supervisions
 const workflowLoading = ref('')
 
+// Teacher sort: 'code' = เรียงตามรหัส, 'dept' = เรียงตามกลุ่มสาระ
+const teacherSortBy = ref('code')
+
 // Card edit dialog (F4: change teacher + room from left panel)
 const cardEditDlg = reactive({ visible: false, assignment: null, newTeacherId: '', newPreferredRoom: '', saving: false })
 
@@ -958,7 +983,29 @@ const roomList = computed(() => {
 })
 
 const classIds = computed(() => classes.value.map(c => c.class_id).filter(Boolean))
-const teacherIds = computed(() => teachers.value.map(t => t.teacher_id).filter(Boolean))
+
+const sortedTeachers = computed(() => {
+  const list = [...teachers.value]
+  if (teacherSortBy.value === 'dept') {
+    return list.sort((a, b) =>
+      (a.dept || 'ฮ').localeCompare(b.dept || 'ฮ', 'th') ||
+      (a.teacher_id || '').localeCompare(b.teacher_id || '')
+    )
+  }
+  return list.sort((a, b) => (a.teacher_id || '').localeCompare(b.teacher_id || ''))
+})
+
+const teachersByDept = computed(() => {
+  const groups = {}
+  sortedTeachers.value.forEach(t => {
+    const key = t.dept || 'ไม่ระบุกลุ่มสาระ'
+    if (!groups[key]) groups[key] = []
+    groups[key].push(t)
+  })
+  return groups
+})
+
+const teacherIds = computed(() => sortedTeachers.value.map(t => t.teacher_id).filter(Boolean))
 
 const selectedClassIndex = computed(() => classIds.value.indexOf(selectedClass.value))
 const selectedTeacherIndex = computed(() => teacherIds.value.indexOf(selectedTeacher.value))
@@ -2253,6 +2300,29 @@ async function handleClearAuto() {
     await loadAssignmentsWithProgress()
   } catch (e) {
     ElMessage.error(e.message)
+  }
+}
+
+// ===== Scheduling Lock Toggle =====
+async function toggleSchedulingLock() {
+  if (!authStore.isAdmin) return
+  const newVal = !isLocked.value
+  lockSaving.value = true
+  try {
+    const { data: schoolRow, error: readErr } = await supabase
+      .from('schools').select('settings').eq('id', authStore.schoolId).maybeSingle()
+    if (readErr) throw readErr
+    const settings = schoolRow?.settings || {}
+    const { error } = await supabase.from('schools').update({
+      settings: { ...settings, timetable_locked: newVal, timetable_locked_at: new Date().toISOString() }
+    }).eq('id', authStore.schoolId)
+    if (error) throw error
+    schoolStore.setSchool({ ...schoolStore.schoolInfo, timetable_locked: newVal })
+    ElMessage.success(newVal ? '🔒 ล็อคระบบจัดตารางสอนแล้ว' : '✅ เปิดระบบจัดตารางสอนแล้ว')
+  } catch (e) {
+    ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
+  } finally {
+    lockSaving.value = false
   }
 }
 
