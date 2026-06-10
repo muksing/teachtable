@@ -1063,6 +1063,11 @@ onMounted(async () => {
   // Auto-select first room after a tick (computed roomList needs timetableSlots)
   if (!selectedRoom.value && roomList.value.length) selectedRoom.value = roomList.value[0]
 
+  // ถ้าตารางว่างเปล่า (ยังไม่เคยจัด) → แสดง workflow ขั้น 1 ทันที
+  if (rt.timetableSlots.value.length === 0 && assignments.value.length > 0) {
+    workflowStep.value = '1'
+  }
+
   // ESC key to exit swap mode
   window.addEventListener('keyup', onGlobalKeyUp)
 })
@@ -2187,7 +2192,7 @@ async function handleClearAll() {
   if (!authStore.isAdmin) { ElMessage.error('เฉพาะ SchoolAdmin เท่านั้นที่สามารถล้างตารางได้'); return }
   try {
     await ElMessageBox.confirm(
-      'ยืนยันล้างตารางสอนทั้งหมด?\n(ล้างเฉพาะคาบที่จัดลงตาราง — ภาระงานยังคงอยู่)',
+      'ยืนยันล้างตารางสอนทั้งหมด?\nคาบที่จัดไว้ทั้งหมดจะถูกลบ — ภาระงาน (รายวิชา) ยังคงอยู่',
       'ล้างตารางสอน', { type: 'warning' }
     )
   } catch { return }
@@ -2200,7 +2205,25 @@ async function handleClearAll() {
       .eq('school_id', schoolId)
       .eq('term_id', t)
     if (error) throw error
-    ElMessage.success('ล้างตารางสอนเรียบร้อยแล้ว — ภาระงานยังคงอยู่')
+
+    // เคลียร์ local state ทันที
+    rt.timetableSlots.value = []
+    rt.timetableMap.value = {}
+    rt.teacherMap.value = {}
+    rt.roomMap.value = {}
+
+    // Reset จำนวนคาบทุกวิชากลับเป็นเต็ม
+    assignments.value = assignments.value.map(a => ({
+      ...a,
+      placed: 0,
+      done: false,
+      remaining: Number(a.periods_per_week) || 1,
+    }))
+
+    // กลับสู่ขั้นตอนที่ 1: ลงกิจกรรมก่อนจัดตาราง
+    workflowStep.value = '1'
+
+    ElMessage.success('ล้างตารางสอนเรียบร้อย — กรุณาลงกิจกรรมและครูคุมก่อนจัดตาราง')
   } catch (e) {
     console.error('Clear timetable error:', e)
     ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
