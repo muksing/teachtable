@@ -1064,10 +1064,26 @@ onMounted(async () => {
   // Auto-select first room after a tick (computed roomList needs timetableSlots)
   if (!selectedRoom.value && roomList.value.length) selectedRoom.value = roomList.value[0]
 
-  // แสดง workflow ก็ต่อเมื่อตารางว่างจริง (ไม่มี subject slot เลย) และมีภาระงานรอจัด
-  const hasSubjectSlots = rt.timetableSlots.value.some(s => s.type === 'subject' || s.slot_type === 'subject')
-  if (!hasSubjectSlots && assignments.value.length > 0) {
-    workflowStep.value = '1'
+  // ตรวจ workflow step จาก existing slots
+  const slots = rt.timetableSlots.value
+  const hasSubjectSlots = slots.some(s => s.type === 'subject' || s.slot_type === 'subject')
+  const hasActivityClassSlots = slots.some(s =>
+    (s.slot_type === 'activity' || s.type === 'activity') &&
+    s.class_id && !String(s.class_id).startsWith('__')
+  )
+  const hasTeacherSupSlots = slots.some(s =>
+    (s.slot_type === 'activity' || s.type === 'activity') &&
+    s.class_id && String(s.class_id).startsWith('__')
+  )
+
+  if (hasSubjectSlots || (hasActivityClassSlots && hasTeacherSupSlots)) {
+    workflowStep.value = null        // ทำครบแล้ว — ไม่ต้องแสดง workflow card
+  } else if (hasActivityClassSlots && !hasTeacherSupSlots) {
+    workflowStep.value = '2'         // ลงกิจกรรมแล้ว รอครูคุม
+  } else if (!hasActivityClassSlots && assignments.value.length > 0) {
+    workflowStep.value = '1'         // ยังไม่ได้ลงกิจกรรม
+  } else {
+    workflowStep.value = null        // ไม่มีภาระงาน — ไม่ต้องแสดง
   }
 
   // ESC key to exit swap mode
@@ -1397,11 +1413,11 @@ async function doApplySupervisions() {
           const startPeriod = Number(act.start_period)
           const durationPeriods = Number(act.duration_periods)
           for (let p = startPeriod; p < startPeriod + durationPeriods; p++) {
-            // Lock teacher slot (แสดงในแผงครู)
+            // Lock teacher slot — use synthetic class_id to avoid NULLS NOT DISTINCT constraint conflict
             payloads.push({
               school_id: schoolId,
               term_id: t,
-              class_id: null,
+              class_id: `__teacher_${sup.teacher_id}`,
               teacher_id: String(sup.teacher_id),
               room_id: null,
               day_of_week: Number(dayVal),
@@ -1413,12 +1429,12 @@ async function doApplySupervisions() {
               lock_type: 'teacher',
             })
 
-            // Lock room/lab slot (แสดงในแผงห้อง/Lab)
+            // Lock room/lab slot — use synthetic class_id per room
             if (sup.room_id) {
               payloads.push({
                 school_id: schoolId,
                 term_id: t,
-                class_id: null,
+                class_id: `__room_${sup.room_id}`,
                 teacher_id: String(sup.teacher_id),
                 room_id: String(sup.room_id),
                 day_of_week: Number(dayVal),
@@ -1437,20 +1453,22 @@ async function doApplySupervisions() {
       })
     })
 
-    // Deduplicate: teacher slot key = teacher+day+period, room slot key = room+day+period
+    // Deduplicate by synthetic class_id + day + period (ON CONFLICT key)
     const dedupMap = new Map()
     payloads.forEach(p => {
-      const key = p.lock_type === 'room'
-        ? `room_${p.room_id}_${p.day_of_week}_${p.period_number}`
-        : `teacher_${p.teacher_id}_${p.day_of_week}_${p.period_number}`
+      const key = `${p.class_id}_${p.day_of_week}_${p.period_number}`
       dedupMap.set(key, p)
     })
     const uniquePayloads = Array.from(dedupMap.values())
 
-    // Delete existing teacher/room activity slots first (class_id IS NULL → can't rely on ON CONFLICT)
-    await supabase.from('timetable_slots')
-      .delete()
-      .eq('school_id', schoolId).eq('term_id', t).is('class_id', null).eq('slot_type', 'activity')
+    // Delete existing synthetic teacher/room slots before re-inserting
+    const syntheticIds = [...new Set(uniquePayloads.map(p => p.class_id))]
+    if (syntheticIds.length) {
+      await supabase.from('timetable_slots')
+        .delete()
+        .eq('school_id', schoolId).eq('term_id', t)
+        .in('class_id', syntheticIds)
+    }
 
     const CHUNK = 400
     for (let i = 0; i < uniquePayloads.length; i += CHUNK) {
