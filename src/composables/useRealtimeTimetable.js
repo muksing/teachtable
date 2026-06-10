@@ -43,24 +43,26 @@ function buildSlotPayload(slot, overrides = {}) {
 }
 
 // Convert a raw timetable_slots row → local slot shape
+// IMPORTANT: explicit overrides come AFTER ...row so they win over DB column names
 function rowToSlot(row) {
-  return buildSlotPayload({
-    id: safeId(row.day_of_week, row.period_number, row.class_id),
-    _db_id: row.id,
+  const slot = buildSlotPayload({
+    ...row,                                                               // DB columns first
+    id: safeId(row.day_of_week, row.period_number, row.class_id),        // composite key overrides DB uuid
     day: row.day_of_week,
     period: row.period_number,
     class_id: row.class_id,
     teacher_id: row.teacher_id,
-    preferred_room: row.room_id,
+    preferred_room: row.room_id,                                          // map room_id → preferred_room
     assign_id: row.assign_id || null,
-    subject_code: row.subject_id || null,
+    subject_code: row.subject_id || null,                                 // map subject_id → subject_code
     subject_name: row.subject_name || null,
     teacher_name: row.teacher_name || null,
     slot_type: row.slot_type,
     type: row.slot_type,
     is_locked: row.slot_type === 'activity' || row.slot_type === 'manual_lock',
-    ...row,
   })
+  slot._db_id = row.id   // save DB UUID separately (not in buildSlotPayload output)
+  return slot
 }
 
 export function useRealtimeTimetable() {
@@ -130,9 +132,9 @@ export function useRealtimeTimetable() {
     if (eventType === 'INSERT' || eventType === 'UPDATE') {
       if (newRow.term_id !== term()) return
       const slot = rowToSlot(newRow)
-      const key = slot.id
+      const key = slot.id  // composite key (safeId)
 
-      // Update slots array
+      // Match by composite key (same position = same slot)
       const idx = timetableSlots.value.findIndex(s => s.id === key)
       if (idx >= 0) {
         timetableSlots.value.splice(idx, 1, slot)
@@ -141,8 +143,8 @@ export function useRealtimeTimetable() {
       }
     } else if (eventType === 'DELETE') {
       if (oldRow) {
-        const key = safeId(oldRow.day_of_week, oldRow.period_number, oldRow.class_id)
-        timetableSlots.value = timetableSlots.value.filter(s => s.id !== key)
+        // Use DB UUID (_db_id) to match — composite key fields may not exist in oldRow
+        timetableSlots.value = timetableSlots.value.filter(s => s._db_id !== oldRow.id)
       }
     }
 
@@ -214,7 +216,7 @@ export function useRealtimeTimetable() {
   }
 
   // ====================================================
-  // placeSlot: วาง slot เดี่ยว
+  // placeSlot: วาง slot เดี่ยว — อัปเดต local state ทันที (ไม่รอ realtime)
   // ====================================================
   async function placeSlot(slot) {
     const sid = schoolId()
@@ -225,7 +227,7 @@ export function useRealtimeTimetable() {
       id: safeId(day, period, slot.class_id),
     })
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('timetable_slots')
       .upsert({
         term_id: t,
@@ -243,13 +245,26 @@ export function useRealtimeTimetable() {
         updated_by: authStore.profile?.uid || '',
         updated_at: new Date().toISOString(),
       }, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+      .select()
 
     if (error) throw error
+
+    // อัปเดต local state ทันที (ไม่ต้องรอ realtime)
+    const newSlot = data?.[0] ? rowToSlot(data[0]) : { ...payload, _db_id: null }
+    const key = newSlot.id  // composite key
+    const idx = timetableSlots.value.findIndex(s => s.id === key)
+    if (idx >= 0) {
+      timetableSlots.value.splice(idx, 1, newSlot)
+    } else {
+      timetableSlots.value.push(newSlot)
+    }
+    rebuildMaps(timetableSlots.value)
+
     return payload.id
   }
 
   // ====================================================
-  // swapSlots: สลับ 2 slots
+  // swapSlots: สลับ 2 slots — อัปเดต local state ทันที
   // ====================================================
   async function swapSlots(slotA, slotB) {
     const sid = schoolId()
@@ -262,8 +277,8 @@ export function useRealtimeTimetable() {
     const dayB = slotB.day ?? slotB.day_of_week
     const periodB = slotB.period ?? slotB.period_number
 
-    // ลบ slot เดิมทั้งคู่
-    const deleteIds = [slotA._db_id, slotB._db_id].filter(Boolean)
+    // ลบ slot เดิมทั้งคู่ (ใช้ _db_id หรือ id)
+    const deleteIds = [slotA._db_id || slotA.id, slotB._db_id || slotB.id].filter(Boolean)
     if (deleteIds.length) {
       const { error: delErr } = await supabase
         .from('timetable_slots')
@@ -308,32 +323,51 @@ export function useRealtimeTimetable() {
       },
     ]
 
-    const { error: insertErr } = await supabase
+    const { data: insertData, error: insertErr } = await supabase
       .from('timetable_slots')
       .upsert(rows, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+      .select()
 
     if (insertErr) throw insertErr
+
+    // อัปเดต local state ทันที
+    // ลบ slot เดิมออกจาก local
+    const idsToRemove = [slotA.id, slotB.id].filter(Boolean)
+    let updatedSlots = timetableSlots.value.filter(s => !idsToRemove.includes(s.id))
+    // เพิ่ม slot ใหม่
+    if (insertData?.length) {
+      insertData.forEach(row => updatedSlots.push(rowToSlot(row)))
+    } else {
+      // fallback: ใช้ข้อมูล local
+      updatedSlots.push(
+        { ...buildSlotPayload({ ...slotA, day: dayB, period: periodB }), _db_id: null },
+        { ...buildSlotPayload({ ...slotB, day: dayA, period: periodA }), _db_id: null }
+      )
+    }
+    timetableSlots.value = updatedSlots
+    rebuildMaps(timetableSlots.value)
   }
 
   // ====================================================
-  // moveSlot: ย้าย slot ไปตำแหน่งใหม่
+  // moveSlot: ย้าย slot ไปตำแหน่งใหม่ — อัปเดต local state ทันที
   // ====================================================
   async function moveSlot(slot, newDay, newPeriod) {
     const sid = schoolId()
     const t = term()
     const uid = authStore.profile?.uid || ''
 
-    // ลบ slot เดิม
-    if (slot._db_id) {
+    // ลบ slot เดิม (ใช้ _db_id หรือ id)
+    const oldDbId = slot._db_id || slot.id
+    if (oldDbId) {
       const { error: delErr } = await supabase
         .from('timetable_slots')
         .delete()
-        .eq('id', slot._db_id)
+        .eq('id', oldDbId)
       if (delErr) throw delErr
     }
 
     // Insert ที่ตำแหน่งใหม่
-    const { error: insertErr } = await supabase
+    const { data: insertData, error: insertErr } = await supabase
       .from('timetable_slots')
       .upsert({
         term_id: t,
@@ -351,8 +385,20 @@ export function useRealtimeTimetable() {
         updated_by: uid,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+      .select()
 
     if (insertErr) throw insertErr
+
+    // อัปเดต local state ทันที
+    let updatedSlots = timetableSlots.value.filter(s => s.id !== slot.id)
+    if (insertData?.[0]) {
+      updatedSlots.push(rowToSlot(insertData[0]))
+    } else {
+      const newKey = safeId(newDay, newPeriod, slot.class_id)
+      updatedSlots.push({ ...buildSlotPayload({ ...slot, day: newDay, period: newPeriod }, { id: newKey }), _db_id: null })
+    }
+    timetableSlots.value = updatedSlots
+    rebuildMaps(timetableSlots.value)
   }
 
   // ====================================================
@@ -362,7 +408,7 @@ export function useRealtimeTimetable() {
     const sid = schoolId()
     const t = term()
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('timetable_slots')
       .upsert({
         term_id: t,
@@ -376,20 +422,29 @@ export function useRealtimeTimetable() {
         updated_by: authStore.profile?.uid || '',
         updated_at: new Date().toISOString(),
       }, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+      .select()
 
     if (error) throw error
+
+    // อัปเดต local state ทันที
+    if (data?.[0]) {
+      const newSlot = rowToSlot(data[0])
+      const key = newSlot.id
+      const idx = timetableSlots.value.findIndex(s => s.id === key)
+      if (idx >= 0) timetableSlots.value.splice(idx, 1, newSlot)
+      else timetableSlots.value.push(newSlot)
+      rebuildMaps(timetableSlots.value)
+    }
   }
 
   // ====================================================
-  // unlockSlot / removeSlot: ลบ slot ด้วย db id
+  // unlockSlot / removeSlot: ลบ slot — อัปเดต local state ทันที
   // ====================================================
   async function unlockSlot(slotId) {
     await removeSlot(slotId)
   }
 
   async function removeSlot(slotId) {
-    // slotId อาจเป็น composite key หรือ db uuid
-    // ลองหาใน local map ก่อน
     const local = timetableSlots.value.find(s => s.id === slotId || s._db_id === slotId)
     const dbId = local?._db_id || slotId
 
@@ -399,6 +454,10 @@ export function useRealtimeTimetable() {
       .eq('id', dbId)
 
     if (error) throw error
+
+    // อัปเดต local state ทันที (ไม่ต้องรอ realtime DELETE event)
+    timetableSlots.value = timetableSlots.value.filter(s => s.id !== slotId && s._db_id !== slotId)
+    rebuildMaps(timetableSlots.value)
   }
 
   return {
