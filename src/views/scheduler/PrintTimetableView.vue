@@ -13,15 +13,15 @@
         </div>
       </div>
 
-      <div v-if="publishedMissing" class="publish-source-banner publish-source-warn mb-5">
-        <div class="publish-source-title">⚠️ แหล่งข้อมูล: Publish</div>
-        <div class="publish-source-text">ยังไม่พบข้อมูลที่ Publish</div>
+      <div v-if="!slots.length && !loading" class="publish-source-banner publish-source-warn mb-5">
+        <div class="publish-source-title">⚠️ ยังไม่มีข้อมูลตารางสอน</div>
+        <div class="publish-source-text">จัดตารางสอนในหน้า "จัดตารางสอน" ก่อนแล้วค่อยพิมพ์</div>
       </div>
-      <div v-else class="publish-source-banner publish-source-ok mb-5">
-        <div class="publish-source-title">✅ แหล่งข้อมูล: Publish JSON</div>
+      <div v-else-if="slots.length" class="publish-source-banner publish-source-ok mb-5">
+        <div class="publish-source-title">✅ ข้อมูลจากตารางสอนปัจจุบัน</div>
         <div class="publish-source-text">
-          <span class="publish-chip">วันที่ Publish: {{ publishAtLabel || 'ไม่ระบุ' }}</span>
-          <span class="publish-chip">เวอร์ชัน: {{ publishVersion || 'ไม่ระบุ' }}</span>
+          <span class="publish-chip">ภาคเรียน: {{ term }}</span>
+          <span class="publish-chip">{{ slots.length }} คาบ / {{ classes.length }} ห้อง / {{ teachers.length }} ครู</span>
         </div>
       </div>
 
@@ -252,15 +252,12 @@ import { useSchoolDb } from '@/composables/useSchoolDb'
 const schoolStore = useSchoolStore()
 const authStore = useAuthStore()
 const { buildSignatureHTML, getModuleSignatures } = useSignature()
-const { getRooms } = useSchoolDb()
+const { getRooms, getTeachers, getClasses } = useSchoolDb()
 const term = computed(() => schoolStore.currentTerm || '2568_1')
 const { DAYS, PERIODS, PERIOD_TIMES } = useTimetable()
 
 const loading         = ref(false)
 const generating      = ref('')
-const publishedMissing = ref(false)
-const publishVersion  = ref('')
-const publishAtLabel  = ref('')
 const classes    = ref([])
 const teachers   = ref([])
 const labs       = ref([])
@@ -364,65 +361,43 @@ function clearAll(type) {
 onMounted(loadData)
 async function loadData() {
   loading.value = true
-  publishedMissing.value = false
   try {
     const schoolId = authStore.schoolId
+    const t = term.value
 
-    // ── 1. อ่าน schools.settings จาก Supabase ───────────────────────
-    const { data: schoolRow, error } = await supabase
-      .from('schools')
-      .select('settings')
-      .eq('id', schoolId)
-      .maybeSingle()
-    if (error) throw error
+    // โหลดพร้อมกัน: ห้องเรียน, ครู, timetable_slots
+    const [classData, teacherData, { data: slotData, error: slotErr }] = await Promise.all([
+      getClasses(),
+      getTeachers(),
+      supabase.from('timetable_slots')
+        .select('*')
+        .eq('school_id', schoolId)
+        .eq('term_id', t)
+        .eq('slot_type', 'subject')
+        .not('class_id', 'is', null),
+    ])
+    if (slotErr) throw slotErr
 
-    const settings = schoolRow?.settings || {}
-    const publishMeta = settings.timetable_publish || null
+    classes.value = classData.sort((a, b) => (a.class_id || '').localeCompare(b.class_id || '', 'th'))
+    teachers.value = teacherData.sort((a, b) => (a.teacher_id || '').localeCompare(b.teacher_id || ''))
 
-    publishVersion.value = publishMeta?.version || ''
-    publishAtLabel.value = publishMeta?.published_at_iso
-      ? new Date(publishMeta.published_at_iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
-      : ''
+    // Map DB columns → format ที่ component ใช้งาน
+    const rawSlots = (slotData || []).filter(row => !String(row.class_id || '').startsWith('__'))
+    slots.value = rawSlots.map(row => ({
+      ...row,
+      day:            row.day_of_week,
+      period:         row.period_number,
+      preferred_room: row.room_id || '',
+      type:           row.slot_type,
+      subject_code:   row.subject_id || '',
+      is_coteach:     false,
+    }))
 
-    // ── 2. ดึง published payload ─────────────────────────────────────
-    const payload = publishMeta?.payload || null
-
-    if (!payload) {
-      publishedMissing.value = true
-      ElMessage.warning('Admin ยังไม่ได้ Publish — ไม่พบข้อมูลตารางสอน')
-      return
-    }
-
-    if (!publishAtLabel.value && payload?.published_at_iso) {
-      publishAtLabel.value = new Date(payload.published_at_iso).toLocaleString('th-TH', {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      })
-    }
-    if (!publishVersion.value && payload?.version) {
-      publishVersion.value = payload.version
-    }
-
-    // ── 3. แยกข้อมูลจาก payload ─────────────────────────────────────
-    classes.value  = (Array.isArray(payload.classes)  ? payload.classes  : [])
-      .sort((a, b) => (a.class_id || '').localeCompare(b.class_id || '', 'th'))
-    teachers.value = (Array.isArray(payload.teachers) ? payload.teachers : [])
-      .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'th'))
-
-    // ── โหลดข้อมูลห้อง Lab ที่มีจริงในระบบ ──
-    const actualRooms = await getRooms()
-    const validRoomIds = new Set(actualRooms.map(r => r.room_id))
-
-    slots.value = (Array.isArray(payload.timetable) ? payload.timetable : []).map(s => {
-      const pr = (s.preferred_room || '').toString().trim()
-      if (pr && !validRoomIds.has(pr)) return { ...s, preferred_room: '' }
-      return { ...s, preferred_room: pr }
-    })
-
-    const occupiedRoomIds = new Set(
-      slots.value.map(s => (s.preferred_room || '').toString().trim()).filter(Boolean)
-    )
+    // Labs = room IDs ที่มี slot จริง
+    const occupiedRoomIds = new Set(slots.value.map(s => s.preferred_room).filter(Boolean))
     labs.value = [...occupiedRoomIds].sort((a, b) => a.localeCompare(b, 'th'))
+  } catch (e) {
+    ElMessage.error('โหลดข้อมูลล้มเหลว: ' + e.message)
   } finally {
     loading.value = false
   }
