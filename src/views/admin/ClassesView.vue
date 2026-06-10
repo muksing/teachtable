@@ -371,6 +371,7 @@ async function handleSave() {
     saving.value = true
     try {
       await saveClass({
+        id: editingClass.value?.id || null,
         class_id: classId,
         level: form.level,
         room: form.room,
@@ -494,12 +495,12 @@ async function onImportFile(e) {
       const room = Number(row['ห้อง']) || 0
       let _error = null
       if (!level) _error = 'ไม่มีระดับชั้น'
-      else if (!LEVELS.includes(level)) _error = `ระดับชั้น "${level}" ไม่ถูกต้อง`
       else if (!room || room < 1) _error = 'ห้องไม่ถูกต้อง'
       return {
         level,
         room,
         class_name: String(row['ชื่อห้อง'] || '').trim(),
+        homeroom_teacher_id: String(row['ครูที่ปรึกษา (รหัส)'] || '').trim(),
         room_number: String(row['หมายเลขห้อง'] || '').trim(),
         max_students: Number(row['จำนวนนักเรียนสูงสุด']) || 40,
         _error
@@ -517,28 +518,31 @@ async function confirmImport() {
   if (!validRows.length) return
   importSaving.value = true
   let imported = 0
-  try {
-    for (const row of validRows) {
-      const classId = `${row.level}/${row.room}`
+  const errors = []
+  for (const row of validRows) {
+    const classId = `${row.level}/${row.room}`
+    try {
       await saveClass({
         class_id: classId,
         level: row.level,
         room: row.room,
-        class_name: row.class_name,
-        homeroom_teacher_id: '',
-        homeroom_teacher_name_snapshot: '',
+        class_name: row.class_name || classId,
+        homeroom_teacher_id: row.homeroom_teacher_id || undefined,
         room_number: row.room_number,
-        max_students: row.max_students
+        max_students: row.max_students,
       })
       imported++
+    } catch (e) {
+      errors.push(`${classId}: ${e.message}`)
     }
-    classes.value = await getClasses()
+  }
+  classes.value = await getClasses()
+  importPreviewVisible.value = false
+  importSaving.value = false
+  if (errors.length) {
+    ElMessage.warning({ message: `นำเข้า ${imported} ห้อง — ล้มเหลว ${errors.length} รายการ: ${errors.slice(0,3).join('; ')}`, duration: 6000 })
+  } else {
     ElMessage.success(`นำเข้า ${imported} ห้องเรียนเรียบร้อย`)
-    importPreviewVisible.value = false
-  } catch (e) {
-    ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
-  } finally {
-    importSaving.value = false
   }
 }
 

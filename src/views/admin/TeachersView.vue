@@ -516,7 +516,8 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 import { useSchoolStore } from '@/stores/school'
 import { DEPT_OPTIONS, ACADEMIC_RANKS, TEACHER_PREFIXES, POSITION_OPTIONS } from '@/utils/constants'
-import { supabase } from '@/supabase/client'
+import { createClient } from '@supabase/supabase-js'
+import { supabase, supabaseUrl, supabaseKey } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { usePrintReport } from '@/composables/usePrintReport'
 import { cascadeService } from '@/composables/cascadeService'
@@ -879,12 +880,24 @@ async function createAccountForTeacher(teacher, password, role = 'school_teacher
       })
       if (error) {
         if (error.message?.includes('already registered') || error.message?.includes('already been registered')) {
-          throw new Error('อีเมลนี้มีอยู่ในระบบ Auth แล้ว กรุณาลองใช้รหัสผ่านเดิมหรือผูกบัญชีด้วยวิธีอื่น')
+          // Email exists in Auth but not in users table — try to recover by signing in
+          const tempClient = createClient(supabaseUrl, supabaseKey, {
+            auth: { persistSession: false, autoRefreshToken: false }
+          })
+          const { data: signInData, error: signInError } = await tempClient.auth.signInWithPassword({
+            email: emailForAccount, password
+          })
+          if (signInError || !signInData?.user) {
+            throw new Error('อีเมลนี้มีอยู่ในระบบแล้ว แต่รหัสผ่านไม่ถูกต้อง กรุณาตรวจสอบรหัสผ่าน')
+          }
+          uid = signInData.user.id
+        } else {
+          throw error
         }
-        throw error
+      } else {
+        uid = data.user?.id
+        if (!uid) throw new Error('ไม่สามารถสร้างบัญชีได้')
       }
-      uid = data.user?.id
-      if (!uid) throw new Error('ไม่สามารถสร้างบัญชีได้')
     }
   }
 

@@ -185,7 +185,11 @@ export function useSchoolDb() {
       if (error) throw error
       savedId = teacher.id
     } else {
-      const { data, error } = await supabase.from('teachers').insert([payload]).select().single()
+      const { data, error } = await supabase
+        .from('teachers')
+        .upsert([payload], { onConflict: 'school_id,teacher_code' })
+        .select()
+        .single()
       if (error) throw error
       savedId = data.id
     }
@@ -257,26 +261,61 @@ export function useSchoolDb() {
       .eq('school_id', authStore.schoolId)
       .order('class_name')
     if (error) throw error
-    return data.map(d => ({
-      ...d,
-      class_id: d.class_name,
-    }))
+    return data.map(d => {
+      // Derive level/room from class_name when DB columns are empty (e.g. "ม.1/2" → level "ม.1", room 2)
+      let level = d.level || ''
+      let room = d.room || null
+      if ((!level || !room) && d.class_name && d.class_name.includes('/')) {
+        const parts = d.class_name.split('/')
+        if (!level) level = parts[0]
+        if (!room) room = parseInt(parts[1]) || null
+      }
+      return { ...d, class_id: d.class_name, level, room }
+    })
   }
 
   async function saveClass(cls) {
+    const className = cls.class_id || cls.class_name
     const payload = {
       school_id: authStore.schoolId,
-      class_name: cls.class_id,
-      homeroom_teacher_id: cls.homeroom_teacher_id || null,
+      class_name: className,
+      level: cls.level || null,
+      room: cls.room ? Number(cls.room) : null,
+      room_number: cls.room_number || null,
+      max_students: cls.max_students ? Number(cls.max_students) : 40,
     }
-    if (cls.id && cls.id.includes('-')) {
+    // Only set homeroom fields when explicitly provided (avoid overwriting with empty on import)
+    if (cls.homeroom_teacher_id !== undefined) {
+      payload.homeroom_teacher_id = cls.homeroom_teacher_id || null
+      payload.homeroom_teacher_ids = Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length
+        ? cls.homeroom_teacher_ids
+        : (cls.homeroom_teacher_id ? [cls.homeroom_teacher_id] : [])
+      payload.homeroom_teacher_names_snapshot = Array.isArray(cls.homeroom_teacher_names_snapshot)
+        ? cls.homeroom_teacher_names_snapshot
+        : (cls.homeroom_teacher_name_snapshot ? [cls.homeroom_teacher_name_snapshot] : [])
+    }
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cls.id || '')
+    if (isUuid) {
       const { error } = await supabase.from('classes').update(payload).eq('id', cls.id)
       if (error) throw error
       return cls.id
     } else {
-      const { data, error } = await supabase.from('classes').insert([payload]).select().single()
-      if (error) throw error
-      return data.id
+      // Check if already exists to decide insert vs update
+      const { data: existing } = await supabase
+        .from('classes')
+        .select('id')
+        .eq('school_id', authStore.schoolId)
+        .eq('class_name', payload.class_name)
+        .maybeSingle()
+      if (existing?.id) {
+        const { error } = await supabase.from('classes').update(payload).eq('id', existing.id)
+        if (error) throw error
+        return existing.id
+      } else {
+        const { data, error } = await supabase.from('classes').insert([payload]).select().single()
+        if (error) throw error
+        return data.id
+      }
     }
   }
 
