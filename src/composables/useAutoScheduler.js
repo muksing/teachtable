@@ -178,7 +178,7 @@ export function useAutoScheduler() {
 
           const { error: upsertErr } = await supabase
             .from('timetable_slots')
-            .upsert(rows, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+            .upsert(rows, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
 
           if (upsertErr) throw upsertErr
         }

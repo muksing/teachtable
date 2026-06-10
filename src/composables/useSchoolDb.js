@@ -486,6 +486,7 @@ export function useSchoolDb() {
     const { data, error } = await supabase
       .from('timetable_slots')
       .select('*')
+      .eq('school_id', authStore.schoolId)
       .eq('term_id', termId)
     if (error) throw error
     return (data || []).map(row => ({
@@ -498,9 +499,9 @@ export function useSchoolDb() {
   }
 
   async function saveTeachingAssignment(assignment) {
-    // Map old assignment shape to timetable_slots
     const termId = await getTermId()
     const payload = {
+      school_id: authStore.schoolId,
       term_id: termId,
       class_id: assignment.class_id,
       subject_id: assignment.subject_code || assignment.subject_id,
@@ -512,7 +513,7 @@ export function useSchoolDb() {
     }
     const { data, error } = await supabase
       .from('timetable_slots')
-      .upsert([payload], { onConflict: 'term_id,class_id,day_of_week,period_number' })
+      .upsert([payload], { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
       .select()
       .single()
     if (error) throw error
@@ -527,6 +528,7 @@ export function useSchoolDb() {
     const { data, error } = await supabase
       .from('timetable_slots')
       .select('*')
+      .eq('school_id', authStore.schoolId)
       .eq('term_id', termId)
     if (error) throw error
     return (data || []).map(mapTimetableSlot)
@@ -553,6 +555,7 @@ export function useSchoolDb() {
   async function saveTimetableSlot(slot) {
     const termId = await getTermId()
     const payload = {
+      school_id: authStore.schoolId,
       term_id: termId,
       class_id: slot.class_id,
       subject_id: slot.subject_code || slot.subject_id || null,
@@ -564,7 +567,7 @@ export function useSchoolDb() {
     }
     const { error } = await supabase
       .from('timetable_slots')
-      .upsert([payload], { onConflict: 'term_id,class_id,day_of_week,period_number' })
+      .upsert([payload], { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
     if (error) throw error
   }
 
@@ -572,7 +575,9 @@ export function useSchoolDb() {
   async function saveTimetableBatch(slots) {
     if (!slots || slots.length === 0) return
     const termId = await getTermId()
+    const schoolId = authStore.schoolId
     const payloads = slots.map(slot => ({
+      school_id: schoolId,
       term_id: termId,
       class_id: slot.class_id,
       subject_id: slot.subject_code || slot.subject_id || null,
@@ -582,12 +587,11 @@ export function useSchoolDb() {
       period_number: Number(slot.period || slot.period_number),
       slot_type: slot.type || slot.slot_type || 'normal',
     }))
-    // upsert in chunks of 400 to avoid request size limits
     const CHUNK = 400
     for (let i = 0; i < payloads.length; i += CHUNK) {
       const { error } = await supabase
         .from('timetable_slots')
-        .upsert(payloads.slice(i, i + CHUNK), { onConflict: 'term_id,class_id,day_of_week,period_number' })
+        .upsert(payloads.slice(i, i + CHUNK), { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
       if (error) throw error
     }
   }

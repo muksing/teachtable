@@ -818,7 +818,7 @@ async function confirmImport() {
         day_of_week: 'จันทร์',
         period_number: 1,
         slot_type: 'subject',
-      }], { onConflict: 'term_id,class_id,day_of_week,period_number' })
+      }], { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
       if (error) throw error
       imported++
     }

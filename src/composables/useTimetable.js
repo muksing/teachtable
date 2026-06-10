@@ -290,7 +290,7 @@ export function useTimetable() {
       // Upsert by unique key (term_id, class_id, day_of_week, period_number)
       const { data, error } = await supabase
         .from('timetable_slots')
-        .upsert(slotData, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+        .upsert(slotData, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
         .select()
         .single()
 
@@ -355,7 +355,7 @@ export function useTimetable() {
 
       const { data, error } = await supabase
         .from('timetable_slots')
-        .upsert(rows, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+        .upsert(rows, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
         .select()
 
       if (error) throw error
@@ -450,7 +450,7 @@ export function useTimetable() {
 
       const { data, error } = await supabase
         .from('timetable_slots')
-        .upsert(rows, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+        .upsert(rows, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
         .select()
 
       if (error) throw error

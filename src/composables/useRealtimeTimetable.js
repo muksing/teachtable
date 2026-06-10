@@ -239,7 +239,7 @@ export function useRealtimeTimetable() {
         school_id: sid,
         updated_by: authStore.profile?.uid || '',
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+      }, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
 
     if (error) throw error
     return payload.id
@@ -301,7 +301,7 @@ export function useRealtimeTimetable() {
 
     const { error: insertErr } = await supabase
       .from('timetable_slots')
-      .upsert(rows, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+      .upsert(rows, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
 
     if (insertErr) throw insertErr
   }
@@ -338,7 +338,7 @@ export function useRealtimeTimetable() {
         school_id: sid,
         updated_by: uid,
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+      }, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
 
     if (insertErr) throw insertErr
   }
@@ -363,7 +363,7 @@ export function useRealtimeTimetable() {
         school_id: sid,
         updated_by: authStore.profile?.uid || '',
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'term_id,class_id,day_of_week,period_number' })
+      }, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
 
     if (error) throw error
   }
