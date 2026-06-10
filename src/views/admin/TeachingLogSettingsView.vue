@@ -618,8 +618,7 @@ async function saveSettings() {
   }
 }
 
-// Exported for use by StudentsView and others
-export async function loadGasSettings(sid) {
+async function loadGasSettings(sid) {
   const { data } = await supabase.from('schools').select('settings').eq('id', sid).single()
   const tl = data?.settings?.teaching_log_settings || {}
   return {
