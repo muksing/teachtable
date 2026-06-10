@@ -329,9 +329,15 @@
             <!-- Export / Import — SchoolAdmin only -->
             <template v-if="authStore.isAdmin">
               <input ref="importFileRef" type="file" accept=".json" class="hidden" @change="handleImportFile" />
-              <el-button size="small" plain @click="exportTimetable" title="ส่งออกตารางสอนเป็นไฟล์ JSON สำรอง">
-                📤 ส่งออก
-              </el-button>
+              <el-dropdown trigger="click" @command="handleExportCommand">
+                <el-button size="small" plain>📤 ส่งออก ▾</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="excel">📊 Excel — นำไปใช้งาน/พิมพ์</el-dropdown-item>
+                    <el-dropdown-item command="json">🔧 JSON — สำรองข้อมูล/กู้คืน</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
               <el-button size="small" plain @click="importFileRef?.click()" title="นำเข้าตารางสอนจากไฟล์ JSON ที่สำรองไว้">
                 📥 นำเข้า
               </el-button>
@@ -2354,6 +2360,95 @@ async function exportTimetable() {
   URL.revokeObjectURL(url)
   ElMessage.success(`ส่งออก ${data.length} slot เรียบร้อย`)
 }
+
+function handleExportCommand(cmd) {
+  if (cmd === 'excel') exportTimetableExcel()
+  else exportTimetable()
+}
+
+async function exportTimetableExcel() {
+  const schoolId = authStore.schoolId
+  const t = term()
+  const { data, error } = await supabase
+    .from('timetable_slots').select('*')
+    .eq('school_id', schoolId).eq('term_id', t)
+  if (error) { ElMessage.error('ส่งออกล้มเหลว: ' + error.message); return }
+
+  const subjectSlots = (data || []).filter(s =>
+    s.slot_type === 'subject' && s.class_id && !String(s.class_id).startsWith('__')
+  )
+  if (!subjectSlots.length) { ElMessage.warning('ไม่มีข้อมูลวิชาที่จะส่งออก'); return }
+
+  const dayLabels = { 1: 'จันทร์', 2: 'อังคาร', 3: 'พุธ', 4: 'พฤหัสบดี', 5: 'ศุกร์', 6: 'เสาร์', 7: 'อาทิตย์' }
+  const periodTimes = PERIOD_TIMES.value  // { 1: '08:00-08:50', ... }
+
+  const wb = XLSX.utils.book_new()
+
+  // ── Sheet 1: รายการทั้งหมด ──────────────────────────────────────────────
+  const listHeaders = ['ห้องเรียน', 'วัน', 'คาบ', 'เวลา', 'รหัสวิชา', 'รายวิชา', 'ครูผู้สอน', 'ห้อง/Lab']
+  const listRows = [...subjectSlots]
+    .sort((a, b) =>
+      (a.class_id || '').localeCompare(b.class_id || '') ||
+      a.day_of_week - b.day_of_week || a.period_number - b.period_number
+    )
+    .map(s => [
+      s.class_id,
+      dayLabels[s.day_of_week] || s.day_of_week,
+      s.period_number,
+      periodTimes[s.period_number] || '',
+      s.subject_id || '',
+      s.subject_name || '',
+      s.teacher_name || '',
+      s.room_id || '',
+    ])
+  const ws1 = XLSX.utils.aoa_to_sheet([listHeaders, ...listRows])
+  ws1['!cols'] = [8, 10, 5, 12, 10, 26, 20, 10].map(w => ({ wch: w }))
+  XLSX.utils.book_append_sheet(wb, ws1, 'ตารางสอน')
+
+  // ── Sheet ต่อๆ ไป: กริดแต่ละห้อง ──────────────────────────────────────
+  const classIds = [...new Set(subjectSlots.map(s => s.class_id))].sort((a, b) => a.localeCompare(b))
+  const days = DAYS.value  // [{ value:1, label:'จันทร์' }, ...]
+  const periods = PERIODS.value  // [1,2,...,9]
+
+  classIds.forEach(cid => {
+    const classSlots = subjectSlots.filter(s => s.class_id === cid)
+    const slotMap = {}
+    classSlots.forEach(s => { slotMap[`${s.day_of_week}_${s.period_number}`] = s })
+
+    // Header row: วัน\คาบ | คาบ1 (เวลา) | คาบ2 | ...
+    const headerRow = ['วัน \\ คาบ', ...periods.map(p => periodTimes[p] ? `คาบ ${p}\n${periodTimes[p]}` : `คาบ ${p}`)]
+    const dataRows = days.map(d => {
+      const row = [d.label]
+      periods.forEach(p => {
+        const s = slotMap[`${d.value}_${p}`]
+        row.push(s ? `${s.subject_name || ''}\n${s.teacher_name || ''}${s.room_id ? '\n' + s.room_id : ''}` : '')
+      })
+      return row
+    })
+
+    const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows])
+    ws['!cols'] = [{ wch: 12 }, ...periods.map(() => ({ wch: 18 }))]
+    ws['!rows'] = [{ hpt: 30 }, ...days.map(() => ({ hpt: 45 }))]
+
+    // Wrap text for all cells
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+    for (let R = range.s.r; R <= range.e.r; R++) {
+      for (let C = range.s.c; C <= range.e.c; C++) {
+        const addr = XLSX.utils.encode_cell({ r: R, c: C })
+        if (!ws[addr]) ws[addr] = { t: 's', v: '' }
+        if (!ws[addr].s) ws[addr].s = {}
+        ws[addr].s.alignment = { wrapText: true, vertical: 'top' }
+      }
+    }
+
+    const sheetName = `ห้อง${cid}`.slice(0, 31)
+    XLSX.utils.book_append_sheet(wb, ws, sheetName)
+  })
+
+  XLSX.writeFile(wb, `ตารางสอน_${t}_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  ElMessage.success(`ส่งออก Excel ${classIds.length} ห้อง (${subjectSlots.length} คาบ) เรียบร้อย`)
+}
+
 
 async function handleImportFile(event) {
   const file = event.target.files?.[0]
