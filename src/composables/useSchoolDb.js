@@ -231,22 +231,43 @@ export function useSchoolDb() {
     const payload = {
       school_id: authStore.schoolId,
       subject_code: subject.subject_code,
-      name: subject.name,
+      name: subject.name || '',
+      name_en: subject.name_en || '',
+      dept: subject.dept || '',
+      levels: Array.isArray(subject.levels) ? subject.levels : [],
+      subject_type: subject.subject_type || '',
+      credits: subject.credits != null ? Number(subject.credits) : 0,
+      periods_per_week: subject.periods_per_week != null ? Number(subject.periods_per_week) : 2,
+      consecutive_periods: subject.consecutive_periods != null ? Number(subject.consecutive_periods) : 1,
+      note: subject.note || '',
+      is_active: subject.is_active !== false,
     }
-    if (subject.id && subject.id.includes('-')) {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(subject.id || '')
+    if (isUuid) {
       const { error } = await supabase.from('subjects').update(payload).eq('id', subject.id)
       if (error) throw error
       return subject.id
     } else {
-      const { data, error } = await supabase.from('subjects').insert([payload]).select().single()
-      if (error) throw error
-      return data.id
+      const { data: existing } = await supabase.from('subjects').select('id')
+        .eq('school_id', authStore.schoolId).eq('subject_code', subject.subject_code).maybeSingle()
+      if (existing?.id) {
+        const { error } = await supabase.from('subjects').update(payload).eq('id', existing.id)
+        if (error) throw error
+        return existing.id
+      } else {
+        const { data, error } = await supabase.from('subjects').insert([payload]).select().single()
+        if (error) throw error
+        return data.id
+      }
     }
   }
 
-  async function deleteSubject(id) {
-    if (!id || !id.includes('-')) return
-    const { error } = await supabase.from('subjects').delete().eq('id', id)
+  async function deleteSubject(subjectCode) {
+    if (!subjectCode) return
+    const { error } = await supabase.from('subjects')
+      .delete()
+      .eq('school_id', authStore.schoolId)
+      .eq('subject_code', subjectCode)
     if (error) throw error
   }
 
@@ -374,19 +395,38 @@ export function useSchoolDb() {
       last_name: student.surname,
       gender: student.gender,
       status: student.student_status || 'เรียนอยู่',
+      student_status: student.student_status || 'เรียนอยู่',
+      is_active: student.is_active !== false,
       total_behavior_score: student.total_behavior_score ?? 100,
       attendance_behavior_score: student.attendance_behavior_score ?? 0,
       learning_behavior_score: student.learning_behavior_score ?? 0,
       photo_url: student.photo_url || null,
+      birth_date: student.birth_date || null,
+      gov_id: student.national_id || student.gov_id || null,
+      note: student.note || '',
+      parent_name: student.parent_name || '',
+      parent_phone: student.parent_phone || '',
+      contact: student.contact || null,
+      guardian_primary: student.guardian_primary || null,
+      guardian_secondary: student.guardian_secondary || null,
     }
-    if (student.id && student.id.includes('-')) {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(student.id || '')
+    if (isUuid) {
       const { error } = await supabase.from('students').update(payload).eq('id', student.id)
       if (error) throw error
       return student.id
     } else {
-      const { data, error } = await supabase.from('students').insert([payload]).select().single()
-      if (error) throw error
-      return data.id
+      const { data: existing } = await supabase.from('students').select('id')
+        .eq('school_id', authStore.schoolId).eq('student_code', student.student_id).maybeSingle()
+      if (existing?.id) {
+        const { error } = await supabase.from('students').update(payload).eq('id', existing.id)
+        if (error) throw error
+        return existing.id
+      } else {
+        const { data, error } = await supabase.from('students').insert([payload]).select().single()
+        if (error) throw error
+        return data.id
+      }
     }
   }
 
@@ -793,15 +833,26 @@ export function useSchoolDb() {
       floor: room.floor || null,
       capacity: room.capacity || null,
       is_active: room.is_active !== false,
+      note: room.note || '',
     }
-    let savedId = room.id
-    if (room.id && room.id.includes('-')) {
+    let savedId = null
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(room.id || '')
+    if (isUuid) {
       const { error } = await supabase.from('rooms').update(payload).eq('id', room.id)
       if (error) throw error
+      savedId = room.id
     } else {
-      const { data, error } = await supabase.from('rooms').insert([payload]).select().single()
-      if (error) throw error
-      savedId = data.id
+      const { data: existing } = await supabase.from('rooms').select('id')
+        .eq('school_id', authStore.schoolId).eq('room_code', room.room_id).maybeSingle()
+      if (existing?.id) {
+        const { error } = await supabase.from('rooms').update(payload).eq('id', existing.id)
+        if (error) throw error
+        savedId = existing.id
+      } else {
+        const { data, error } = await supabase.from('rooms').insert([payload]).select().single()
+        if (error) throw error
+        savedId = data.id
+      }
     }
     try { await rebuildRoomCatalog() } catch (e) { console.warn('rebuildRoomCatalog failed:', e) }
     return savedId

@@ -27,11 +27,8 @@ export const cascadeService = {
     const newCode = newData.subject_code || newData.subject_id
     const oldCode = oldData.subject_code || oldData.subject_id || oldId
     const isCodeChanged = oldCode !== newCode
-    const isNameChanged = (newData.name || newData.subject_name) !== (oldData.name || oldData.subject_name)
 
-    if (!isCodeChanged && !isNameChanged) return true
-
-    // Check for duplicate subject_code in subjects table (same school)
+    // Check for duplicate subject_code (same school)
     if (isCodeChanged) {
       const { data: existing } = await supabase
         .from('subjects')
@@ -43,37 +40,47 @@ export const cascadeService = {
       }
     }
 
-    // 1. Update subjects table
-    const subjectUpdates = {}
-    if (isCodeChanged) subjectUpdates.subject_code = newCode
-    if (isNameChanged) subjectUpdates.name = newData.name || newData.subject_name
-
-    if (Object.keys(subjectUpdates).length > 0) {
-      const { error } = await supabase
-        .from('subjects')
-        .update(subjectUpdates)
-        .eq('subject_code', oldCode)
-      if (error) throw error
+    // 1. Update subjects table with ALL fields
+    const subjectUpdates = {
+      subject_code: newCode,
+      name: newData.name || newData.subject_name || oldData.name || '',
+      name_en: newData.name_en !== undefined ? (newData.name_en || '') : (oldData.name_en || ''),
+      dept: newData.dept !== undefined ? (newData.dept || '') : (oldData.dept || ''),
+      levels: newData.levels !== undefined
+        ? (Array.isArray(newData.levels) ? newData.levels : [])
+        : (oldData.levels || []),
+      subject_type: newData.subject_type !== undefined ? (newData.subject_type || '') : (oldData.subject_type || ''),
+      credits: newData.credits != null ? Number(newData.credits) : (Number(oldData.credits) || 0),
+      periods_per_week: newData.periods_per_week != null
+        ? Number(newData.periods_per_week)
+        : (Number(oldData.periods_per_week) || 2),
+      consecutive_periods: newData.consecutive_periods != null
+        ? Number(newData.consecutive_periods)
+        : (Number(oldData.consecutive_periods) || 1),
+      note: newData.note !== undefined ? (newData.note || '') : (oldData.note || ''),
     }
 
-    // 2. Update timetable_slots.subject_id
+    const { error } = await supabase
+      .from('subjects')
+      .update(subjectUpdates)
+      .eq('subject_code', oldCode)
+    if (error) throw error
+
+    // 2. Cascade code change to timetable_slots and teach_actuals
     if (isCodeChanged) {
-      const { error } = await supabase
+      const { error: slotsError } = await supabase
         .from('timetable_slots')
         .update({ subject_id: newCode })
         .eq('term_id', termId)
         .eq('subject_id', oldCode)
-      if (error) throw error
-    }
+      if (slotsError) throw slotsError
 
-    // 3. Update teach_actuals.subject_id
-    if (isCodeChanged) {
-      const { error } = await supabase
+      const { error: actualsError } = await supabase
         .from('teach_actuals')
         .update({ subject_id: newCode })
         .eq('term_id', termId)
         .eq('subject_id', oldCode)
-      if (error) throw error
+      if (actualsError) throw actualsError
     }
 
     return true
