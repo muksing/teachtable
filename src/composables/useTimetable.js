@@ -30,8 +30,12 @@ export function useTimetable() {
   })
 
   // Dynamic periods from school settings
+  // periods_per_day อาจอยู่ที่ schoolInfo โดยตรง หรืออยู่ใน settings.school_info (nested JSONB)
   const PERIODS = computed(() => {
-    const n = schoolStore.schoolInfo?.periods_per_day || 8
+    const info = schoolStore.schoolInfo
+    const n = info?.periods_per_day
+      || info?.settings?.school_info?.periods_per_day
+      || 8
     return Array.from({ length: n }, (_, i) => i + 1)
   })
 

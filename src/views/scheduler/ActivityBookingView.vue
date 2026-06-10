@@ -513,7 +513,10 @@ const { getClasses, getTeachers, getRooms, getRoomCatalog } = useSchoolDb()
 const { printReport } = usePrintReport()
 
 const term = () => schoolStore.currentTerm || '2568_1'
-const periodsPerDay = computed(() => schoolStore.schoolInfo?.periods_per_day || 8)
+const periodsPerDay = computed(() => {
+  const info = schoolStore.schoolInfo
+  return info?.periods_per_day || info?.settings?.school_info?.periods_per_day || 8
+})
 
 // ===== Colors =====
 const ACTIVITY_COLORS = [
