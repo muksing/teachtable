@@ -101,8 +101,10 @@ export function useSchedulerPresence() {
     if (!isSchedulableRole()) return { allowed: true, activeCount: 0, limit: Number(limit || 0) }
 
     const planLimit = Number(limit || 0)
+    // 0 = ไม่ได้ตั้งค่า = ไม่จำกัด → อนุญาตเสมอ
     if (!planLimit || planLimit < 1) {
-      return { allowed: false, activeCount: 0, limit: 0 }
+      await upsertPresence()
+      return { allowed: true, activeCount: 0, limit: 0 }
     }
 
     await upsertPresence()

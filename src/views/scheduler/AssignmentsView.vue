@@ -347,7 +347,7 @@ import { useScheduleGuard } from '@/composables/useScheduleGuard'
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
 const { isLocked } = useScheduleGuard()
-const { getTeachers, getSubjects, getClasses, getRooms, getRoomCatalog, getTeachingAssignments, getTimetable } = useSchoolDb()
+const { getTeachers, getSubjects, getClasses, getRooms, getRoomCatalog, saveTeachingAssignment, deleteTeachingAssignment } = useSchoolDb()
 const { printReport } = usePrintReport()
 const term = () => schoolStore.currentTerm || '2568_1'
 
@@ -456,48 +456,55 @@ onMounted(async () => {
 })
 
 async function reload() {
-  // Read timetable_slots as both the "assignments" source and the "placed" counter.
-  // Group by class_id + subject_id + teacher_id to get unique assignment rows,
-  // then count how many slots exist per group.
   const schoolId = authStore.schoolId
   const currentTerm = term()
-  const { data, error } = await supabase
-    .from('timetable_slots')
+
+  const { data: aData, error: aErr } = await supabase
+    .from('teaching_assignments')
     .select('*')
     .eq('school_id', schoolId)
     .eq('term_id', currentTerm)
-  if (error) throw error
+    .order('class_id')
+  if (aErr) throw aErr
 
-  // Build grouped assignments map keyed by class+subject+teacher
-  const map = {}
-  ;(data || []).forEach(row => {
-    const key = `${row.class_id}|${row.subject_id}|${row.teacher_id}`
-    if (!map[key]) {
-      const teacher = teachers.value.find(t => t.teacher_id === row.teacher_id)
-      const subject = subjects.value.find(s => s.subject_code === row.subject_id)
-      map[key] = {
-        id: key,
-        assign_id: key,
-        class_id: row.class_id,
-        subject_code: row.subject_id,
-        subject_name: subject?.name || row.subject_id || '',
-        teacher_id: row.teacher_id,
-        teacher_name: teacher ? `${teacher.prefix || ''}${teacher.name} ${teacher.surname}` : row.teacher_id || '',
-        preferred_room: row.room_id || '',
-        periods_per_week: 0,
-        consecutive_periods: 1,
-        placed: 0,
-      }
-    }
-    map[key].periods_per_week += 1
-    map[key].placed += 1
+  const { data: sData, error: sErr } = await supabase
+    .from('timetable_slots')
+    .select('assign_id')
+    .eq('school_id', schoolId)
+    .eq('term_id', currentTerm)
+    .eq('slot_type', 'subject')
+    .not('assign_id', 'is', null)
+  if (sErr) throw sErr
+
+  const placedCounts = {}
+  ;(sData || []).forEach(row => {
+    if (row.assign_id) placedCounts[row.assign_id] = (placedCounts[row.assign_id] || 0) + 1
   })
 
-  assignments.value = Object.values(map).map(a => ({
-    ...a,
-    done: a.placed >= a.periods_per_week,
-    remaining: Math.max(0, a.periods_per_week - a.placed),
-  }))
+  assignments.value = (aData || []).map(row => {
+    const teacher = teachers.value.find(t => t.teacher_id === row.teacher_id)
+    const subject = subjects.value.find(s => s.subject_code === row.subject_id)
+    const placed = placedCounts[row.id] || 0
+    const total = Number(row.periods_per_week) || 1
+    return {
+      id: row.id,
+      assign_id: row.id,
+      class_id: row.class_id,
+      subject_code: row.subject_id,
+      subject_id: row.subject_id,
+      subject_name: subject?.name || row.subject_name || row.subject_id || '',
+      teacher_id: row.teacher_id,
+      teacher_name: teacher
+        ? `${teacher.prefix || ''}${teacher.name} ${teacher.surname}`
+        : (row.teacher_name || row.teacher_id || ''),
+      preferred_room: row.preferred_room || '',
+      periods_per_week: total,
+      consecutive_periods: Number(row.consecutive_periods) || 1,
+      placed,
+      done: placed >= total,
+      remaining: Math.max(0, total - placed),
+    }
+  })
 }
 
 function openDialog(a = null) {
@@ -558,48 +565,23 @@ async function saveAssignment() {
 
     saving.value = true
     try {
-      // In Supabase, "assignments" are represented by timetable_slots.
-      // Saving an assignment upserts a placeholder slot for the first period.
-      // The timetable editor manages the actual slot placement.
-      const schoolId = authStore.schoolId
-      const currentTerm = term()
-      // Check if any slot already exists for this class+subject+teacher combo
-      const { data: existing } = await supabase
-        .from('timetable_slots')
-        .select('id')
-        .eq('school_id', schoolId)
-        .eq('term_id', currentTerm)
-        .eq('class_id', form.class_id)
-        .eq('subject_id', form.subject_code)
-        .eq('teacher_id', form.teacher_id)
-        .limit(1)
-
-      if (!existing?.length) {
-        // Insert one placeholder row so the assignment appears in the list
-        const { error } = await supabase.from('timetable_slots').insert([{
-          school_id: schoolId,
-          term_id: currentTerm,
-          class_id: form.class_id,
-          subject_id: form.subject_code,
-          teacher_id: form.teacher_id,
-          room_id: form.preferred_room || null,
-          day_of_week: 'จันทร์',
-          period_number: 1,
-          slot_type: 'subject',
-        }])
-        if (error) throw error
-      } else if (editing.value) {
-        // Update room_id on all matching slots
+      await saveTeachingAssignment({
+        id: editing.value?.id,
+        class_id: form.class_id,
+        subject_code: form.subject_code,
+        subject_name: form.subject_name,
+        teacher_id: form.teacher_id,
+        teacher_name: form.teacher_name,
+        preferred_room: form.preferred_room,
+        periods_per_week: form.periods_per_week,
+        consecutive_periods: form.consecutive_periods,
+      })
+      if (editing.value?.id) {
         await supabase
           .from('timetable_slots')
-          .update({ room_id: form.preferred_room || null })
-          .eq('school_id', schoolId)
-          .eq('term_id', currentTerm)
-          .eq('class_id', form.class_id)
-          .eq('subject_id', form.subject_code)
-          .eq('teacher_id', form.teacher_id)
+          .update({ room_id: form.preferred_room || null, teacher_name: form.teacher_name || null })
+          .eq('assign_id', editing.value.id)
       }
-
       ElMessage.success('บันทึกเรียบร้อย')
       dialogVisible.value = false
       await reload()
@@ -649,19 +631,12 @@ function validatePeriods() {
 async function deleteAssignment(a) {
   try {
     await ElMessageBox.confirm(
-      `ลบ "${a.subject_name}" ห้อง ${a.class_id}? (ลบทุกคาบในตารางสอน)`,
+      `ลบ "${a.subject_name}" ห้อง ${a.class_id}?\n(ลบภาระงานและคาบในตารางสอนทั้งหมด)`,
       'ยืนยันการลบ',
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
-    const { error } = await supabase
-      .from('timetable_slots')
-      .delete()
-      .eq('school_id', authStore.schoolId)
-      .eq('term_id', term())
-      .eq('class_id', a.class_id)
-      .eq('subject_id', a.subject_code)
-      .eq('teacher_id', a.teacher_id)
-    if (error) throw error
+    await supabase.from('timetable_slots').delete().eq('assign_id', a.id)
+    await deleteTeachingAssignment(a.id)
     ElMessage.success('ลบเรียบร้อย')
     await reload()
   } catch (e) {
@@ -681,14 +656,8 @@ async function deleteSelected() {
     )
     loading.value = true
     for (const row of selectedRows.value) {
-      await supabase
-        .from('timetable_slots')
-        .delete()
-        .eq('school_id', authStore.schoolId)
-        .eq('term_id', term())
-        .eq('class_id', row.class_id)
-        .eq('subject_id', row.subject_code)
-        .eq('teacher_id', row.teacher_id)
+      await supabase.from('timetable_slots').delete().eq('assign_id', row.id)
+      await deleteTeachingAssignment(row.id)
     }
     selectedRows.value = []
     ElMessage.success('ลบรายการที่เลือกเรียบร้อย')
@@ -708,12 +677,16 @@ async function deleteAll() {
       { confirmButtonText: 'ลบทั้งหมด', cancelButtonText: 'ยกเลิก', type: 'error' }
     )
     loading.value = true
-    const { error } = await supabase
-      .from('timetable_slots')
-      .delete()
-      .eq('school_id', authStore.schoolId)
-      .eq('term_id', term())
-    if (error) throw error
+    const schoolId = authStore.schoolId
+    const currentTerm = term()
+    const { error: e1 } = await supabase
+      .from('timetable_slots').delete()
+      .eq('school_id', schoolId).eq('term_id', currentTerm).eq('slot_type', 'subject')
+    if (e1) throw e1
+    const { error: e2 } = await supabase
+      .from('teaching_assignments').delete()
+      .eq('school_id', schoolId).eq('term_id', currentTerm)
+    if (e2) throw e2
     ElMessage.success('ลบทั้งหมดเรียบร้อย')
     await reload()
   } catch (e) {
@@ -806,25 +779,27 @@ async function confirmImport() {
     const schoolId = authStore.schoolId
     const currentTerm = term()
     for (const row of validRows) {
-      // Insert one placeholder slot per assignment row (period 1, Monday)
-      // so it appears in the assignment list; TimetableView places it properly.
-      const { error } = await supabase.from('timetable_slots').upsert([{
+      const { error } = await supabase.from('teaching_assignments').upsert([{
         school_id: schoolId,
         term_id: currentTerm,
         class_id: row.class_id,
         subject_id: row.subject_code,
+        subject_name: row.subject_name,
         teacher_id: row.teacher_id,
-        room_id: row.preferred_room || null,
-        day_of_week: 'จันทร์',
-        period_number: 1,
-        slot_type: 'subject',
-      }], { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+        teacher_name: row.teacher_name,
+        preferred_room: row.preferred_room || '',
+        periods_per_week: row.periods_per_week,
+        consecutive_periods: row.consecutive_periods,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }], { onConflict: 'school_id,term_id,class_id,subject_id,teacher_id' })
       if (error) throw error
       imported++
     }
     await reload()
     ElMessage.success(`นำเข้า ${imported} รายการเรียบร้อย`)
     importPreviewVisible.value = false
+    importRows.value = []
   } catch (e) {
     ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
   } finally {

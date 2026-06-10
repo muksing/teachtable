@@ -484,17 +484,27 @@ export function useSchoolDb() {
   async function getTeachingAssignments() {
     const termId = await getTermId()
     const { data, error } = await supabase
-      .from('timetable_slots')
+      .from('teaching_assignments')
       .select('*')
       .eq('school_id', authStore.schoolId)
       .eq('term_id', termId)
+      .order('class_id')
     if (error) throw error
     return (data || []).map(row => ({
-      ...mapTimetableSlot(row),
+      id: row.id,
       assign_id: row.id,
-      subject_code: row.subject_id ?? '',
-      teacher_id: row.teacher_id ?? '',
-      periods_per_week: 1,
+      class_id: row.class_id,
+      subject_code: row.subject_id,
+      subject_id: row.subject_id,
+      subject_name: row.subject_name || row.subject_id || '',
+      teacher_id: row.teacher_id,
+      teacher_name: row.teacher_name || row.teacher_id || '',
+      preferred_room: row.preferred_room || '',
+      periods_per_week: Number(row.periods_per_week) || 1,
+      consecutive_periods: Number(row.consecutive_periods) || 1,
+      placed: 0,
+      remaining: Number(row.periods_per_week) || 1,
+      done: false,
     }))
   }
 
@@ -504,20 +514,36 @@ export function useSchoolDb() {
       school_id: authStore.schoolId,
       term_id: termId,
       class_id: assignment.class_id,
-      subject_id: assignment.subject_code || assignment.subject_id,
-      teacher_id: assignment.teacher_id,
-      room_id: assignment.room_id || null,
-      day_of_week: assignment.day || assignment.day_of_week,
-      period_number: Number(assignment.period || assignment.period_number),
-      slot_type: assignment.slot_type || 'normal',
+      subject_id: assignment.subject_code || assignment.subject_id || '',
+      subject_name: assignment.subject_name || '',
+      teacher_id: assignment.teacher_id || '',
+      teacher_name: assignment.teacher_name || '',
+      preferred_room: assignment.preferred_room || '',
+      periods_per_week: Number(assignment.periods_per_week) || 1,
+      consecutive_periods: Number(assignment.consecutive_periods) || 1,
+      updated_at: new Date().toISOString(),
+    }
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(assignment.id || '')
+    if (isUuid) {
+      const { error } = await supabase.from('teaching_assignments').update(payload).eq('id', assignment.id)
+      if (error) throw error
+      return assignment.id
     }
     const { data, error } = await supabase
-      .from('timetable_slots')
-      .upsert([payload], { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+      .from('teaching_assignments')
+      .upsert([{ ...payload, created_at: new Date().toISOString() }], {
+        onConflict: 'school_id,term_id,class_id,subject_id,teacher_id',
+      })
       .select()
       .single()
     if (error) throw error
     return data.id
+  }
+
+  async function deleteTeachingAssignment(id) {
+    if (!id) return
+    const { error } = await supabase.from('teaching_assignments').delete().eq('id', id)
+    if (error) throw error
   }
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -559,7 +585,9 @@ export function useSchoolDb() {
       term_id: termId,
       class_id: slot.class_id,
       subject_id: slot.subject_code || slot.subject_id || null,
+      subject_name: slot.subject_name || null,
       teacher_id: slot.teacher_id || null,
+      teacher_name: slot.teacher_name || null,
       room_id: slot.room_id || null,
       day_of_week: slot.day || slot.day_of_week,
       period_number: Number(slot.period || slot.period_number),
@@ -581,7 +609,9 @@ export function useSchoolDb() {
       term_id: termId,
       class_id: slot.class_id,
       subject_id: slot.subject_code || slot.subject_id || null,
+      subject_name: slot.subject_name || null,
       teacher_id: slot.teacher_id || null,
+      teacher_name: slot.teacher_name || null,
       room_id: slot.room_id || null,
       day_of_week: slot.day || slot.day_of_week,
       period_number: Number(slot.period || slot.period_number),
@@ -608,6 +638,7 @@ export function useSchoolDb() {
     let q = supabase
       .from('teach_actuals')
       .select('*')
+      .eq('school_id', authStore.schoolId)
       .eq('term_id', termId)
       .eq('date', dateKey)
 
@@ -699,6 +730,7 @@ export function useSchoolDb() {
     let q = supabase
       .from('behavior_logs')
       .select('*')
+      .eq('school_id', authStore.schoolId)
       .eq('term_id', termId)
 
     if (studentId) q = q.eq('student_id', studentId)
@@ -734,6 +766,7 @@ export function useSchoolDb() {
     const { data, error } = await supabase
       .from('activity_bookings')
       .select('*')
+      .eq('school_id', authStore.schoolId)
       .eq('term_id', termId)
       .order('created_at')
     if (error) throw error
@@ -743,6 +776,7 @@ export function useSchoolDb() {
   async function saveActivityBooking(booking) {
     const termId = await getTermId()
     const payload = {
+      school_id: authStore.schoolId,
       term_id: termId,
       name: booking.name,
       days: booking.days,
@@ -1012,6 +1046,7 @@ export function useSchoolDb() {
       if (!classId) continue
 
       payloads.push({
+        school_id: authStore.schoolId,
         term_id: termId,
         class_id: classId,
         date: dateKey,
@@ -1019,11 +1054,8 @@ export function useSchoolDb() {
         planned_teacher_id: asText(slot?.teacher_id ?? slot?.teacher_id_snapshot),
         actual_teacher_id: asText(slot?.teacher_id ?? slot?.teacher_id_snapshot),
         subject_id: asText(slot?.subject_code ?? slot?.subject_id ?? slot?.subject_code_snapshot),
-        // legacy snapshot fields stored as jsonb or extra text (may not exist in schema — skipped)
-        // is_filled defaults false
         is_filled: false,
         slot_type: slot?.slot_type ?? slot?.type ?? 'normal',
-        // extra compat data stored in a note/metadata column if present, else ignored
         teacher_plan_name: asText(slot?.teacher_name ?? slot?.teacher_name_snapshot ?? ''),
         class_name: asText(slot?.class_name ?? slot?.class_name_snapshot ?? classId),
       })
@@ -1041,6 +1073,7 @@ export function useSchoolDb() {
         const classId = asText(cls.class_id)
         if (!classId) continue
         payloads.push({
+          school_id: authStore.schoolId,
           term_id: termId,
           class_id: classId,
           date: dateKey,
@@ -1065,7 +1098,7 @@ export function useSchoolDb() {
     for (let i = 0; i < cleanPayloads.length; i += CHUNK) {
       const { error } = await supabase
         .from('teach_actuals')
-        .upsert(cleanPayloads.slice(i, i + CHUNK), { onConflict: 'term_id,class_id,date,period_number' })
+        .upsert(cleanPayloads.slice(i, i + CHUNK), { onConflict: 'school_id,term_id,class_id,date,period_number' })
       if (error) throw error
     }
     return cleanPayloads.length
@@ -1081,6 +1114,7 @@ export function useSchoolDb() {
     const periodNum = Number(data.period ?? data.period_number)
 
     const payload = {
+      school_id: authStore.schoolId,
       term_id: termId,
       class_id: classId,
       date: dateKey,
@@ -1103,7 +1137,7 @@ export function useSchoolDb() {
     } else {
       const { error } = await supabase
         .from('teach_actuals')
-        .upsert([payload], { onConflict: 'term_id,class_id,date,period_number' })
+        .upsert([payload], { onConflict: 'school_id,term_id,class_id,date,period_number' })
       if (error) throw error
     }
   }
@@ -1190,6 +1224,7 @@ export function useSchoolDb() {
     }
 
     const payload = {
+      school_id: authStore.schoolId,
       term_id: termId,
       teacher_id: data.teacher_id,
       teacher_name: data.teacher_name,
@@ -1216,6 +1251,7 @@ export function useSchoolDb() {
     let q = supabase
       .from('leave_requests')
       .select('*')
+      .eq('school_id', authStore.schoolId)
       .eq('term_id', termId)
     if (teacherId) q = q.eq('teacher_id', teacherId)
     if (status)    q = q.eq('status', status)
@@ -1466,6 +1502,7 @@ export function useSchoolDb() {
     // Teaching assignments (timetable_slots)
     getTeachingAssignments,
     saveTeachingAssignment,
+    deleteTeachingAssignment,
     // Timetable
     getTimetable,
     getPublishedTimetableSlots,

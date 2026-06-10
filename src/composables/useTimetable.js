@@ -276,8 +276,10 @@ export function useTimetable() {
       const slotData = {
         term_id: t,
         class_id: classId,
-        subject_id: assignment.subject_id || null,
+        subject_id: assignment.subject_id || assignment.subject_code || null,
+        subject_name: assignment.subject_name || null,
         teacher_id: assignment.teacher_id || null,
+        teacher_name: assignment.teacher_name || null,
         room_id: assignment.preferred_room || null,
         day_of_week: day,
         period_number: period,

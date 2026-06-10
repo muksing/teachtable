@@ -1432,16 +1432,15 @@ async function doApplySupervisions() {
 function recalcAssignmentProgress() {
   const placedByAssign = {}
   rt.timetableSlots.value.forEach(s => {
-    if (s.type !== 'subject') return
-    const assignId = s.assign_id || s.id
+    if (s.slot_type !== 'subject' && s.type !== 'subject') return
+    const assignId = s.assign_id
     if (!assignId) return
     placedByAssign[assignId] = (placedByAssign[assignId] || 0) + 1
   })
 
   assignments.value = assignments.value.map(a => {
-    const assignId = a.assign_id || a.id
     const total = Number(a.periods_per_week) || 0
-    const placed = placedByAssign[assignId] || 0
+    const placed = placedByAssign[a.assign_id || a.id] || 0
     return {
       ...a,
       placed,
@@ -1461,41 +1460,27 @@ async function loadAssignmentsWithProgress(forceReload = false) {
     if (forceReload || assignments.value.length === 0) {
       const schoolId = authStore.schoolId
       const t = term()
-      const { data, error } = await supabase
-        .from('timetable_slots')
+      const { data: aData, error: aErr } = await supabase
+        .from('teaching_assignments')
         .select('*')
         .eq('school_id', schoolId)
         .eq('term_id', t)
-        .eq('slot_type', 'subject')
-      if (error) throw error
-      // Derive assignment list: group by class+subject+teacher, sum periods_per_week
-      const map = {}
-      ;(data || []).forEach(row => {
-        const key = `${row.class_id}|${row.subject_id}|${row.teacher_id}`
-        if (!map[key]) {
-          const teacher = teachers.value.find(tc => tc.teacher_id === row.teacher_id)
-          const subject = (schoolStore.subjects || []).find(s => s.subject_code === row.subject_id)
-          map[key] = {
-            id: key,
-            assign_id: key,
-            class_id: row.class_id,
-            subject_code: row.subject_id,
-            subject_name: subject?.name || row.subject_id || '',
-            teacher_id: row.teacher_id,
-            teacher_name: teacher ? `${teacher.prefix || ''}${teacher.name} ${teacher.surname}` : (row.teacher_id || ''),
-            preferred_room: row.room_id || '',
-            periods_per_week: 0,
-            consecutive_periods: 1,
-            placed: 0,
-          }
-        }
-        map[key].periods_per_week += 1
-        map[key].placed += 1
-      })
-      assignments.value = Object.values(map).map(a => ({
-        ...a,
-        done: a.placed >= a.periods_per_week,
-        remaining: Math.max(0, a.periods_per_week - a.placed),
+      if (aErr) throw aErr
+
+      assignments.value = (aData || []).map(row => ({
+        id: row.id,
+        assign_id: row.id,
+        class_id: row.class_id,
+        subject_code: row.subject_id,
+        subject_name: row.subject_name || row.subject_id || '',
+        teacher_id: row.teacher_id,
+        teacher_name: row.teacher_name || row.teacher_id || '',
+        preferred_room: row.preferred_room || '',
+        periods_per_week: Number(row.periods_per_week) || 1,
+        consecutive_periods: Number(row.consecutive_periods) || 1,
+        placed: 0,
+        done: false,
+        remaining: Number(row.periods_per_week) || 1,
       }))
     }
     recalcAssignmentProgress()
@@ -2201,25 +2186,23 @@ async function handleClearAuto() {
 async function handleClearAll() {
   if (!authStore.isAdmin) { ElMessage.error('เฉพาะ SchoolAdmin เท่านั้นที่สามารถล้างตารางได้'); return }
   try {
-    await ElMessageBox.confirm('ยืนยันล้างตารางทั้งหมด? (จะเริ่มขั้นตอน ① ลงกิจกรรม → ② ครูคุม ใหม่)', 'ยืนยัน', { type: 'warning' })
+    await ElMessageBox.confirm(
+      'ยืนยันล้างตารางสอนทั้งหมด?\n(ล้างเฉพาะคาบที่จัดลงตาราง — ภาระงานยังคงอยู่)',
+      'ล้างตารางสอน', { type: 'warning' }
+    )
   } catch { return }
   try {
     const schoolId = authStore.schoolId
     const t = term()
-    const { error, count } = await supabase
+    const { error } = await supabase
       .from('timetable_slots')
       .delete()
       .eq('school_id', schoolId)
       .eq('term_id', t)
     if (error) throw error
-    // Wait a moment for real-time sync to update
-    await new Promise(r => setTimeout(r, 100))
-    assignments.value = []
-    await loadAssignmentsWithProgress()
-    workflowStep.value = '1'   // เริ่ม workflow ใหม่
-    ElMessage.success(`ล้างตารางทั้งหมดเรียบร้อยแล้ว — กดปุ่ม ① ลงกิจกรรม`)
+    ElMessage.success('ล้างตารางสอนเรียบร้อยแล้ว — ภาระงานยังคงอยู่')
   } catch (e) {
-    console.error('Clear all error:', e)
+    console.error('Clear timetable error:', e)
     ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
   }
 }

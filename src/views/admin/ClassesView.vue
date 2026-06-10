@@ -133,8 +133,8 @@
             <el-select v-model="form.homeroom_teacher_ids" class="w-full" clearable filterable multiple collapse-tags collapse-tags-tooltip
               placeholder="เลือกครูที่ปรึกษา (เลือกได้หลายคน)" @change="onTeacherChange">
               <el-option
-                v-for="t in teachers" :key="t.teacher_id"
-                :label="`${t.prefix || ''}${t.name} ${t.surname}`"
+                v-for="t in sortedTeachers" :key="t.teacher_id"
+                :label="`[${t.teacher_id}] ${t.prefix || ''}${t.name} ${t.surname}${t.dept ? '  — ' + t.dept : ''}`"
                 :value="t.teacher_id"
               />
             </el-select>
@@ -256,6 +256,16 @@ const rules = {
   room: [{ required: true, message: 'กรุณากรอกหมายเลขห้อง', trigger: 'blur' }]
 }
 
+const sortedTeachers = computed(() => {
+  return [...teachers.value]
+    .filter(t => t.is_active !== false)
+    .sort((a, b) => {
+      const deptA = (a.dept || '').localeCompare(b.dept || '', 'th')
+      if (deptA !== 0) return deptA
+      return (a.teacher_id || '').localeCompare(b.teacher_id || '', 'th')
+    })
+})
+
 const computedClassId = computed(() => {
   if (!form.level || !form.room) return ''
   return `${form.level}/${form.room}`
@@ -293,17 +303,21 @@ function getTeacherDisplayName(teacherCode) {
   return t ? `${t.prefix || ''}${t.name} ${t.surname}` : teacherCode
 }
 
-function resolveHomeroomNames(cls) {
-  // Prefer stored snapshot names if available
-  if (Array.isArray(cls.homeroom_teacher_names_snapshot) && cls.homeroom_teacher_names_snapshot.length) {
-    return cls.homeroom_teacher_names_snapshot
+function parseJsonbArray(val) {
+  if (Array.isArray(val)) return val
+  if (typeof val === 'string') {
+    try { const p = JSON.parse(val); return Array.isArray(p) ? p : [] } catch { return [] }
   }
+  return []
+}
+
+function resolveHomeroomNames(cls) {
+  const names = parseJsonbArray(cls.homeroom_teacher_names_snapshot)
+  if (names.length) return names
   if (cls.homeroom_teacher_name_snapshot) return [cls.homeroom_teacher_name_snapshot]
-  // Fallback: look up by teacher codes
-  const ids = Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length
-    ? cls.homeroom_teacher_ids
-    : (cls.homeroom_teacher_id ? [cls.homeroom_teacher_id] : [])
-  return ids.map(id => getTeacherDisplayName(id)).filter(Boolean)
+  const ids = parseJsonbArray(cls.homeroom_teacher_ids)
+  const fallbackIds = ids.length ? ids : (cls.homeroom_teacher_id ? [cls.homeroom_teacher_id] : [])
+  return fallbackIds.map(id => getTeacherDisplayName(id)).filter(Boolean)
 }
 
 function mapCatalogRooms(catalog) {
