@@ -72,6 +72,15 @@ export function useMasterAuth() {
     return normalizeUserAccessRecord({ ...userData, id: uid, uid })
   }
 
+  function friendlyAuthError(msg = '') {
+    if (msg.includes('Invalid login credentials') || msg.includes('invalid_credentials')) return 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
+    if (msg.includes('Email not confirmed')) return 'กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ'
+    if (msg.includes('Too many requests') || msg.includes('over_email_send_rate_limit')) return 'ลองเข้าสู่ระบบมากเกินไป กรุณารอสักครู่'
+    if (msg.includes('User not found') || msg.includes('user_not_found')) return 'ไม่พบบัญชีผู้ใช้นี้ในระบบ'
+    if (msg.includes('Network') || msg.includes('fetch')) return 'ไม่สามารถเชื่อมต่อเครือข่ายได้ กรุณาตรวจสอบอินเทอร์เน็ต'
+    return msg || 'เกิดข้อผิดพลาด กรุณาลองใหม่'
+  }
+
   async function login(email, password) {
     loading.value = true
     error.value = null
@@ -102,9 +111,10 @@ export function useMasterAuth() {
 
       return { success: true }
     } catch (err) {
-      error.value = err.message
+      const msg = friendlyAuthError(err.message)
+      error.value = msg
       supabase.auth.signOut().catch(() => {})
-      return { success: false, error: err.message }
+      return { success: false, error: msg }
     } finally {
       loading.value = false
     }
