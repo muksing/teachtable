@@ -164,7 +164,7 @@ export function useMasterAuth() {
     supabase.auth.onAuthStateChange(async (event, session) => {
       const user = session?.user
 
-      if (user && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
+      if (user && event === 'INITIAL_SESSION' && !authStore.isLoggedIn) {
         try {
           const normalizedUser = await fetchNormalizedUser(user.id)
           authStore.setProfile(normalizedUser)
@@ -174,7 +174,6 @@ export function useMasterAuth() {
             await loadSchoolInfo(normalizedUser.schoolId || normalizedUser.school_id)
           }
         } catch (err) {
-          console.error('Error loading user profile:', err)
           authStore.clear()
           schoolStore.clear()
         }
