@@ -83,10 +83,9 @@
           </el-table-column>
           <el-table-column label="ครูที่ปรึกษา" min-width="180">
             <template #default="{ row }">
-              <div v-if="row.homeroom_teacher_names_snapshot && row.homeroom_teacher_names_snapshot.length > 0" class="flex flex-wrap gap-1">
-                <el-tag v-for="(name, idx) in row.homeroom_teacher_names_snapshot" :key="idx" size="small" type="info">{{ name }}</el-tag>
+              <div v-if="resolveHomeroomNames(row).length > 0" class="flex flex-wrap gap-1">
+                <el-tag v-for="(name, idx) in resolveHomeroomNames(row)" :key="idx" size="small" type="info">{{ name }}</el-tag>
               </div>
-              <span v-else-if="row.homeroom_teacher_name_snapshot">{{ row.homeroom_teacher_name_snapshot }}</span>
               <span v-else class="text-gray-400 text-sm">ยังไม่ได้กำหนด</span>
             </template>
           </el-table-column>
@@ -178,7 +177,15 @@
           <el-table-column label="Class ID" width="110" align="center">
             <template #default="{ row }">{{ row.level }}/{{ row.room }}</template>
           </el-table-column>
-          <el-table-column label="ชื่อห้อง" prop="class_name" min-width="140" />
+          <el-table-column label="ชื่อห้อง" prop="class_name" min-width="120" />
+          <el-table-column label="ครูที่ปรึกษา" min-width="160">
+            <template #default="{ row }">
+              <span v-if="row.homeroom_teacher_id" class="text-sm">
+                {{ getTeacherDisplayName(row.homeroom_teacher_id) }}
+              </span>
+              <span v-else class="text-gray-400 text-xs">—</span>
+            </template>
+          </el-table-column>
           <el-table-column label="หมายเลขห้อง" prop="room_number" width="110" align="center" />
           <el-table-column label="นักเรียนสูงสุด" prop="max_students" width="110" align="center" />
           <el-table-column label="สถานะ" width="100" align="center">
@@ -280,6 +287,25 @@ function onTeacherChange(teacherIds) {
   form.homeroom_teacher_id = teacherIds.length > 0 ? teacherIds[0] : ''
 }
 
+function getTeacherDisplayName(teacherCode) {
+  if (!teacherCode) return ''
+  const t = teachers.value.find(t => t.teacher_id === teacherCode)
+  return t ? `${t.prefix || ''}${t.name} ${t.surname}` : teacherCode
+}
+
+function resolveHomeroomNames(cls) {
+  // Prefer stored snapshot names if available
+  if (Array.isArray(cls.homeroom_teacher_names_snapshot) && cls.homeroom_teacher_names_snapshot.length) {
+    return cls.homeroom_teacher_names_snapshot
+  }
+  if (cls.homeroom_teacher_name_snapshot) return [cls.homeroom_teacher_name_snapshot]
+  // Fallback: look up by teacher codes
+  const ids = Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length
+    ? cls.homeroom_teacher_ids
+    : (cls.homeroom_teacher_id ? [cls.homeroom_teacher_id] : [])
+  return ids.map(id => getTeacherDisplayName(id)).filter(Boolean)
+}
+
 function mapCatalogRooms(catalog) {
   const activeRooms = Array.isArray(catalog?.active_rooms) ? catalog.active_rooms : []
   return activeRooms.map(r => ({
@@ -323,8 +349,12 @@ function openDialog(cls = null) {
       class_name: cls.class_name || '',
       homeroom_teacher_id: cls.homeroom_teacher_id || '',
       homeroom_teacher_name_snapshot: cls.homeroom_teacher_name_snapshot || '',
-      homeroom_teacher_ids: Array.isArray(cls.homeroom_teacher_ids) ? [...cls.homeroom_teacher_ids] : (cls.homeroom_teacher_id ? [cls.homeroom_teacher_id] : []),
-      homeroom_teacher_names_snapshot: Array.isArray(cls.homeroom_teacher_names_snapshot) ? [...cls.homeroom_teacher_names_snapshot] : (cls.homeroom_teacher_name_snapshot ? [cls.homeroom_teacher_name_snapshot] : []),
+      homeroom_teacher_ids: (Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length)
+        ? [...cls.homeroom_teacher_ids]
+        : (cls.homeroom_teacher_id ? [cls.homeroom_teacher_id] : []),
+      homeroom_teacher_names_snapshot: (Array.isArray(cls.homeroom_teacher_names_snapshot) && cls.homeroom_teacher_names_snapshot.length)
+        ? [...cls.homeroom_teacher_names_snapshot]
+        : (cls.homeroom_teacher_name_snapshot ? [cls.homeroom_teacher_name_snapshot] : []),
       room_number: cls.room_number || '',
       home_room_id: cls.home_room_id || '',
       max_students: cls.max_students ?? 40
@@ -522,12 +552,18 @@ async function confirmImport() {
   for (const row of validRows) {
     const classId = `${row.level}/${row.room}`
     try {
+      const homeroomIds = row.homeroom_teacher_id ? [row.homeroom_teacher_id] : undefined
+      const homeroomNames = row.homeroom_teacher_id
+        ? [getTeacherDisplayName(row.homeroom_teacher_id)]
+        : undefined
       await saveClass({
         class_id: classId,
         level: row.level,
         room: row.room,
         class_name: row.class_name || classId,
         homeroom_teacher_id: row.homeroom_teacher_id || undefined,
+        homeroom_teacher_ids: homeroomIds,
+        homeroom_teacher_names_snapshot: homeroomNames,
         room_number: row.room_number,
         max_students: row.max_students,
       })
