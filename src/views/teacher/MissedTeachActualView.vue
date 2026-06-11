@@ -392,7 +392,16 @@ async function loadData() {
 }
 
 function goToDetail(item) {
-  router.push({ name: 'TeachActualDetail', params: { id: item.teach_actual_id || item.id } })
+  router.push({
+    name: 'TeachActualDetail',
+    params: { id: item.teach_actual_id || item.id },
+    query: {
+      sn:  item.subject_name     || '',
+      si:  item.subject_plan_id  || '',
+      tpi: item.teacher_plan_id  || '',
+      tpn: item.teacher_plan_name || '',
+    },
+  })
 }
 
 onMounted(async () => {
