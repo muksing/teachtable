@@ -19,7 +19,7 @@
           <div class="sb-school-info">
             <div class="sb-app-name">TeachTable</div>
             <div class="sb-school-name">{{ schoolStore.schoolName || 'โรงเรียน' }}</div>
-            <div class="sb-term">ภาคเรียน {{ currentTermLabel }}</div>
+            <div class="sb-term">{{ currentTermLabel }}</div>
           </div>
         </div>
         <button class="sb-close" @click="mobileOpen = false">✕</button>
@@ -103,7 +103,7 @@
         </button>
         <div class="topbar-title-wrap">
           <span class="topbar-title">{{ schoolStore.schoolName || 'TeachTable' }}</span>
-          <span class="topbar-sub">ภาคเรียน {{ currentTermLabel }}</span>
+          <span class="topbar-sub">{{ currentTermLabel }}</span>
         </div>
         <div class="topbar-avatar">{{ authStore.profile?.displayName?.charAt(0) || '?' }}</div>
       </div>
@@ -145,7 +145,7 @@ const roleLabels = {
   student: 'นักเรียน'
 }
 const roleLabel  = computed(() => authStore.roles.map(r => roleLabels[r] || r).join(' · ') || '')
-const currentTermLabel = computed(() => schoolStore.currentTerm || schoolStore.schoolInfo?.current_term || '-')
+const currentTermLabel = computed(() => schoolStore.termLabel)
 
 // ── กลุ่มเมนูทั้งหมด ──────────────────────────────────────────────
 const allGroups = computed(() => {

@@ -112,11 +112,36 @@ export const useSchoolStore = defineStore('school', () => {
   const isExpired = computed(() => !isSubscriptionActive.value)
   const isViewOnlyMode = computed(() => isExpired.value)
 
+  // ปีการศึกษา/ภาคเรียน จากข้อมูลพื้นฐานโรงเรียน (settings.school_info)
+  const termYear = computed(() => {
+    const info = settingsObj.value?.school_info || {}
+    return info.year || schoolInfo.value?.year || null
+  })
+  const termSemester = computed(() => {
+    const info = settingsObj.value?.school_info || {}
+    return info.semester || null
+  })
+  const termLabel = computed(() => {
+    const y = termYear.value
+    const s = termSemester.value
+    if (y && s) return `ปีการศึกษา ${y} ภาคเรียนที่ ${s}`
+    // fallback: parse currentTerm text
+    const t = currentTerm.value || schoolInfo.value?.current_term || ''
+    if (t && t.includes('_')) {
+      const [yr, sm] = t.split('_')
+      if (yr && sm) return `ปีการศึกษา ${yr} ภาคเรียนที่ ${sm}`
+    }
+    return t || '-'
+  })
+
   return {
     schoolInfo,
     currentTerm,
     schoolName,
     schoolId,
+    termYear,
+    termSemester,
+    termLabel,
     isTimetableLocked,
     featureFlags,
     isFeatureEnabled,
