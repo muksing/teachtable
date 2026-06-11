@@ -41,7 +41,7 @@
               <span>🏫</span> {{ schoolStore.schoolName || 'ยังไม่ได้กำหนดชื่อโรงเรียน' }}
             </div>
             <div class="flex items-center gap-2 px-3 py-1.5 bg-white/10 rounded-full">
-              <span>🏷️</span> ภาคเรียน: {{ schoolStore.currentTerm || '-' }}
+              <span>🏷️</span> {{ schoolStore.termLabel }}
             </div>
           </div>
         </div>

@@ -1007,21 +1007,87 @@ export function useSchoolDb() {
     }).sort((a, b) => (a.period || 0) - (b.period || 0))
   }
 
-  // ดึงช่วงวันที่ (สำหรับรายงาน)
+  // ดึงช่วงวันที่ (สำหรับรายงาน) — รวม virtual unfilled จาก timetable_slots ด้วย
   async function getTeachActualsRange(startDate, endDate) {
     const startKey = normalizeDateKey(startDate)
     const endKey = normalizeDateKey(endDate)
-    const termId = term()   // use TEXT term (e.g. '2568_1'), not UUID from academic_terms
-    const { data, error } = await supabase
-      .from('teach_actuals')
-      .select('*')
-      .eq('school_id', authStore.schoolId)
-      .eq('term_id', termId)
-      .gte('date', startKey)
-      .lte('date', endKey)
-      .order('date')
-    if (error) throw error
-    return (data || []).map(mapTeachActual)
+    const termId = term()
+    const schoolId = authStore.schoolId
+
+    const [slotsRes, actualsRes] = await Promise.all([
+      supabase
+        .from('timetable_slots')
+        .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
+        .eq('school_id', schoolId)
+        .eq('term_id', termId)
+        .not('slot_type', 'eq', 'activity'),
+      supabase
+        .from('teach_actuals')
+        .select('*')
+        .eq('school_id', schoolId)
+        .eq('term_id', termId)
+        .gte('date', startKey)
+        .lte('date', endKey)
+        .order('date'),
+    ])
+    if (slotsRes.error) throw slotsRes.error
+    if (actualsRes.error) throw actualsRes.error
+
+    // จัด timetable_slots ตาม day_of_week number
+    const slotsByDay = {}
+    for (const slot of (slotsRes.data || [])) {
+      const day = slot.day_of_week
+      if (!slotsByDay[day]) slotsByDay[day] = []
+      slotsByDay[day].push(slot)
+    }
+
+    // index teach_actuals ที่มีอยู่แล้ว
+    const actualsMap = new Map()
+    for (const row of (actualsRes.data || [])) {
+      actualsMap.set(`${row.date}_${row.class_id}_${row.period_number}`, mapTeachActual(row))
+    }
+
+    // ขยาย date range → virtual slot ต่อวัน
+    const results = []
+    const start = new Date(startKey + 'T00:00:00')
+    const end   = new Date(endKey   + 'T00:00:00')
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateStr    = d.toISOString().split('T')[0]
+      const thaiDay    = THAI_DAYS_ARR[d.getDay()]
+      const dayNum     = THAI_DAY_TO_NUMBER[thaiDay]
+      const slotsForDay = slotsByDay[dayNum] || []
+      for (const slot of slotsForDay) {
+        const key      = `${dateStr}_${slot.class_id}_${slot.period_number}`
+        const existing = actualsMap.get(key)
+        const slotInfo = {
+          subject_plan_id:   slot.subject_id   || '',
+          subject_name:      slot.subject_name  || slot.subject_id || '',
+          teacher_plan_id:   slot.teacher_id    || '',
+          teacher_plan_name: slot.teacher_name  || slot.teacher_id || '',
+          class_id:          slot.class_id,
+          class_name:        slot.class_id,
+        }
+        if (existing) {
+          results.push({ ...existing, ...slotInfo })
+        } else {
+          results.push({
+            id: null, teach_actual_id: null,
+            date: dateStr, day_of_week: thaiDay,
+            period: slot.period_number, period_number: slot.period_number,
+            is_filled: false, is_substitute_mandatory: false,
+            topic: '', activity_type: 'บรรยาย',
+            record_by_name: '', timestamp: null,
+            ...slotInfo,
+          })
+        }
+      }
+    }
+
+    return results.sort((a, b) => {
+      if (a.date !== b.date) return a.date < b.date ? -1 : 1
+      if ((a.class_id || '') !== (b.class_id || '')) return (a.class_id || '') < (b.class_id || '') ? -1 : 1
+      return (a.period || 0) - (b.period || 0)
+    })
   }
 
   async function getTeachActualsRangeByClass(startDate, endDate, classId = null) {
