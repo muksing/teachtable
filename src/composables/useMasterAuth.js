@@ -31,10 +31,8 @@ export function useMasterAuth() {
       if (data) {
         schoolStore.setSchool(data)
         schoolStore.setCurrentTerm(
-          data.current_term ||
-          data.currentTerm ||
-          data.settings?.current_term ||
-          data.settings?.currentTerm ||
+          data.current_term ||                           // schools.current_term column (set by SchoolSettings)
+          data.settings?.school_info?.current_term ||   // fallback: nested in school_info
           '2568_1'
         )
       }

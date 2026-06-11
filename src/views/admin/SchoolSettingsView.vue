@@ -789,12 +789,13 @@ async function saveSettings() {
     const sid = schoolId.value
     if (!sid) throw new Error('ไม่พบ schoolId')
 
-    // Update schools.name, periods_per_day (direct column), and schools.settings
+    // Update schools direct columns + settings.school_info
     const settings = await readSchoolSettings()
     const { error } = await supabase.from('schools').update({
       name: data.name,
       periods_per_day: data.periods_per_day,
       period_times: data.period_times,
+      current_term: data.current_term,  // keep top-level column in sync
       settings: { ...settings, school_info: data }
     }).eq('id', sid)
     if (error) throw error

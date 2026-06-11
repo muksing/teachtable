@@ -19,9 +19,9 @@
 
       <!-- Current Term Banner -->
       <el-alert
-        :title="`เทอมปัจจุบัน: ${currentTerm}`"
+        :title="`ภาคเรียนปัจจุบัน (จากข้อมูลพื้นฐานโรงเรียน): ${currentTerm}`"
         type="success" show-icon :closable="false" class="mb-6"
-        description="เทอมนี้คือที่ข้อมูลทุกหน้าในระบบกำลังอ่านและเขียนอยู่"
+        description="ต้องการเปลี่ยนภาคเรียน: ไปที่เมนู 'ข้อมูลพื้นฐานโรงเรียน' → แก้ไขปีการศึกษา/ภาคเรียน → บันทึก | หน้านี้ใช้ดูและจัดการข้อมูลสำรองตามเทอมเท่านั้น"
       />
 
       <!-- Quota Summary -->
@@ -108,10 +108,11 @@
           <el-table-column label="จัดการ" width="260" align="center">
             <template #default="{ row }">
               <div class="flex gap-1 justify-center flex-wrap">
-                <el-button size="small" type="primary" plain
+                <el-button size="small" plain
                   @click="setActiveTerm(row.id)"
-                  :disabled="row.id === currentTerm">
-                  ✅ ใช้เทอมนี้
+                  :disabled="row.id === currentTerm"
+                  title="ภาคเรียนเปลี่ยนได้จากหน้าข้อมูลพื้นฐานโรงเรียน">
+                  📌 เทอมปัจจุบัน
                 </el-button>
                 <el-button size="small" type="success" plain
                   @click="openCloneDialog(row.id)">
@@ -419,30 +420,10 @@ async function cloneTermData(fromTerm, toTerm) {
 }
 
 // ── Set Active Term ───────────────────────────────────────────────────
+// NOTE: ภาคเรียนที่ใช้งานจริงกำหนดจาก "ข้อมูลพื้นฐานโรงเรียน" เท่านั้น
+// ฟังก์ชันนี้ใช้สำหรับดูข้อมูลย้อนหลังในหน้านี้เท่านั้น ไม่กระทบการทำงานของระบบ
 async function setActiveTerm(termId) {
-  await ElMessageBox.confirm(
-    `เปลี่ยนเทอมปัจจุบันเป็น "${termId}" ?\n\n✅ ข้อมูลทุกเทอมยังอยู่ครบ ไม่ได้ลบ\n📌 ระบบจะเปลี่ยนไปอ่าน/เขียนข้อมูลของเทอม "${termId}" เท่านั้น`,
-    'ยืนยันเปลี่ยนเทอม', { confirmButtonText: 'เปลี่ยน', cancelButtonText: 'ยกเลิก', type: 'warning' }
-  )
-  const parts = termId.split('_')
-  const year = parseInt(parts[0]) || 0
-  const semester = parseInt(parts[1]) || 1
-
-  const sid = schoolId.value
-  const { data: schoolData } = await supabase.from('schools').select('settings').eq('id', sid).single()
-  const settings = schoolData?.settings || {}
-  const extraInfo = year > 0 ? { year, semester, current_term: termId } : { current_term: termId }
-
-  await supabase.from('schools').update({
-    settings: { ...settings, ...extraInfo }
-  }).eq('id', sid)
-
-  schoolStore.setCurrentTerm(termId)
-  if (year > 0) {
-    schoolStore.setSchool({ ...schoolStore.schoolInfo, current_term: termId, year, semester })
-  }
-  ElMessage.success(`เปลี่ยนเป็นเทอม ${termId} แล้ว`)
-  await loadTerms()
+  ElMessage.info(`หากต้องการเปลี่ยนภาคเรียนที่ใช้งาน ให้ไปที่ "ข้อมูลพื้นฐานโรงเรียน" และเปลี่ยนปีการศึกษา/ภาคเรียน แล้วบันทึก`)
 }
 
 // ── Export Term ───────────────────────────────────────────────────────
