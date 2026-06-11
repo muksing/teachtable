@@ -550,12 +550,11 @@ export function useSchoolDb() {
   // TIMETABLE
   // ═════════════════════════════════════════════════════════════════════════
   async function getTimetable() {
-    const termId = await getTermId()
     const { data, error } = await supabase
       .from('timetable_slots')
       .select('*')
       .eq('school_id', authStore.schoolId)
-      .eq('term_id', termId)
+      .eq('term_id', term())
     if (error) throw error
     return (data || []).map(mapTimetableSlot)
   }
@@ -579,10 +578,9 @@ export function useSchoolDb() {
   }
 
   async function saveTimetableSlot(slot) {
-    const termId = await getTermId()
     const payload = {
       school_id: authStore.schoolId,
-      term_id: termId,
+      term_id: term(),
       class_id: slot.class_id,
       subject_id: slot.subject_code || slot.subject_id || null,
       subject_name: slot.subject_name || null,
@@ -602,11 +600,11 @@ export function useSchoolDb() {
   // Save multiple slots at once using upsert
   async function saveTimetableBatch(slots) {
     if (!slots || slots.length === 0) return
-    const termId = await getTermId()
     const schoolId = authStore.schoolId
+    const timetableTerm = term()
     const payloads = slots.map(slot => ({
       school_id: schoolId,
-      term_id: termId,
+      term_id: timetableTerm,
       class_id: slot.class_id,
       subject_id: slot.subject_code || slot.subject_id || null,
       subject_name: slot.subject_name || null,
@@ -918,67 +916,100 @@ export function useSchoolDb() {
     return `${date}_${encodedClass}_${period}`
   }
 
-  // ดึง teach_actual รายวัน — รวมคาบที่สอนแทน
+  // ดึง teach_actual รายวัน — ใช้ timetable_slots เป็น source of truth
+  // เพื่อหลีกเลี่ยง UUID type mismatch บน planned_teacher_id / actual_teacher_id
   async function getTeachActuals(date, teacherPlanId = null) {
     const dateKey = normalizeDateKey(date)
-    const termId = await getTermId()
+    // timetable_slots.term_id is TEXT (e.g. '2568_1') — use term() directly like MyTimetableView
+    // getTermId() may return a UUID if academic_terms table exists, causing 0 rows from timetable_slots
+    const timetableTerm = term()
+    const schoolId = authStore.schoolId
 
+    // ไม่ระบุครู → คืน teach_actuals ทั้งหมดของวันนั้น (ใช้โดย admin/report)
     if (!teacherPlanId) {
       const { data, error } = await supabase
         .from('teach_actuals')
         .select('*')
-        .eq('term_id', termId)
+        .eq('school_id', schoolId)
+        .eq('term_id', timetableTerm)
         .eq('date', dateKey)
       if (error) throw error
       return (data || []).map(mapTeachActual).sort((a, b) => (a.period || 0) - (b.period || 0))
     }
 
-    // Two parallel queries: own slots + substitute slots
-    const [res1, res2] = await Promise.all([
+    // ระบุครู → อ่าน timetable_slots ของครูวันนั้นโดยตรง (teacher_id = TEXT code)
+    const dayNum = THAI_DAY_TO_NUMBER[THAI_DAYS_ARR[new Date(dateKey + 'T00:00:00').getDay()]]
+    const [slotsRes, actualsRes] = await Promise.all([
+      supabase
+        .from('timetable_slots')
+        .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, room_id, slot_type')
+        .eq('school_id', schoolId)
+        .eq('term_id', timetableTerm)
+        .eq('teacher_id', teacherPlanId)
+        .eq('day_of_week', dayNum)
+        .neq('slot_type', 'activity'),
       supabase
         .from('teach_actuals')
         .select('*')
-        .eq('term_id', termId)
-        .eq('date', dateKey)
-        .eq('planned_teacher_id', teacherPlanId),
-      supabase
-        .from('teach_actuals')
-        .select('*')
-        .eq('term_id', termId)
-        .eq('date', dateKey)
-        .eq('actual_teacher_id', teacherPlanId),
+        .eq('school_id', schoolId)
+        .eq('term_id', timetableTerm)
+        .eq('date', dateKey),
     ])
-    if (res1.error) throw res1.error
-    if (res2.error) throw res2.error
+    if (slotsRes.error) throw slotsRes.error
 
-    const seen = new Set()
-    const items = []
-    // Own slots — exclude those handed off to a substitute
-    for (const row of (res1.data || [])) {
-      const mapped = mapTeachActual(row)
-      if (!mapped.is_substitute_mandatory) {
-        seen.add(row.id)
-        items.push(mapped)
-      }
+    const tSlots = slotsRes.data || []
+    if (tSlots.length === 0) return []
+
+    // Map teach_actuals ที่มีอยู่ → key: class_id_period
+    const actualsMap = new Map()
+    for (const row of (actualsRes.data || [])) {
+      actualsMap.set(`${row.class_id}_${row.period_number}`, mapTeachActual(row))
     }
-    // Substitute slots
-    for (const row of (res2.data || [])) {
-      if (!seen.has(row.id)) {
-        seen.add(row.id)
-        items.push(mapTeachActual(row))
+
+    // Merge: timetable slot + existing teach_actual (หรือ virtual unfilled)
+    return tSlots.map(slot => {
+      const key = `${slot.class_id}_${slot.period_number}`
+      const existing = actualsMap.get(key)
+      const timetableInfo = {
+        subject_plan_id: slot.subject_id   || '',
+        subject_name:   slot.subject_name  || slot.subject_id || '',
+        teacher_plan_id: slot.teacher_id   || '',
+        teacher_plan_name: slot.teacher_name || slot.teacher_id || '',
+        preferred_room: slot.room_id       || '',
+        class_id: slot.class_id,
       }
-    }
-    return items.sort((a, b) => (a.period || 0) - (b.period || 0))
+      if (existing) {
+        return { ...existing, ...timetableInfo }
+      }
+      // Virtual slot (teach_actual ยังไม่ถูกสร้าง)
+      return {
+        id: null,
+        teach_actual_id: null,
+        school_id: schoolId,
+        term_id: timetableTerm,
+        class_id: slot.class_id,
+        date: dateKey,
+        period: slot.period_number,
+        period_number: slot.period_number,
+        slot_type: slot.slot_type || 'normal',
+        is_filled: false,
+        is_substitute_mandatory: false,
+        topic: '',
+        activity_type: 'บรรยาย',
+        ...timetableInfo,
+      }
+    }).sort((a, b) => (a.period || 0) - (b.period || 0))
   }
 
   // ดึงช่วงวันที่ (สำหรับรายงาน)
   async function getTeachActualsRange(startDate, endDate) {
     const startKey = normalizeDateKey(startDate)
     const endKey = normalizeDateKey(endDate)
-    const termId = await getTermId()
+    const termId = term()   // use TEXT term (e.g. '2568_1'), not UUID from academic_terms
     const { data, error } = await supabase
       .from('teach_actuals')
       .select('*')
+      .eq('school_id', authStore.schoolId)
       .eq('term_id', termId)
       .gte('date', startKey)
       .lte('date', endKey)
@@ -1009,7 +1040,7 @@ export function useSchoolDb() {
     const dateKey = normalizeDateKey(date)
     const dayNumber = THAI_DAY_TO_NUMBER[dayName]
     if (!dayNumber) throw new Error(`วันที่ไม่รู้จัก: ${dayName}`)
-    const termId = await getTermId()
+    const termId = term()
 
     const slotsForDay = (Array.isArray(timetableSlots) ? timetableSlots : [])
       .filter(s => {
@@ -1051,9 +1082,11 @@ export function useSchoolDb() {
         class_id: classId,
         date: dateKey,
         period_number: period,
-        planned_teacher_id: asText(slot?.teacher_id ?? slot?.teacher_id_snapshot),
-        actual_teacher_id: asText(slot?.teacher_id ?? slot?.teacher_id_snapshot),
-        subject_id: asText(slot?.subject_code ?? slot?.subject_id ?? slot?.subject_code_snapshot),
+        // planned_teacher_id / actual_teacher_id ใน DB เป็น UUID type
+        // แต่ teacher code เป็น TEXT (เช่น "309") — ข้ามไป null เพื่อหลีกเลี่ยง type error
+        planned_teacher_id: null,
+        actual_teacher_id: null,
+        subject_id: null,
         is_filled: false,
         slot_type: slot?.slot_type ?? slot?.type ?? 'normal',
         teacher_plan_name: asText(slot?.teacher_name ?? slot?.teacher_name_snapshot ?? ''),
@@ -1078,8 +1111,8 @@ export function useSchoolDb() {
           class_id: classId,
           date: dateKey,
           period_number: period,
-          planned_teacher_id: asText(cls.homeroom_teacher_id),
-          actual_teacher_id: asText(cls.homeroom_teacher_id),
+          planned_teacher_id: null,
+          actual_teacher_id: null,
           subject_id: null,
           is_filled: false,
           slot_type: 'homeroom',
@@ -1098,7 +1131,7 @@ export function useSchoolDb() {
     for (let i = 0; i < cleanPayloads.length; i += CHUNK) {
       const { error } = await supabase
         .from('teach_actuals')
-        .upsert(cleanPayloads.slice(i, i + CHUNK), { onConflict: 'school_id,term_id,class_id,date,period_number' })
+        .upsert(cleanPayloads.slice(i, i + CHUNK), { onConflict: 'school_id,term_id,class_id,date,period_number', ignoreDuplicates: true })
       if (error) throw error
     }
     return cleanPayloads.length
@@ -1106,7 +1139,7 @@ export function useSchoolDb() {
 
   // บันทึก/อัพเดต teach_actual (ครูกรอก)
   async function saveTeachActual(data) {
-    const termId = await getTermId()
+    const termId = term()
     // Accept both old shape (teach_actual_id) and new shape (id)
     const rowId = data.id && data.id.includes('-') ? data.id : null
     const classId = data.class_id
@@ -1119,9 +1152,11 @@ export function useSchoolDb() {
       class_id: classId,
       date: dateKey,
       period_number: periodNum,
-      planned_teacher_id: data.teacher_plan_id ?? data.planned_teacher_id ?? null,
-      actual_teacher_id: data.subject_actual_teacher_id ?? data.actual_teacher_id ?? data.teacher_plan_id ?? null,
-      subject_id: data.subject_plan_id ?? data.subject_id ?? null,
+      // planned_teacher_id / actual_teacher_id / subject_id เป็น UUID ใน DB
+      // teacher/subject ใช้ TEXT code → ส่ง null เพื่อหลีกเลี่ยง type error
+      planned_teacher_id: null,
+      actual_teacher_id: null,
+      subject_id: null,
       topic: data.topic ?? null,
       activity_type: data.activity_type ?? null,
       images: data.images ?? null,
@@ -1382,11 +1417,10 @@ export function useSchoolDb() {
     let latestData = []
     const fetchAll = async () => {
       try {
-        const termId = await getTermId()
         const { data } = await supabase
           .from('timetable_slots')
           .select('*')
-          .eq('term_id', termId)
+          .eq('term_id', term())
         latestData = (data || []).map(mapTimetableSlot)
         callback(latestData)
       } catch (e) {

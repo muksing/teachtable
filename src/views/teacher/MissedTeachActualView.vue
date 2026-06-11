@@ -117,7 +117,7 @@
 
             <el-table-column label="คาบ" width="60" sortable prop="period" align="center">
               <template #default="{ row }">
-                <el-tag type="warning" size="small" effect="dark">{{ row.period }}</el-tag>
+                <el-tag type="danger" size="small" effect="dark">{{ row.period }}</el-tag>
               </template>
             </el-table-column>
 
@@ -142,7 +142,7 @@
 
             <el-table-column label="" width="80" fixed="right" align="center">
               <template #default="{ row }">
-                <el-button type="primary" size="small" plain @click="goToDetail(row)">📋 กรอก</el-button>
+                <el-button type="danger" size="small" @click="goToDetail(row)">📋 กรอก</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -169,7 +169,7 @@
 
             <div class="mta-date-header">
               <span class="mta-date-label">{{ group.dateLabel }}</span>
-              <el-tag size="small" :type="group.daysAgo === 1 ? 'warning' : 'danger'" class="mta-relative-tag">
+              <el-tag size="small" :type="group.daysAgo <= 1 ? 'warning' : 'danger'" effect="dark" class="mta-relative-tag">
                 {{ group.relativeLabel }}
               </el-tag>
               <span class="mta-count-chip">{{ group.items.length }} คาบ</span>
@@ -178,17 +178,20 @@
             <div class="mta-cards">
               <div v-for="item in group.items" :key="item.id" class="mta-card">
                 <div class="mta-card-left">
-                  <div class="mta-period-badge">คาบ {{ item.period }}</div>
+                  <div class="mta-period-badge">
+                    <div class="mta-period-num">{{ item.period }}</div>
+                    <div class="mta-period-lbl">คาบ</div>
+                  </div>
                   <div class="mta-card-info">
                     <div class="mta-subject">{{ item.subject_name || item.subject_plan_id || '—' }}</div>
                     <div class="mta-meta">
-                      <span class="mta-class">{{ item.class_name || item.class_id }}</span>
-                      <span v-if="item.subject_plan_id" class="mta-code">· {{ item.subject_plan_id }}</span>
+                      <span class="mta-class-chip">{{ item.class_name || item.class_id }}</span>
+                      <span v-if="item.subject_plan_id" class="mta-code">{{ item.subject_plan_id }}</span>
                     </div>
                   </div>
                 </div>
-                <el-button type="primary" size="small" class="mta-fill-btn" @click="goToDetail(item)">
-                  📋 กรอก
+                <el-button type="danger" size="small" class="mta-fill-btn" @click="goToDetail(item)">
+                  กรอก
                 </el-button>
               </div>
             </div>
@@ -209,6 +212,7 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
+import { supabase } from '@/supabase/client'
 
 const router      = useRouter()
 const authStore   = useAuthStore()
@@ -217,6 +221,7 @@ const { getTeachActualsRange } = useSchoolDb()
 
 const loading      = ref(false)
 const allData      = ref([])
+const slotMap      = ref({})   // key: 'class_id_period' → { teacher_id, teacher_name, subject_id, subject_name }
 const dayRange     = ref(7)
 const filterTeacher = ref('')
 const filterDate    = ref('')
@@ -261,12 +266,47 @@ function relativeLabel(dateKey) {
   return `${daysAgo} วันที่แล้ว`
 }
 
+// ── Slot enrichment ───────────────────────────────────────────────────────
+async function loadSlots() {
+  const termId = schoolStore.currentTerm || '2568_1'
+  const schoolId = authStore.schoolId
+  const { data } = await supabase
+    .from('timetable_slots')
+    .select('class_id, period_number, teacher_id, teacher_name, subject_id, subject_name')
+    .eq('school_id', schoolId)
+    .eq('term_id', termId)
+  if (data) {
+    const map = {}
+    for (const s of data) {
+      const key = `${s.class_id}_${s.period_number}`
+      if (!map[key]) map[key] = s  // keep first match (same class+period, any day)
+    }
+    slotMap.value = map
+  }
+}
+
+// Enrich teach_actuals records with timetable slot data
+const enrichedData = computed(() => {
+  const map = slotMap.value
+  return allData.value.map(r => {
+    const key = `${r.class_id}_${r.period}`
+    const slot = map[key]
+    return {
+      ...r,
+      teacher_plan_id:   slot?.teacher_id   || r.teacher_plan_id   || null,
+      teacher_plan_name: slot?.teacher_name || r.teacher_plan_name || '',
+      subject_name:      slot?.subject_name || r.subject_name      || '',
+      subject_plan_id:   slot?.subject_id   || r.subject_plan_id   || '',
+    }
+  })
+})
+
 // ── Teacher view data ─────────────────────────────────────────────────────
 const unfilled = computed(() => {
   const myId = myTeacherId.value
-  return allData.value.filter(r => {
+  return enrichedData.value.filter(r => {
     if (r.is_filled) return false
-    return r.teacher_plan_id === myId || r.subject_actual_teacher_id === myId
+    return r.teacher_plan_id === myId
   })
 })
 
@@ -292,7 +332,7 @@ const groups = computed(() => {
 
 // ── Admin view data ───────────────────────────────────────────────────────
 const adminUnfilled = computed(() =>
-  allData.value.filter(r => !r.is_filled)
+  enrichedData.value.filter(r => !r.is_filled)
 )
 
 const teacherOptions = computed(() => {
@@ -328,7 +368,6 @@ const uniqueDateCount = computed(() =>
   new Set(adminUnfilled.value.map(r => r.date).filter(Boolean)).size
 )
 
-// displayCount: shown in header badge
 const displayCount = computed(() =>
   isAdmin.value ? filteredRows.value.length : unfilled.value.length
 )
@@ -358,15 +397,15 @@ function goToDetail(item) {
 
 onMounted(async () => {
   if (maxDays.value > 0) dayRange.value = Math.min(7, maxDays.value)
-  await loadData()
+  await Promise.all([loadSlots(), loadData()])
 })
 </script>
 
 <style scoped>
 .mta-page {
-  max-width: 760px;
+  max-width: 780px;
   margin: 0 auto;
-  padding: 24px 16px 40px;
+  padding: 24px 16px 48px;
 }
 .mta-page--wide {
   max-width: 1100px;
@@ -374,22 +413,22 @@ onMounted(async () => {
 
 /* ── Header ── */
 .mta-header {
-  background: linear-gradient(135deg, #fff7ed, #fef3c7);
-  border: 1.5px solid #fde68a;
-  border-radius: 16px;
-  padding: 20px;
+  background: linear-gradient(135deg, #b91c1c 0%, #dc2626 30%, #ea580c 65%, #f97316 100%);
+  border-radius: 18px;
+  padding: 22px 24px;
   margin-bottom: 20px;
+  box-shadow: 0 4px 20px rgba(185,28,28,0.35);
 }
 .mta-title-row {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
-.mta-title { font-size: 20px; font-weight: 800; color: #92400e; margin: 0 0 4px; }
-.mta-sub   { font-size: 13px; color: #b45309; margin: 0; }
-.mta-badge { font-weight: 700 !important; }
+.mta-title { font-size: 22px; font-weight: 900; color: #fff; margin: 0 0 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+.mta-sub   { font-size: 13px; color: rgba(255,255,255,0.85); margin: 0; }
+.mta-badge { font-weight: 800 !important; font-size: 13px !important; }
 .mta-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* ── Admin: Summary stats ── */
@@ -400,26 +439,23 @@ onMounted(async () => {
   margin-bottom: 16px;
 }
 .mta-stat-card {
-  border-radius: 12px;
-  padding: 14px 16px;
+  border-radius: 14px;
+  padding: 16px;
   text-align: center;
-  border: 1.5px solid;
+  color: white;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.15);
 }
-.mta-stat-danger  { background: #fef2f2; border-color: #fecaca; }
-.mta-stat-warning { background: #fffbeb; border-color: #fde68a; }
-.mta-stat-info    { background: #eff6ff; border-color: #bfdbfe; }
-.mta-stat-neutral { background: #f8fafc; border-color: #e2e8f0; }
+.mta-stat-danger  { background: linear-gradient(135deg, #dc2626, #ef4444); }
+.mta-stat-warning { background: linear-gradient(135deg, #d97706, #f97316); }
+.mta-stat-info    { background: linear-gradient(135deg, #2563eb, #3b82f6); }
+.mta-stat-neutral { background: linear-gradient(135deg, #475569, #64748b); }
 .mta-stat-num {
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 900;
   line-height: 1;
-  margin-bottom: 4px;
+  margin-bottom: 5px;
 }
-.mta-stat-danger  .mta-stat-num { color: #dc2626; }
-.mta-stat-warning .mta-stat-num { color: #d97706; }
-.mta-stat-info    .mta-stat-num { color: #2563eb; }
-.mta-stat-neutral .mta-stat-num { color: #475569; }
-.mta-stat-label { font-size: 11px; font-weight: 600; color: #64748b; }
+.mta-stat-label { font-size: 11px; font-weight: 700; opacity: 0.9; }
 
 /* ── Admin: Filter bar ── */
 .mta-filter-bar {
@@ -428,34 +464,35 @@ onMounted(async () => {
   gap: 10px;
   flex-wrap: wrap;
   background: white;
-  border: 1.5px solid #e2e8f0;
-  border-radius: 12px;
+  border: 2px solid #e2e8f0;
+  border-radius: 14px;
   padding: 12px 16px;
   margin-bottom: 16px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
 .mta-filter-result {
   font-size: 12px;
   color: #64748b;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 /* ── Table ── */
 .mta-table-wrap {
   background: white;
   border-radius: 14px;
-  border: 1.5px solid #e2e8f0;
+  border: 2px solid #fecaca;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  box-shadow: 0 4px 16px rgba(239,68,68,0.1);
 }
 .mta-table { width: 100%; }
 :deep(.mta-trow td) { font-size: 13px; }
 
-.tbl-date     { font-weight: 600; color: #1e293b; font-size: 12px; }
+.tbl-date     { font-weight: 700; color: #1e293b; font-size: 12px; }
 .tbl-relative { font-size: 11px; color: #94a3b8; margin-top: 1px; }
-.tbl-teacher  { font-weight: 600; color: #1e293b; }
-.tbl-subject  { font-weight: 600; color: #1e293b; }
+.tbl-teacher  { font-weight: 700; color: #1e293b; }
+.tbl-subject  { font-weight: 700; color: #1e293b; }
 .tbl-code     { font-size: 11px; color: #94a3b8; margin-top: 1px; }
-.tbl-class    { font-weight: 700; color: #4f46e5; }
+.tbl-class    { font-weight: 800; color: #7c3aed; }
 
 /* ── Loading / Empty ── */
 .mta-loading { padding: 24px 0; }
@@ -463,61 +500,74 @@ onMounted(async () => {
   text-align: center;
   padding: 60px 20px;
   background: white;
-  border-radius: 16px;
-  border: 1.5px dashed #d1fae5;
+  border-radius: 18px;
+  border: 2px dashed #86efac;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
 }
-.mta-empty-icon  { font-size: 48px; margin-bottom: 12px; }
-.mta-empty-title { font-size: 18px; font-weight: 700; color: #065f46; margin-bottom: 6px; }
-.mta-empty-sub   { font-size: 13px; color: #6b7280; }
+.mta-empty-icon  { font-size: 52px; margin-bottom: 14px; }
+.mta-empty-title { font-size: 20px; font-weight: 800; color: #15803d; margin-bottom: 8px; }
+.mta-empty-sub   { font-size: 14px; color: #6b7280; }
 
 /* ── Teacher: Groups ── */
 .mta-groups { display: flex; flex-direction: column; gap: 20px; }
 .mta-group {
   background: white;
-  border-radius: 14px;
-  border: 1.5px solid #e2e8f0;
+  border-radius: 16px;
+  border: 2px solid #fecaca;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  box-shadow: 0 4px 16px rgba(239,68,68,0.1);
 }
 .mta-date-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
+  padding: 14px 18px;
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
 }
-.mta-date-label  { font-size: 14px; font-weight: 700; color: #334155; flex: 1; }
-.mta-relative-tag { font-weight: 600; }
+.mta-date-label  { font-size: 14px; font-weight: 800; color: #fff; flex: 1; }
+.mta-relative-tag { font-weight: 700; }
 .mta-count-chip {
-  font-size: 11px; font-weight: 700; color: #64748b;
-  background: #e2e8f0; border-radius: 99px; padding: 2px 8px;
+  font-size: 11px; font-weight: 800; color: #7c3aed;
+  background: rgba(255,255,255,0.95); border-radius: 99px; padding: 2px 10px;
 }
-.mta-cards { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.mta-cards { padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
 .mta-card {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 12px; border-radius: 10px;
-  border: 1.5px solid #f1f5f9; background: #fafafa;
-  transition: background 0.15s;
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px; border-radius: 12px;
+  border: 2px solid #fee2e2;
+  background: linear-gradient(135deg, #fff5f5, #fff);
+  transition: all 0.15s;
 }
-.mta-card:hover { background: #f1f5f9; }
-.mta-card-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.mta-card:hover {
+  border-color: #fca5a5;
+  background: #fff5f5;
+  box-shadow: 0 2px 8px rgba(239,68,68,0.12);
+  transform: translateX(2px);
+}
+.mta-card-left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
 .mta-period-badge {
-  width: 52px; height: 52px; border-radius: 12px;
-  background: linear-gradient(135deg, #f59e0b, #d97706);
-  color: white; font-size: 11px; font-weight: 800;
-  display: flex; align-items: center; justify-content: center;
-  text-align: center; line-height: 1.3; flex-shrink: 0;
+  width: 54px; height: 54px; border-radius: 14px;
+  background: linear-gradient(135deg, #dc2626, #ea580c);
+  color: white;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 3px 8px rgba(220,38,38,0.4);
 }
+.mta-period-num { font-size: 20px; font-weight: 900; line-height: 1; }
+.mta-period-lbl { font-size: 9px; font-weight: 700; opacity: 0.85; margin-top: 1px; }
 .mta-card-info { min-width: 0; }
 .mta-subject {
-  font-size: 14px; font-weight: 700; color: #1e293b;
+  font-size: 15px; font-weight: 800; color: #1e293b;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.mta-meta { font-size: 12px; color: #64748b; margin-top: 2px; display: flex; gap: 4px; flex-wrap: wrap; }
-.mta-class { font-weight: 600; }
-.mta-code  { color: #94a3b8; }
-.mta-fill-btn { flex-shrink: 0; font-weight: 700; }
+.mta-meta { font-size: 12px; color: #64748b; margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.mta-class-chip {
+  font-weight: 800; color: white;
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
+  border-radius: 6px; padding: 1px 8px; font-size: 11px;
+}
+.mta-code  { color: #94a3b8; font-size: 11px; }
+.mta-fill-btn { flex-shrink: 0; font-weight: 800 !important; min-width: 68px; }
 
 /* ── Responsive ── */
 @media (max-width: 640px) {
