@@ -800,7 +800,18 @@ async function saveSettings() {
     }).eq('id', sid)
     if (error) throw error
 
-    schoolStore.setSchool({ ...data, updated_at: new Date() })
+    schoolStore.setSchool({
+      ...(schoolStore.schoolInfo || {}),
+      name: data.name,
+      current_term: data.current_term,
+      periods_per_day: data.periods_per_day,
+      period_times: data.period_times,
+      settings: {
+        ...((schoolStore.schoolInfo?.settings && typeof schoolStore.schoolInfo.settings === 'object') ? schoolStore.schoolInfo.settings : {}),
+        school_info: data,
+      },
+      updated_at: new Date(),
+    })
     schoolStore.setCurrentTerm(data.current_term)
     ElMessage.success('บันทึกการตั้งค่าเรียบร้อยแล้ว')
   } catch (e) {
