@@ -631,7 +631,7 @@ export function useSchoolDb() {
   // ═════════════════════════════════════════════════════════════════════════
   async function getTeachingLogs(date, classId = null, teacherId = null) {
     const dateKey = normalizeDateKey(date)
-    const termId = await getTermId()
+    const termId = term()
 
     let q = supabase
       .from('teach_actuals')
@@ -724,7 +724,7 @@ export function useSchoolDb() {
   // BEHAVIOR LOGS
   // ═════════════════════════════════════════════════════════════════════════
   async function getBehaviorLogs({ studentId, classId, type, startDate, endDate } = {}) {
-    const termId = await getTermId()
+    const termId = term()
     let q = supabase
       .from('behavior_logs')
       .select('*')
@@ -1021,7 +1021,7 @@ export function useSchoolDb() {
   async function getTeachActualsRangeByClass(startDate, endDate, classId = null) {
     const startKey = normalizeDateKey(startDate)
     const endKey = normalizeDateKey(endDate)
-    const termId = await getTermId()
+    const termId = term()
     let q = supabase
       .from('teach_actuals')
       .select('*')
@@ -1307,7 +1307,7 @@ export function useSchoolDb() {
   // จัดสอนแทน: update teach_actual + update leave_request.assignments JSONB
   async function assignSubstituteTeacher(leaveId, assignmentKey, slotData, subTeacher, absentTeacher) {
     const { date, period_no, class_id, subject_name, subject_plan_id } = slotData
-    const termId = await getTermId()
+    const termId = term()
     const periodNum = Number(period_no)
 
     // Upsert teach_actual
@@ -1356,7 +1356,7 @@ export function useSchoolDb() {
 
   // ยกเลิก assignment
   async function unassignSubstituteTeacher(leaveId, assignmentKey, taId) {
-    const termId = await getTermId()
+    const termId = term()
 
     // Clear teach_actual substitute fields; look up by UUID if given
     if (taId && taId.includes('-')) {
