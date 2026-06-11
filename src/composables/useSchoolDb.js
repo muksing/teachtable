@@ -602,7 +602,7 @@ export function useSchoolDb() {
     if (!slots || slots.length === 0) return
     const schoolId = authStore.schoolId
     const timetableTerm = term()
-    const payloads = slots.map(slot => ({
+    const rawPayloads = slots.map(slot => ({
       school_id: schoolId,
       term_id: timetableTerm,
       class_id: slot.class_id,
@@ -615,6 +615,12 @@ export function useSchoolDb() {
       period_number: Number(slot.period || slot.period_number),
       slot_type: slot.type || slot.slot_type || 'normal',
     }))
+    // Deduplicate by conflict key to avoid "affect row a second time" error
+    const dedup = new Map()
+    for (const p of rawPayloads) {
+      dedup.set(`${p.class_id}_${p.day_of_week}_${p.period_number}`, p)
+    }
+    const payloads = [...dedup.values()]
     const CHUNK = 400
     for (let i = 0; i < payloads.length; i += CHUNK) {
       const { error } = await supabase

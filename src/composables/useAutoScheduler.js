@@ -156,12 +156,22 @@ export function useAutoScheduler() {
 
       // 6. บันทึกลง Supabase (timetable_slots)
       if (newSlots.length) {
-        log(`💾 บันทึก ${newSlots.length} คาบลง Supabase...`)
+        // Deduplicate by conflict key to avoid PostgreSQL "affect row a second time" error
+        const slotDedup = new Map()
+        for (const slot of newSlots) {
+          slotDedup.set(`${slot.class_id}_${slot.day}_${slot.period}`, slot)
+        }
+        const uniqueSlots = [...slotDedup.values()]
+        if (uniqueSlots.length < newSlots.length) {
+          log(`⚠️ พบคาบซ้ำ ${newSlots.length - uniqueSlots.length} คาบ (ถูกรวม) → บันทึก ${uniqueSlots.length} คาบ`)
+        } else {
+          log(`💾 บันทึก ${uniqueSlots.length} คาบลง Supabase...`)
+        }
         const uid = authStore.profile?.uid || 'auto'
         const ts = new Date().toISOString()
 
-        for (let i = 0; i < newSlots.length; i += BATCH_CHUNK_SIZE) {
-          const chunk = newSlots.slice(i, i + BATCH_CHUNK_SIZE)
+        for (let i = 0; i < uniqueSlots.length; i += BATCH_CHUNK_SIZE) {
+          const chunk = uniqueSlots.slice(i, i + BATCH_CHUNK_SIZE)
           const rows = chunk.map(slot => ({
             term_id: t,
             class_id: slot.class_id,
