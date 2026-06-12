@@ -203,11 +203,6 @@
                     </span>
                   </template>
                 </el-table-column>
-                <el-table-column label="คะแนนหลัง" width="90" align="center">
-                  <template #default="{ row }">
-                    <span class="font-semibold">{{ row.score_after }}</span>
-                  </template>
-                </el-table-column>
                 <!-- Image thumbnails column (inline in table) -->
                 <el-table-column label="ภาพประกอบ" width="240" align="center">
                   <template #default="{ row }">
@@ -400,11 +395,9 @@ async function openDetail(row) {
 function detailSummaryMethod({ columns }) {
   const data = filteredDetailLogs.value
   const totalChange = data.reduce((s, r) => s + (r.points_change || 0), 0)
-  const lastScore   = data.length ? data[data.length - 1].score_after : '-'
   return columns.map(col => {
-    if (col.label === 'ที่')       return '📊 รวม'
-    if (col.label === 'คะแนน')    return (totalChange >= 0 ? '+' : '') + totalChange + ' คะแนน'
-    if (col.label === 'คะแนนหลัง') return 'คงเหลือ ' + lastScore
+    if (col.label === 'ที่')    return '📊 รวม'
+    if (col.label === 'คะแนน') return (totalChange >= 0 ? '+' : '') + totalChange + ' คะแนน'
     return ''
   })
 }
@@ -484,19 +477,17 @@ function exportExcel() {
 function exportDetailExcel() {
   const data = filteredDetailLogs.value
   const totalChange = data.reduce((s, r) => s + (r.points_change || 0), 0)
-  const lastScore   = data.length ? data[data.length - 1].score_after : 0
-
   const title   = [`ประวัติพฤติกรรม: ${expandedStudentName.value}`, `รหัส: ${expandedStudentId.value} | ภาคเรียน ${currentTerm.value}`]
-  const headers = ['ที่', 'วันที่', 'พฤติกรรม', 'ประเภท', 'คะแนน', 'คะแนนหลัง', 'หมายเหตุ', 'บันทึกโดย']
+  const headers = ['ที่', 'วันที่', 'พฤติกรรม', 'ประเภท', 'คะแนน', 'หมายเหตุ', 'บันทึกโดย']
   const rows = data.map((r, i) => [
     i + 1,
     thaiDate(r.date || r.created_at?.substring(0, 10)),
     r.label_snapshot || '—',
     r.behavior_type_label_snapshot || BEHAVIOR_TYPE_LABELS[r.behavior_type] || r.behavior_type || '—',
     r.points_change >= 0 ? `+${r.points_change}` : r.points_change,
-    r.score_after, r.note || '', r.recorded_by_name_snapshot || '—',
+    r.note || '', r.recorded_by_name_snapshot || '—',
   ])
-  const sumRow = ['📊 รวม', '', '', '', (totalChange >= 0 ? '+' : '') + totalChange + ' คะแนน', 'คงเหลือ ' + lastScore, '', '']
+  const sumRow = ['📊 รวม', '', '', '', (totalChange >= 0 ? '+' : '') + totalChange + ' คะแนน', '', '']
 
   const ws = XLSX.utils.aoa_to_sheet([title, [], headers, ...rows, [], sumRow])
   ws['!cols'] = [{ wch: 5 }, { wch: 12 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 24 }, { wch: 16 }]
