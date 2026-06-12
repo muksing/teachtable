@@ -21,20 +21,19 @@
 
       <!-- Filters -->
       <el-card class="brv-filter-card mb-5">
-        <div class="brv-filters">
+        <div class="flex flex-wrap gap-3 items-end">
           <div class="brv-filter-group">
             <div class="brv-filter-label">ห้องเรียน</div>
-            <el-select v-model="filterClassId" placeholder="ทุกห้อง" clearable style="min-width:180px">
+            <el-select v-model="filterClassId" placeholder="ทุกห้อง" clearable style="width:180px">
               <el-option v-for="cls in classes" :key="cls.class_id" :label="cls.class_name||cls.class_id" :value="cls.class_id" />
             </el-select>
           </div>
           <div class="brv-filter-group">
             <div class="brv-filter-label">ประเภทพฤติกรรม</div>
-            <el-select v-model="filterType" style="min-width:190px">
+            <el-select v-model="filterType" style="width:190px">
               <el-option label="ทั้งหมด"              value="" />
               <el-option label="ความประพฤติทั่วไป"    value="general" />
-              <el-option label="พฤติกรรมการมาเรียน"   value="attendance" />
-              <el-option label="พฤติกรรมในห้องเรียน"  value="learning" />
+              <el-option label="พฤติกรรมในห้องเรียน"  value="inclass" />
             </el-select>
           </div>
           <div class="brv-filter-group">
@@ -97,6 +96,11 @@
           <el-table-column label="ชื่อ-นามสกุล" min-width="160">
             <template #default="{ row }">{{ row.name }} {{ row.surname }}</template>
           </el-table-column>
+          <el-table-column label="ยกมา" width="80" align="center">
+            <template #default="{ row }">
+              <span class="text-gray-500 font-medium">{{ row.summary?.carry_over_score ?? 0 }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="คะแนนรวม" width="100" align="center">
             <template #default="{ row }">
               <el-tag :type="scoreTagType(row.summary?.total_score)" size="small" effect="dark">
@@ -109,14 +113,9 @@
               <span :class="scoreClass(row.summary?.general_score)">{{ row.summary?.general_score ?? 0 }}</span>
             </template>
           </el-table-column>
-          <el-table-column v-if="!filterType || filterType==='attendance'" label="การมาเรียน" width="105" align="center">
+          <el-table-column v-if="!filterType || filterType!=='general'" label="ในห้องเรียน" width="105" align="center">
             <template #default="{ row }">
-              <span :class="scoreClass(row.summary?.attendance_score)">{{ row.summary?.attendance_score ?? 0 }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column v-if="!filterType || filterType==='learning'" label="ในห้องเรียน" width="105" align="center">
-            <template #default="{ row }">
-              <span :class="scoreClass(row.summary?.learning_score)">{{ row.summary?.learning_score ?? 0 }}</span>
+              <span :class="scoreClass(row.summary?.inclass_score)">{{ row.summary?.inclass_score ?? 0 }}</span>
             </template>
           </el-table-column>
           <!-- Detail icon column -->
@@ -153,17 +152,17 @@
                   <span>ภาคเรียน {{ currentTerm }}</span>
                 </div>
                 <div class="brv-detail-scores" v-if="expandedStudentRow">
+                  <el-tag type="info" size="small" plain class="mr-1">
+                    ยกมา {{ expandedStudentRow.summary?.carry_over_score ?? 0 }}
+                  </el-tag>
                   <el-tag :type="scoreTagType(expandedStudentRow.summary?.total_score)" size="small" effect="dark" class="mr-1">
                     รวม {{ expandedStudentRow.summary?.total_score ?? 0 }}
                   </el-tag>
                   <el-tag type="success" size="small" plain class="mr-1">
                     ความประพฤติ {{ expandedStudentRow.summary?.general_score ?? 0 }}
                   </el-tag>
-                  <el-tag type="primary" size="small" plain class="mr-1">
-                    มาเรียน {{ expandedStudentRow.summary?.attendance_score ?? 0 }}
-                  </el-tag>
-                  <el-tag type="warning" size="small" plain>
-                    ในห้อง {{ expandedStudentRow.summary?.learning_score ?? 0 }}
+                  <el-tag type="primary" size="small" plain>
+                    ในห้องเรียน {{ expandedStudentRow.summary?.inclass_score ?? 0 }}
                   </el-tag>
                 </div>
               </div>
@@ -179,7 +178,7 @@
               <el-empty v-if="!loadingDetail && !detailLogs.length" description="ไม่มีประวัติพฤติกรรม" />
               <el-table
                 v-else
-                :data="detailLogs"
+                :data="filteredDetailLogs"
                 size="small"
                 border
                 show-summary
@@ -188,9 +187,15 @@
                 class="brv-detail-table"
               >
                 <el-table-column type="index" label="ที่" width="44" align="center" />
-                <el-table-column prop="date" label="วันที่" width="108" />
-                <el-table-column prop="label_snapshot" label="พฤติกรรม" min-width="140" />
-                <el-table-column prop="behavior_type_label_snapshot" label="ประเภท" width="140" />
+                <el-table-column label="วันที่" width="118">
+                  <template #default="{ row }">{{ thaiDate(row.date || row.created_at?.substring(0, 10)) }}</template>
+                </el-table-column>
+                <el-table-column label="พฤติกรรม" min-width="140">
+                  <template #default="{ row }">{{ row.label_snapshot || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="ประเภท" width="140">
+                  <template #default="{ row }">{{ row.behavior_type_label_snapshot || BEHAVIOR_TYPE_LABELS[row.behavior_type] || row.behavior_type || '—' }}</template>
+                </el-table-column>
                 <el-table-column label="คะแนน" width="78" align="center">
                   <template #default="{ row }">
                     <span :class="row.points_change>=0 ? 'text-green-600 font-bold' : 'text-red-500 font-bold'">
@@ -210,14 +215,17 @@
                       <a
                         v-for="img in row.image_urls"
                         :key="imgUrl(img)"
-                        :href="imgUrl(img)"
+                        :href="getGDriveViewUrl(imgUrl(img))"
                         target="_blank"
+                        rel="noopener"
                         class="brv-cell-img-link"
+                        title="เปิดใน Google Drive"
                       >
                         <img
-                          :src="getThumbnailUrl(imgUrl(img))"
+                          :src="getGDriveDisplayUrl(imgUrl(img))"
                           class="brv-cell-thumb"
                           :alt="row.label_snapshot"
+                          referrerpolicy="no-referrer"
                         />
                       </a>
                     </div>
@@ -225,7 +233,9 @@
                   </template>
                 </el-table-column>
                 <el-table-column prop="note" label="หมายเหตุ" min-width="110" />
-                <el-table-column prop="recorded_by_name_snapshot" label="บันทึกโดย" width="110" />
+                <el-table-column label="บันทึกโดย" width="110">
+                  <template #default="{ row }">{{ row.recorded_by_name_snapshot || '—' }}</template>
+                </el-table-column>
               </el-table>
             </div>
           </el-card>
@@ -246,7 +256,14 @@ import { useSchoolStore } from '@/stores/school'
 
 const { getClasses, getStudents, getBehaviorSummary, getBehaviorLogs } = useSchoolDb()
 const schoolStore = useSchoolStore()
-const currentTerm = computed(() => schoolStore.currentTerm || '')
+
+const BEHAVIOR_TYPE_LABELS = {
+  general: 'ความประพฤติทั่วไป',
+  attendance: 'พฤติกรรมในห้องเรียน',
+  learning: 'พฤติกรรมในห้องเรียน',
+  inclass: 'พฤติกรรมในห้องเรียน',
+}
+const currentTerm = computed(() => schoolStore.termLabel || schoolStore.currentTerm || '')
 
 // ─── Filter state ──────────────────────────────────────────────
 const classes       = ref([])
@@ -263,7 +280,7 @@ const className = computed(() => {
 })
 
 const filterTypeLabel = computed(() => {
-  const map = { general: 'ความประพฤติทั่วไป', attendance: 'พฤติกรรมการมาเรียน', learning: 'พฤติกรรมในห้องเรียน' }
+  const map = { general: 'ความประพฤติทั่วไป', inclass: 'พฤติกรรมในห้องเรียน' }
   return map[filterType.value] || ''
 })
 
@@ -282,10 +299,17 @@ const expandedStudentId   = ref(null)
 const expandedStudentName = ref('')
 const detailLogs          = ref([])
 const loadingDetail       = ref(false)
+const detailFilterType    = ref('')
 
 const expandedStudentRow = computed(() =>
   filteredRows.value.find(r => r.student_id === expandedStudentId.value) || null
 )
+
+const filteredDetailLogs = computed(() => {
+  if (!detailFilterType.value) return detailLogs.value
+  if (detailFilterType.value === 'inclass') return detailLogs.value.filter(r => ['attendance', 'learning'].includes(r.behavior_type))
+  return detailLogs.value.filter(r => r.behavior_type === detailFilterType.value)
+})
 
 // ─── Load classes ──────────────────────────────────────────────
 onMounted(async () => {
@@ -302,10 +326,12 @@ async function loadReport() {
     reportRows.value = students.map((s) => ({
       ...s,
       summary: {
-        total_score: s.total_behavior_score ?? 100,
-        general_score: s.general_behavior_score ?? s.total_behavior_score ?? 100,
+        carry_over_score: s.behavior_carry_over       ?? 0,
+        total_score:      s.total_behavior_score      ?? 0,
+        general_score:    s.general_behavior_score    ?? 0,
         attendance_score: s.attendance_behavior_score ?? 0,
-        learning_score: s.learning_behavior_score ?? 0,
+        learning_score:   s.learning_behavior_score   ?? 0,
+        inclass_score:    (s.attendance_behavior_score ?? 0) + (s.learning_behavior_score ?? 0),
       }
     }))
   } catch (e) {
@@ -333,6 +359,7 @@ async function openDetail(row) {
   expandedStudentId.value   = row.student_id
   expandedStudentName.value = `${row.name || ''} ${row.surname || ''}`.trim()
   detailLogs.value          = []
+  detailFilterType.value    = ''
   loadingDetail.value       = true
 
   // Wait for detail panel to mount then scroll
@@ -340,9 +367,7 @@ async function openDetail(row) {
   detailAreaRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 
   try {
-    const params = { studentId: row.student_id }
-    if (filterType.value) params.type = filterType.value
-    detailLogs.value = await getBehaviorLogs(params)
+    detailLogs.value = await getBehaviorLogs({ studentId: row.student_id })
   } catch (e) {
     ElMessage.error('โหลดประวัติไม่สำเร็จ: ' + e.message)
   } finally {
@@ -352,7 +377,7 @@ async function openDetail(row) {
 
 // ─── Detail table summary row ──────────────────────────────────
 function detailSummaryMethod({ columns }) {
-  const data = detailLogs.value
+  const data = filteredDetailLogs.value
   const totalChange = data.reduce((s, r) => s + (r.points_change || 0), 0)
   const lastScore   = data.length ? data[data.length - 1].score_after : '-'
   return columns.map(col => {
@@ -365,27 +390,38 @@ function detailSummaryMethod({ columns }) {
 
 // ─── Image URL helpers ─────────────────────────────────────────
 function imgUrl(img) {
-  return typeof img === 'string' ? img : (img?.url || '')
+  if (typeof img === 'string') {
+    // Handle JSON-encoded object strings (stored as TEXT[] instead of JSONB)
+    try { const p = JSON.parse(img); if (p?.url) return p.url } catch {}
+    return img
+  }
+  return img?.url || ''
 }
 
-function getThumbnailUrl(url) {
-  if (!url) return ''
-  let fileId = null
-
-  const m1 = url.match(/lh3\.googleusercontent\.com\/d\/([^/?&#]+)/)
-  if (m1) fileId = m1[1]
-
-  if (!fileId) {
-    const m2 = url.match(/[?&]id=([^&#]+)/)
-    if (m2) fileId = m2[1]
+function extractGDriveFileId(url) {
+  if (!url) return null
+  // Strict char class: only valid Drive ID chars (alphanumeric, hyphen, underscore)
+  const patterns = [
+    /lh3\.googleusercontent\.com\/d\/([A-Za-z0-9_-]+)/,
+    /\/file\/d\/([A-Za-z0-9_-]+)/,
+    /[?&]id=([A-Za-z0-9_-]+)/,
+    /\/d\/([A-Za-z0-9_-]+)/,
+  ]
+  for (const p of patterns) {
+    const m = url.match(p)
+    if (m?.[1]) return m[1]
   }
+  return null
+}
 
-  if (!fileId) {
-    const m3 = url.match(/\/file\/d\/([^/?&#]+)/)
-    if (m3) fileId = m3[1]
-  }
+function getGDriveDisplayUrl(url) {
+  const id = extractGDriveFileId(url)
+  return id ? `https://drive.google.com/thumbnail?id=${id}&sz=w200-h200` : url
+}
 
-  return fileId ? `https://drive.google.com/thumbnail?id=${fileId}&sz=w200` : url
+function getGDriveViewUrl(url) {
+  const id = extractGDriveFileId(url)
+  return id ? `https://drive.google.com/file/d/${id}/view` : url
 }
 
 // ─── Print summary ─────────────────────────────────────────────
@@ -425,16 +461,19 @@ function exportExcel() {
 
 // ─── Excel detail ──────────────────────────────────────────────
 function exportDetailExcel() {
-  const data = detailLogs.value
+  const data = filteredDetailLogs.value
   const totalChange = data.reduce((s, r) => s + (r.points_change || 0), 0)
   const lastScore   = data.length ? data[data.length - 1].score_after : 0
 
   const title   = [`ประวัติพฤติกรรม: ${expandedStudentName.value}`, `รหัส: ${expandedStudentId.value} | ภาคเรียน ${currentTerm.value}`]
   const headers = ['ที่', 'วันที่', 'พฤติกรรม', 'ประเภท', 'คะแนน', 'คะแนนหลัง', 'หมายเหตุ', 'บันทึกโดย']
   const rows = data.map((r, i) => [
-    i + 1, r.date, r.label_snapshot, r.behavior_type_label_snapshot,
+    i + 1,
+    thaiDate(r.date || r.created_at?.substring(0, 10)),
+    r.label_snapshot || '—',
+    r.behavior_type_label_snapshot || BEHAVIOR_TYPE_LABELS[r.behavior_type] || r.behavior_type || '—',
     r.points_change >= 0 ? `+${r.points_change}` : r.points_change,
-    r.score_after, r.note || '', r.recorded_by_name_snapshot || '',
+    r.score_after, r.note || '', r.recorded_by_name_snapshot || '—',
   ])
   const sumRow = ['📊 รวม', '', '', '', (totalChange >= 0 ? '+' : '') + totalChange + ' คะแนน', 'คงเหลือ ' + lastScore, '', '']
 
@@ -446,6 +485,14 @@ function exportDetailExcel() {
 }
 
 // ─── Helpers ───────────────────────────────────────────────────
+const THAI_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.']
+function thaiDate(dateStr) {
+  if (!dateStr) return '—'
+  const d = new Date(dateStr)
+  if (isNaN(d)) return dateStr
+  return `${d.getDate()} ${THAI_MONTHS[d.getMonth()]} ${d.getFullYear() + 543}`
+}
+
 function scoreClass(score) {
   const s = score ?? 0
   if (s >= 80) return 'text-green-600 font-bold'

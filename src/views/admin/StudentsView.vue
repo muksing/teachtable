@@ -157,8 +157,8 @@
         <el-table-column prop="class_id" label="ห้อง" width="90" align="center" />
         <el-table-column label="ความประพฤติ" width="100" align="center">
           <template #default="{ row }">
-            <span :class="(row.total_behavior_score ?? 100) < 50 ? 'text-red-500 font-bold' : 'text-green-600 font-medium'">
-              {{ row.total_behavior_score ?? 100 }}
+            <span :class="(row.total_behavior_score ?? 0) < -50 ? 'text-red-500 font-bold' : 'text-green-600 font-medium'">
+              {{ row.total_behavior_score ?? 0 }}
             </span>
           </template>
         </el-table-column>
@@ -631,8 +631,9 @@ const emptyForm = () => ({
   gender: 'ชาย',
   birth_date: '',
   national_id: '',
-  total_behavior_score: 100,
-  general_behavior_score: 100,
+  behavior_carry_over: 0,
+  total_behavior_score: 0,
+  general_behavior_score: 0,
   attendance_behavior_score: 0,
   learning_behavior_score: 0,
   note: '',
@@ -726,9 +727,9 @@ function compressToBase64(file, maxW = 800, maxH = 800, quality = 0.8) {
 async function loadGasSettings() {
   const { data, error } = await supabase.from('schools').select('settings').eq('id', authStore.schoolId).single()
   if (error || !data) throw new Error('ไม่พบการตั้งค่า กรุณาตั้งค่า GAS Upload Web App URL หรือ GAS Web App URL ในหน้าตั้งค่าบันทึกเข้าสอน')
-  const info = data.settings?.school_info || {}
-  const gasUrl = info.gas_upload_web_app_url?.trim() || info.gas_web_app_url?.trim()
-  const folderId = info.gdrive_folder_id?.trim()
+  const tl = data.settings?.teaching_log_settings || {}
+  const gasUrl = (tl.gas_upload_web_app_url || tl.gas_web_app_url || '').trim()
+  const folderId = (tl.gdrive_folder_id || '').trim()
   if (!gasUrl) throw new Error('กรุณาตั้งค่า GAS Upload Web App URL หรือ GAS Web App URL ในหน้าตั้งค่าบันทึกเข้าสอน')
   if (!folderId) throw new Error('กรุณาตั้งค่า Google Drive Folder ID ในหน้าตั้งค่าบันทึกเข้าสอน')
   return { gasUrl, folderId }
@@ -888,8 +889,9 @@ function openDialog(student = null) {
       gender: student.gender || 'ชาย',
       birth_date: student.birth_date || '',
       national_id: student.national_id || '',
-      total_behavior_score: student.total_behavior_score ?? 100,
-      general_behavior_score: student.general_behavior_score ?? student.total_behavior_score ?? 100,
+      behavior_carry_over: student.behavior_carry_over ?? 0,
+      total_behavior_score: student.total_behavior_score ?? 0,
+      general_behavior_score: student.general_behavior_score ?? 0,
       attendance_behavior_score: student.attendance_behavior_score ?? 0,
       learning_behavior_score: student.learning_behavior_score ?? 0,
       note: student.note || '',
@@ -1063,7 +1065,7 @@ async function openResetBehaviorScoreDialog() {
         cancelButtonText: 'ยกเลิก',
         inputPattern: /^-?\d+$/,
         inputErrorMessage: 'กรุณากรอกตัวเลขจำนวนเต็ม',
-        inputValue: '100'
+        inputValue: '0'
       }
     )
     const newScore = parseInt(value, 10)
@@ -1072,10 +1074,11 @@ async function openResetBehaviorScoreDialog() {
     for (const row of targetStudents) {
       await saveStudent({
         ...row,
+        behavior_carry_over: newScore,
         total_behavior_score: newScore,
-        general_behavior_score: newScore,
+        general_behavior_score: 0,
         attendance_behavior_score: 0,
-        learning_behavior_score: 0
+        learning_behavior_score: 0,
       })
     }
 
@@ -1133,8 +1136,8 @@ function handleImportFile(e) {
         birth_date: r[7] ? String(r[7]).trim() : (existingStudent?.birth_date || ''),
         parent_name: String(r[8] || existingStudent?.parent_name || '').trim(),
         parent_phone: String(r[9] || existingStudent?.parent_phone || '').trim(),
-        total_behavior_score: r[10] !== undefined && r[10] !== '' ? Number(r[10]) : (existingStudent?.total_behavior_score ?? 100),
-        general_behavior_score: r[10] !== undefined && r[10] !== '' ? Number(r[10]) : (existingStudent?.general_behavior_score ?? 100),
+        total_behavior_score: r[10] !== undefined && r[10] !== '' ? Number(r[10]) : (existingStudent?.total_behavior_score ?? 0),
+        general_behavior_score: r[10] !== undefined && r[10] !== '' ? Number(r[10]) : (existingStudent?.general_behavior_score ?? 0),
         attendance_behavior_score: existingStudent?.attendance_behavior_score ?? 0,
         learning_behavior_score: existingStudent?.learning_behavior_score ?? 0,
         note: String(r[11] || existingStudent?.note || '').trim(),
@@ -1211,7 +1214,7 @@ function exportExcel() {
   const rows = filteredStudents.value.map(s => [
     s.class_id, s.student_id, s.seat_number,
     s.prefix, s.name, s.surname, s.gender,
-    s.birth_date, s.parent_name, s.parent_phone, s.total_behavior_score ?? 100, s.note,
+    s.birth_date, s.parent_name, s.parent_phone, s.total_behavior_score ?? 0, s.note,
     s.student_status || 'เรียนอยู่',
   ])
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
@@ -1232,7 +1235,7 @@ function handlePrint() {
       { label: 'เลขที่', key: 'seat_number', width: '70px' },
       { 
         label: 'คะแนนความประพฤติ', 
-        render: row => row.total_behavior_score ?? 100
+        render: row => row.total_behavior_score ?? 0
       },
     ],
     rows: filteredStudents.value,

@@ -20,7 +20,7 @@ const THAI_DAYS_ARR = ['อาทิตย์', 'จันทร์', 'อัง
 function normalizeDateKey(input) {
   if (typeof input === 'string') return input
   if (input instanceof Date && !Number.isNaN(input.getTime())) {
-    return input.toISOString().split('T')[0]
+    return localDateStr(input)
   }
   if (input && typeof input.format === 'function') {
     return input.format('YYYY-MM-DD')
@@ -40,6 +40,14 @@ function asText(value) {
 
 function getThaiDayFromDate(dateStr) {
   return THAI_DAYS_ARR[new Date(dateStr + 'T00:00:00').getDay()]
+}
+
+// ใช้ local date (ไม่ใช่ UTC) เพื่อป้องกัน off-by-one เมื่อ timezone = UTC+7
+function localDateStr(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 // ─── teach_actual mapper: DB row → legacy field names used by views ──────────
@@ -146,6 +154,7 @@ export function useSchoolDb() {
       .from('teachers')
       .select('*')
       .eq('school_id', authStore.schoolId)
+      .eq('term_id', term())
       .order('first_name', { ascending: true })
     if (error) throw error
     return data.map(d => ({
@@ -166,6 +175,7 @@ export function useSchoolDb() {
   async function saveTeacher(teacher) {
     const payload = {
       school_id: authStore.schoolId,
+      term_id: term(),
       teacher_code: teacher.teacher_id,
       prefix: teacher.prefix,
       first_name: teacher.name,
@@ -187,7 +197,7 @@ export function useSchoolDb() {
     } else {
       const { data, error } = await supabase
         .from('teachers')
-        .upsert([payload], { onConflict: 'school_id,teacher_code' })
+        .upsert([payload], { onConflict: 'school_id,term_id,teacher_code' })
         .select()
         .single()
       if (error) throw error
@@ -205,6 +215,7 @@ export function useSchoolDb() {
         .from('teachers')
         .select('id')
         .eq('school_id', authStore.schoolId)
+        .eq('term_id', term())
         .eq('teacher_code', id)
         .maybeSingle()
       if (!data?.id) return
@@ -397,7 +408,9 @@ export function useSchoolDb() {
       status: student.student_status || 'เรียนอยู่',
       student_status: student.student_status || 'เรียนอยู่',
       is_active: student.is_active !== false,
-      total_behavior_score: student.total_behavior_score ?? 100,
+      behavior_carry_over: student.behavior_carry_over ?? 0,
+      total_behavior_score: student.total_behavior_score ?? 0,
+      general_behavior_score: student.general_behavior_score ?? 0,
       attendance_behavior_score: student.attendance_behavior_score ?? 0,
       learning_behavior_score: student.learning_behavior_score ?? 0,
       photo_url: student.photo_url || null,
@@ -482,30 +495,40 @@ export function useSchoolDb() {
   // Returns flattened rows compatible with what AssignmentsView / AttendanceReportView expect
   // ═════════════════════════════════════════════════════════════════════════
   async function getTeachingAssignments() {
-    const termId = await getTermId()
+    const termId = term()
     const { data, error } = await supabase
-      .from('teaching_assignments')
-      .select('*')
+      .from('timetable_slots')
+      .select('class_id, subject_id, subject_name, teacher_id, teacher_name')
       .eq('school_id', authStore.schoolId)
       .eq('term_id', termId)
-      .order('class_id')
+      .neq('slot_type', 'activity')
     if (error) throw error
-    return (data || []).map(row => ({
-      id: row.id,
-      assign_id: row.id,
-      class_id: row.class_id,
-      subject_code: row.subject_id,
-      subject_id: row.subject_id,
-      subject_name: row.subject_name || row.subject_id || '',
-      teacher_id: row.teacher_id,
-      teacher_name: row.teacher_name || row.teacher_id || '',
-      preferred_room: row.preferred_room || '',
-      periods_per_week: Number(row.periods_per_week) || 1,
-      consecutive_periods: Number(row.consecutive_periods) || 1,
-      placed: 0,
-      remaining: Number(row.periods_per_week) || 1,
-      done: false,
-    }))
+    // deduplicate: one row per class+subject+teacher combination
+    const seen = new Set()
+    const rows = []
+    for (const row of (data || [])) {
+      const key = `${row.class_id}_${row.subject_id}_${row.teacher_id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      rows.push({
+        id: key,
+        assign_id: key,
+        class_id: row.class_id,
+        subject_code: row.subject_id,
+        subject_id: row.subject_id,
+        subject_name: row.subject_name || row.subject_id || '',
+        teacher_id: row.teacher_id,
+        teacher_id_snapshot: row.teacher_id,
+        teacher_name: row.teacher_name || row.teacher_id || '',
+        preferred_room: '',
+        periods_per_week: 1,
+        consecutive_periods: 1,
+        placed: 0,
+        remaining: 1,
+        done: false,
+      })
+    }
+    return rows
   }
 
   async function saveTeachingAssignment(assignment) {
@@ -688,17 +711,18 @@ export function useSchoolDb() {
   async function getBehaviorSummary(studentId) {
     // student_id here can be the UUID or student_code; try UUID first
     let row = null
+    const selectFields = 'behavior_carry_over, total_behavior_score, general_behavior_score, attendance_behavior_score, learning_behavior_score'
     if (studentId && studentId.includes('-')) {
       const { data } = await supabase
         .from('students')
-        .select('total_behavior_score, attendance_behavior_score, learning_behavior_score')
+        .select(selectFields)
         .eq('id', studentId)
         .maybeSingle()
       row = data
     } else {
       const { data } = await supabase
         .from('students')
-        .select('total_behavior_score, attendance_behavior_score, learning_behavior_score')
+        .select(selectFields)
         .eq('school_id', authStore.schoolId)
         .eq('student_code', studentId)
         .maybeSingle()
@@ -715,11 +739,18 @@ export function useSchoolDb() {
         learning_score_init: 0,
       }
     }
+    const carryOver  = row.behavior_carry_over       ?? 0
+    const general    = row.general_behavior_score    ?? 0
+    const attendance = row.attendance_behavior_score ?? 0
+    const learning   = row.learning_behavior_score   ?? 0
+    const total      = row.total_behavior_score      ?? (carryOver + general + attendance + learning)
     return {
-      total_score: row.total_behavior_score ?? 0,
-      attendance_score: row.attendance_behavior_score ?? 0,
-      learning_score: row.learning_behavior_score ?? 0,
-      general_score: (row.total_behavior_score ?? 0) - (row.attendance_behavior_score ?? 0) - (row.learning_behavior_score ?? 0),
+      carry_over_score: carryOver,
+      total_score:      total,
+      general_score:    general,
+      attendance_score: attendance,
+      learning_score:   learning,
+      inclass_score:    attendance + learning,
       general_score_init: 0,
       attendance_score_init: 0,
       learning_score_init: 0,
@@ -738,7 +769,8 @@ export function useSchoolDb() {
       .eq('term_id', termId)
 
     if (studentId) q = q.eq('student_id', studentId)
-    if (type)      q = q.eq('behavior_type', type)
+    if (type === 'inclass') q = q.in('behavior_type', ['attendance', 'learning'])
+    else if (type) q = q.eq('behavior_type', type)
     if (startDate) q = q.gte('created_at', startDate)
     if (endDate)   q = q.lte('created_at', endDate + 'T23:59:59')
 
@@ -753,10 +785,10 @@ export function useSchoolDb() {
       // If classId filtering is needed, get student IDs in that class first
       const { data: students } = await supabase
         .from('students')
-        .select('id, student_code')
+        .select('student_code')
         .eq('school_id', authStore.schoolId)
         .eq('class_id', classId)
-      const studentIds = new Set((students || []).map(s => s.id))
+      const studentIds = new Set((students || []).map(s => s.student_code))
       rows = rows.filter(r => studentIds.has(r.student_id))
     }
     return rows
@@ -945,7 +977,7 @@ export function useSchoolDb() {
 
     // ระบุครู → อ่าน timetable_slots ของครูวันนั้นโดยตรง (teacher_id = TEXT code)
     const dayNum = THAI_DAY_TO_NUMBER[THAI_DAYS_ARR[new Date(dateKey + 'T00:00:00').getDay()]]
-    const [slotsRes, actualsRes] = await Promise.all([
+    const [slotsRes, actualsRes, teachersRes] = await Promise.all([
       supabase
         .from('timetable_slots')
         .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, room_id, slot_type')
@@ -960,51 +992,95 @@ export function useSchoolDb() {
         .eq('school_id', schoolId)
         .eq('term_id', timetableTerm)
         .eq('date', dateKey),
+      supabase
+        .from('teachers')
+        .select('teacher_code, prefix, first_name, last_name')
+        .eq('school_id', schoolId),
     ])
     if (slotsRes.error) throw slotsRes.error
 
-    const tSlots = slotsRes.data || []
-    if (tSlots.length === 0) return []
+    const teacherNameMap = new Map()
+    for (const t of (teachersRes.data || [])) {
+      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim())
+    }
 
-    // Map teach_actuals ที่มีอยู่ → key: class_id_period
+    const tSlots = slotsRes.data || []
     const actualsMap = new Map()
     for (const row of (actualsRes.data || [])) {
       actualsMap.set(`${row.class_id}_${row.period_number}`, mapTeachActual(row))
     }
 
-    // Merge: timetable slot + existing teach_actual (หรือ virtual unfilled)
-    return tSlots.map(slot => {
+    // Merge timetable slots
+    const results = tSlots.map(slot => {
       const key = `${slot.class_id}_${slot.period_number}`
       const existing = actualsMap.get(key)
-      const timetableInfo = {
-        subject_plan_id: slot.subject_id   || '',
-        subject_name:   slot.subject_name  || slot.subject_id || '',
-        teacher_plan_id: slot.teacher_id   || '',
-        teacher_plan_name: slot.teacher_name || slot.teacher_id || '',
-        preferred_room: slot.room_id       || '',
+      const info = {
+        subject_plan_id: slot.subject_id || '',
+        subject_name: slot.subject_name || slot.subject_id || '',
+        teacher_plan_id: slot.teacher_id || '',
+        teacher_plan_name: teacherNameMap.get(slot.teacher_id) || slot.teacher_name || slot.teacher_id || '',
+        preferred_room: slot.room_id || '',
         class_id: slot.class_id,
       }
-      if (existing) {
-        return { ...existing, ...timetableInfo }
-      }
-      // Virtual slot (teach_actual ยังไม่ถูกสร้าง)
+      if (existing) return { ...existing, ...info }
       return {
-        id: null,
-        teach_actual_id: null,
-        school_id: schoolId,
-        term_id: timetableTerm,
-        class_id: slot.class_id,
-        date: dateKey,
-        period: slot.period_number,
-        period_number: slot.period_number,
+        id: null, teach_actual_id: null,
+        school_id: schoolId, term_id: timetableTerm,
+        class_id: slot.class_id, date: dateKey,
+        period: slot.period_number, period_number: slot.period_number,
         slot_type: slot.slot_type || 'normal',
-        is_filled: false,
-        is_substitute_mandatory: false,
-        topic: '',
-        activity_type: 'บรรยาย',
-        ...timetableInfo,
+        is_filled: false, is_substitute_mandatory: false,
+        topic: '', activity_type: 'บรรยาย', ...info,
       }
-    }).sort((a, b) => (a.period || 0) - (b.period || 0))
+    })
+
+    // เพิ่ม homeroom periods ของครูที่ปรึกษา (ไม่อยู่ใน timetable_slots)
+    const thaiDay = THAI_DAYS_ARR[new Date(dateKey + 'T00:00:00').getDay()]
+    try {
+      const [settingsResult, classesRes] = await Promise.all([
+        getSchoolSettings(),
+        supabase.from('classes')
+          .select('class_name, homeroom_teacher_id')
+          .eq('school_id', schoolId)
+          .eq('homeroom_teacher_id', teacherPlanId),
+      ])
+      const homeroomPeriods = settingsResult.teaching_log_settings?.homeroom_special_periods || []
+      const homeroomClasses = classesRes.data || []
+      const teacherDisplayName = teacherNameMap.get(teacherPlanId) || teacherPlanId
+      for (const homeroomClass of homeroomClasses) {
+        if (!homeroomPeriods.length) break
+        const classId = homeroomClass.class_name
+        for (const hp of homeroomPeriods) {
+          const period = Number(hp.period)
+          if (!Number.isFinite(period)) continue
+          const days = Array.isArray(hp.days) ? hp.days : []
+          if (days.length && !days.includes('all') && !days.includes(thaiDay)) continue
+          if (results.some(r => r.class_id === classId && r.period === period)) continue
+          const existing = actualsMap.get(`${classId}_${period}`)
+          const hmInfo = {
+            subject_plan_id: '', subject_name: hp.name || 'เข้าแถว/โฮมรูม',
+            teacher_plan_id: teacherPlanId,
+            teacher_plan_name: teacherDisplayName,
+            class_id: classId, class_name: classId, slot_type: 'homeroom',
+          }
+          if (existing) {
+            results.push({ ...existing, ...hmInfo })
+          } else {
+            results.push({
+              id: null, teach_actual_id: null,
+              school_id: schoolId, term_id: timetableTerm,
+              date: dateKey, day_of_week: thaiDay,
+              period, period_number: period,
+              is_filled: false, is_substitute_mandatory: false,
+              topic: '', activity_type: 'บรรยาย', student_records: {},
+              ...hmInfo,
+            })
+          }
+        }
+      }
+    } catch (_) { /* homeroom ล้มเหลว ไม่กระทบ regular slots */ }
+
+    return results.sort((a, b) => (a.period || 0) - (b.period || 0))
   }
 
   // ดึงช่วงวันที่ (สำหรับรายงาน) — รวม virtual unfilled จาก timetable_slots ด้วย
@@ -1014,7 +1090,7 @@ export function useSchoolDb() {
     const termId = term()
     const schoolId = authStore.schoolId
 
-    const [slotsRes, actualsRes] = await Promise.all([
+    const [slotsRes, actualsRes, settingsResult, classesRes, teachersRes] = await Promise.all([
       supabase
         .from('timetable_slots')
         .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
@@ -1029,11 +1105,24 @@ export function useSchoolDb() {
         .gte('date', startKey)
         .lte('date', endKey)
         .order('date'),
+      getSchoolSettings(),
+      supabase.from('classes')
+        .select('class_name, homeroom_teacher_id')
+        .eq('school_id', schoolId),
+      supabase.from('teachers')
+        .select('teacher_code, prefix, first_name, last_name')
+        .eq('school_id', schoolId),
     ])
     if (slotsRes.error) throw slotsRes.error
     if (actualsRes.error) throw actualsRes.error
 
-    // จัด timetable_slots ตาม day_of_week number
+    const homeroomPeriods      = settingsResult.teaching_log_settings?.homeroom_special_periods || []
+    const classesWithHomeroom  = (classesRes.data || []).filter(c => c.homeroom_teacher_id)
+    const teacherNameMap = new Map()
+    for (const t of (teachersRes?.data || [])) {
+      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim())
+    }
+
     const slotsByDay = {}
     for (const slot of (slotsRes.data || [])) {
       const day = slot.day_of_week
@@ -1041,20 +1130,18 @@ export function useSchoolDb() {
       slotsByDay[day].push(slot)
     }
 
-    // index teach_actuals ที่มีอยู่แล้ว
     const actualsMap = new Map()
     for (const row of (actualsRes.data || [])) {
       actualsMap.set(`${row.date}_${row.class_id}_${row.period_number}`, mapTeachActual(row))
     }
 
-    // ขยาย date range → virtual slot ต่อวัน
     const results = []
     const start = new Date(startKey + 'T00:00:00')
     const end   = new Date(endKey   + 'T00:00:00')
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const dateStr    = d.toISOString().split('T')[0]
-      const thaiDay    = THAI_DAYS_ARR[d.getDay()]
-      const dayNum     = THAI_DAY_TO_NUMBER[thaiDay]
+      const dateStr     = localDateStr(d)
+      const thaiDay     = THAI_DAYS_ARR[d.getDay()]
+      const dayNum      = THAI_DAY_TO_NUMBER[thaiDay]
       const slotsForDay = slotsByDay[dayNum] || []
       for (const slot of slotsForDay) {
         const key      = `${dateStr}_${slot.class_id}_${slot.period_number}`
@@ -1067,17 +1154,43 @@ export function useSchoolDb() {
           class_id:          slot.class_id,
           class_name:        slot.class_id,
         }
-        if (existing) {
-          results.push({ ...existing, ...slotInfo })
-        } else {
-          results.push({
+        if (existing) results.push({ ...existing, ...slotInfo })
+        else results.push({
+          id: null, teach_actual_id: null,
+          date: dateStr, day_of_week: thaiDay,
+          period: slot.period_number, period_number: slot.period_number,
+          is_filled: false, is_substitute_mandatory: false,
+          topic: '', activity_type: 'บรรยาย', record_by_name: '', timestamp: null,
+          ...slotInfo,
+        })
+      }
+      // เพิ่ม homeroom periods ของครูที่ปรึกษาแต่ละห้อง
+      for (const cls of classesWithHomeroom) {
+        const cId = cls.class_name
+        for (const hp of homeroomPeriods) {
+          const period = Number(hp.period)
+          if (!Number.isFinite(period)) continue
+          const days = Array.isArray(hp.days) ? hp.days : []
+          if (days.length && !days.includes('all') && !days.includes(thaiDay)) continue
+          if (results.some(r => r.date === dateStr && r.class_id === cId && r.period === period)) continue
+          const key = `${dateStr}_${cId}_${period}`
+          const existing = actualsMap.get(key)
+          const hmTeacherId = cls.homeroom_teacher_id || ''
+          const hmTeacherName = teacherNameMap.get(hmTeacherId) || hmTeacherId
+          const hmInfo = {
+            subject_plan_id: '', subject_name: hp.name || hp.subject_name || 'เข้าแถว/โฮมรูม',
+            teacher_plan_id: hmTeacherId,
+            teacher_plan_name: hmTeacherName,
+            class_id: cId, class_name: cId, slot_type: 'homeroom',
+          }
+          if (existing) results.push({ ...existing, ...hmInfo })
+          else results.push({
             id: null, teach_actual_id: null,
             date: dateStr, day_of_week: thaiDay,
-            period: slot.period_number, period_number: slot.period_number,
+            period, period_number: period,
             is_filled: false, is_substitute_mandatory: false,
-            topic: '', activity_type: 'บรรยาย',
-            record_by_name: '', timestamp: null,
-            ...slotInfo,
+            topic: '', activity_type: 'บรรยาย', record_by_name: '', timestamp: null,
+            ...hmInfo,
           })
         }
       }
@@ -1114,9 +1227,25 @@ export function useSchoolDb() {
       .order('date')
     if (classId) actualsQ = actualsQ.eq('class_id', classId)
 
-    const [slotsRes, actualsRes] = await Promise.all([slotsQ, actualsQ])
+    let classesQ = supabase
+      .from('classes')
+      .select('class_name, homeroom_teacher_id')
+      .eq('school_id', schoolId)
+    if (classId) classesQ = classesQ.eq('class_name', classId)
+
+    const [slotsRes, actualsRes, settingsResult, classesRes, teachersRes2] = await Promise.all([
+      slotsQ, actualsQ, getSchoolSettings(), classesQ,
+      supabase.from('teachers').select('teacher_code, prefix, first_name, last_name').eq('school_id', schoolId),
+    ])
     if (slotsRes.error) throw slotsRes.error
     if (actualsRes.error) throw actualsRes.error
+
+    const homeroomPeriods     = settingsResult.teaching_log_settings?.homeroom_special_periods || []
+    const classesWithHomeroom = (classesRes.data || []).filter(c => c.homeroom_teacher_id)
+    const teacherNameMap2 = new Map()
+    for (const t of (teachersRes2?.data || [])) {
+      teacherNameMap2.set(t.teacher_code, `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim())
+    }
 
     const slotsByDay = {}
     for (const slot of (slotsRes.data || [])) {
@@ -1134,7 +1263,7 @@ export function useSchoolDb() {
     const start = new Date(startKey + 'T00:00:00')
     const end   = new Date(endKey   + 'T00:00:00')
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const dateStr     = d.toISOString().split('T')[0]
+      const dateStr     = localDateStr(d)
       const thaiDay     = THAI_DAYS_ARR[d.getDay()]
       const dayNum      = THAI_DAY_TO_NUMBER[thaiDay]
       const slotsForDay = slotsByDay[dayNum] || []
@@ -1149,17 +1278,43 @@ export function useSchoolDb() {
           class_id:          slot.class_id,
           class_name:        slot.class_id,
         }
-        if (existing) {
-          results.push({ ...existing, ...slotInfo })
-        } else {
-          results.push({
+        if (existing) results.push({ ...existing, ...slotInfo })
+        else results.push({
+          id: null, teach_actual_id: null,
+          date: dateStr, day_of_week: thaiDay,
+          period: slot.period_number, period_number: slot.period_number,
+          is_filled: false, is_substitute_mandatory: false,
+          topic: '', activity_type: 'บรรยาย', record_by_name: '', timestamp: null, student_records: {},
+          ...slotInfo,
+        })
+      }
+      // เพิ่ม homeroom periods
+      for (const cls of classesWithHomeroom) {
+        const cId = cls.class_name
+        for (const hp of homeroomPeriods) {
+          const period = Number(hp.period)
+          if (!Number.isFinite(period)) continue
+          const days = Array.isArray(hp.days) ? hp.days : []
+          if (days.length && !days.includes('all') && !days.includes(thaiDay)) continue
+          if (results.some(r => r.date === dateStr && r.class_id === cId && r.period === period)) continue
+          const key = `${dateStr}_${cId}_${period}`
+          const existing = actualsMap.get(key)
+          const hmTeacherId2 = cls.homeroom_teacher_id || ''
+          const hmTeacherName2 = teacherNameMap2.get(hmTeacherId2) || hmTeacherId2
+          const hmInfo = {
+            subject_plan_id: '', subject_name: hp.name || hp.subject_name || 'เข้าแถว/โฮมรูม',
+            teacher_plan_id: hmTeacherId2,
+            teacher_plan_name: hmTeacherName2,
+            class_id: cId, class_name: cId, slot_type: 'homeroom',
+          }
+          if (existing) results.push({ ...existing, ...hmInfo })
+          else results.push({
             id: null, teach_actual_id: null,
             date: dateStr, day_of_week: thaiDay,
-            period: slot.period_number, period_number: slot.period_number,
+            period, period_number: period,
             is_filled: false, is_substitute_mandatory: false,
-            topic: '', activity_type: 'บรรยาย',
-            record_by_name: '', timestamp: null, student_records: {},
-            ...slotInfo,
+            topic: '', activity_type: 'บรรยาย', record_by_name: '', timestamp: null, student_records: {},
+            ...hmInfo,
           })
         }
       }
@@ -1196,8 +1351,8 @@ export function useSchoolDb() {
         .order('class_name'),
     ])
 
-    const homeroomPeriods = Array.isArray(settingsResult.school_info?.homeroom_special_periods)
-      ? settingsResult.school_info.homeroom_special_periods
+    const homeroomPeriods = Array.isArray(settingsResult.teaching_log_settings?.homeroom_special_periods)
+      ? settingsResult.teaching_log_settings.homeroom_special_periods
       : []
     const classes = (classesResult.data || []).map(d => ({
       ...d,

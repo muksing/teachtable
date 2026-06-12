@@ -9,7 +9,7 @@
           <p class="tl-sub">เลือกวันที่ → เลือกคาบ → กรอกข้อมูล</p>
         </div>
         <div class="tl-header-meta">
-          <span class="tl-term-badge">📅 {{ schoolStore.currentTerm || '-' }}</span>
+          <span class="tl-term-badge">📅 {{ termDisplay }}</span>
         </div>
       </div>
 
@@ -366,7 +366,7 @@ const authStore  = useAuthStore()
 const schoolStore = useSchoolStore()
 
 const {
-  getPublishedTimetableSlots,
+  getTimetable,
   getTeachActuals,
   generateTeachActualsForDate,
   saveTeachActual,
@@ -441,6 +441,22 @@ function getPeriodTime(period) {
 
 const THAI_DAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์']
 
+// ── ข้อมูลภาคเรียนจาก school_info (ไม่ใช่จาก currentTerm) ─────────────────
+const schoolInfo_ = computed(() => schoolStore.settingsObj?.school_info || {})
+const termDisplay = computed(() => {
+  const si = schoolInfo_.value
+  const y = si.year
+  const s = si.semester
+  if (y && s) return `ปีการศึกษา ${y} ภาคเรียนที่ ${s}`
+  // fallback: parse '2568_1' → 'ปีการศึกษา 2568 ภาคเรียนที่ 1'
+  const ct = schoolStore.currentTerm || ''
+  if (ct.includes('_')) {
+    const [yr, sem] = ct.split('_')
+    if (yr && sem) return `ปีการศึกษา ${yr} ภาคเรียนที่ ${sem}`
+  }
+  return ct || '-'
+})
+
 // ─── Date ───────────────────────────────────────────────────────────────
 const selectedDate = ref(new Date().toISOString().split('T')[0])
 
@@ -451,11 +467,10 @@ const thaiDayName = computed(() => {
 })
 
 const holidaySet = computed(() => {
-  const raw = schoolStore.schoolInfo?.holidays
+  // อ่านจาก settings.school_info.holidays ก่อน fallback ไปที่ระดับบนสุด
+  const raw = schoolInfo_.value.holidays || schoolStore.schoolInfo?.holidays
   if (!Array.isArray(raw)) return new Set()
-  const dates = raw
-    .map(item => typeof item === 'string' ? item : item?.date)
-    .filter(Boolean)
+  const dates = raw.map(item => typeof item === 'string' ? item : item?.date).filter(Boolean)
   return new Set(dates)
 })
 
@@ -463,13 +478,19 @@ const isHoliday = computed(() => holidaySet.value.has(selectedDate.value))
 
 const isSchoolDay = computed(() => {
   if (isHoliday.value) return false
-  const schoolDays = schoolStore.schoolInfo?.school_days || ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์']
+  const schoolDays = schoolInfo_.value.school_days
+    || schoolStore.schoolInfo?.school_days
+    || ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์']
   return schoolDays.includes(thaiDayName.value)
 })
 
 // ─── Backdating control ─────────────────────────────────────────────────
-const backdatingEnabled = computed(() => schoolStore.schoolInfo?.backdating_enabled !== false)
-const backdatingDays    = computed(() => schoolStore.schoolInfo?.backdating_days ?? 3)
+const backdatingEnabled = computed(() =>
+  (schoolInfo_.value.backdating_enabled ?? schoolStore.schoolInfo?.backdating_enabled) !== false
+)
+const backdatingDays = computed(() =>
+  schoolInfo_.value.backdating_days ?? schoolStore.schoolInfo?.backdating_days ?? 3
+)
 
 function isDateDisabled(date) {
   const today = new Date(); today.setHours(0,0,0,0)
@@ -502,24 +523,20 @@ const mySlots    = ref([])
 const filledCount   = computed(() => mySlots.value.filter(s => s.is_filled).length)
 const unfilledCount = computed(() => mySlots.value.filter(s => !s.is_filled).length)
 
-// ตรวจสอบว่าตารางสอนได้สนับสนุนชั้นเรียนได้หรือไม่
-const isTimetablePublished = computed(() => {
-  const publishStatus = schoolStore.schoolInfo?.timetable_publish?.status
-  return publishStatus === 'published'
-})
+// ตารางพร้อมใช้ = admin ล็อคแล้ว
+const isTimetableReady = computed(() => schoolStore.isTimetableLocked)
 
 const noSlotMessage = computed(() => {
   if (isHoliday.value) return 'วันนี้เป็นวันหยุด'
   if (!isSchoolDay.value) return 'วันนี้ไม่ใช่วันเรียน'
-  if (!isTimetablePublished.value) return 'ยังไม่พร้อมใช้งาน กรุณารอผู้ดูแลเผยแพร่ตารางสอน'
+  if (!isTimetableReady.value) return 'อยู่ระหว่างจัดตารางสอน — รอให้ Admin ล็อคตารางก่อน'
   return 'ไม่มีคาบสอนในวันนี้'
 })
 
 async function loadData() {
-  if (!isSchoolDay.value || !isTimetablePublished.value) { mySlots.value = []; return }
+  if (!isSchoolDay.value || !isTimetableReady.value) { mySlots.value = []; return }
   loading.value = true
   try {
-    // ถ้าอยู่ในโหมดสอนแทน ใช้ teacher_id ของครูที่เราสอนแทน มิฉะนั้นใช้ของตัวเอง
     const effectiveTeacherId = subTeacherId.value || authStore.profile?.teacher_id || authStore.profile?.uid
     const records = await getTeachActuals(selectedDate.value, effectiveTeacherId)
     mySlots.value = records
@@ -533,8 +550,8 @@ async function loadData() {
 async function generateRecords() {
   generating.value = true
   try {
-    // Use published timetable only (no fallback to live timetable_grid)
-    const timetable = await getPublishedTimetableSlots()
+    // อ่านจาก timetable_slots โดยตรง (ไม่ใช่ published snapshot)
+    const timetable = await getTimetable()
     const count     = await generateTeachActualsForDate(
       selectedDate.value, thaiDayName.value, timetable
     )
@@ -552,16 +569,15 @@ async function generateRecords() {
 }
 
 async function ensureRecordsForSelectedDate() {
-  if (!isTimetablePublished.value || !isSchoolDay.value || generating.value) return
+  if (!isTimetableReady.value || !isSchoolDay.value || generating.value) return
 
   generating.value = true
   try {
     const existing = await getTeachActuals(selectedDate.value)
-    // Force regen ถ้า records มี teacher_plan_id ว่าง (สร้างเมื่อ field mapping ยังผิดอยู่)
     const needsRegen = existing.length === 0 || existing.some(r => !r.teacher_plan_id)
     if (!needsRegen) return
 
-    const timetable = await getPublishedTimetableSlots()
+    const timetable = await getTimetable()
     await generateTeachActualsForDate(selectedDate.value, thaiDayName.value, timetable)
   } catch (e) {
     ElMessage.error('สร้างบันทึกไม่สำเร็จ: ' + e.message)
@@ -579,52 +595,47 @@ async function onDateChange() {
 async function autoGenerateToday() {
   const today = new Date().toISOString().split('T')[0]
   const info  = schoolStore.schoolInfo
+  // อ่านข้อมูลจาก school_info (ไม่ใช่ระดับบนสุด)
+  const si    = schoolInfo_.value
 
-  // 1. ต้องคุณภาค timetable ได้รับอนุมัติแล้ว
-  if (!isTimetablePublished.value) return
+  // 1. ต้องล็อคตารางสอนแล้ว (admin จัดเสร็จแล้ว)
+  if (!isTimetableReady.value) return
 
-  // 2. ต้องมี term_start / term_end ก่อน
-  if (!info?.term_start || !info?.term_end) return
-
-  // 3. วันนี้ต้องอยู่ในช่วงภาคเรียน
-  if (today < info.term_start || today > info.term_end) return
-
-  // 4. ต้องเป็นวันเรียน
-  const dayName   = THAI_DAYS[new Date(today + 'T00:00:00').getDay()]
-  const schoolDays = info.school_days || ['จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์']
+  // 2. ต้องเป็นวันเรียน
+  const dayName    = THAI_DAYS[new Date(today + 'T00:00:00').getDay()]
+  const schoolDays = si.school_days || info?.school_days || ['จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์']
   if (!schoolDays.includes(dayName)) return
 
-  // 4.1 ถ้าเป็นวันหยุดที่ตั้งค่าไว้ ให้ข้าม
-  const holidays = Array.isArray(info.holidays) ? info.holidays : []
-  const holidaySetToday = new Set(
-    holidays.map(item => typeof item === 'string' ? item : item?.date).filter(Boolean)
-  )
-  if (holidaySetToday.has(today)) return
+  // 3. ตรวจวันหยุด
+  const holidays = Array.isArray(si.holidays) ? si.holidays : (Array.isArray(info?.holidays) ? info.holidays : [])
+  const holidayDates = new Set(holidays.map(h => typeof h === 'string' ? h : h?.date).filter(Boolean))
+  if (holidayDates.has(today)) return
 
-  // 5. ถ้า generate วันนี้ไปแล้ว → ข้าม
-  if (info.last_generated_date === today) return
+  // 4. ช่วงภาคเรียน (ถ้ากำหนดไว้)
+  const termStart = si.term_start || info?.term_start || ''
+  const termEnd   = si.term_end   || info?.term_end   || ''
+  if (termStart && termEnd && (today < termStart || today > termEnd)) return
 
-  // 6. Generate ทุก slot จาก published timetable แบบ publish-only (silent — ไม่แสดง toast)
+  // 5. generate วันนี้ไปแล้ว → ข้าม
+  const lastGen = schoolStore.settingsObj?.last_generated_date || info?.last_generated_date
+  if (lastGen === today) return
+
+  // 6. Generate จาก timetable_slots โดยตรง (silent)
   try {
-    const timetable = await getPublishedTimetableSlots()
+    const timetable = await getTimetable()
     const count     = await generateTeachActualsForDate(today, dayName, timetable)
 
     if (count > 0) {
-      // บันทึก last_generated_date เพื่อไม่ให้ generate ซ้ำ
       const schoolId = authStore.schoolId
       if (schoolId) {
         const { data: schoolRow } = await supabase
-          .from('schools')
-          .select('settings')
-          .eq('id', schoolId)
-          .maybeSingle()
+          .from('schools').select('settings').eq('id', schoolId).maybeSingle()
         const merged = { ...(schoolRow?.settings || {}), last_generated_date: today }
         await supabase.from('schools').update({ settings: merged }).eq('id', schoolId)
       }
       schoolStore.setSchool({ ...info, last_generated_date: today })
     }
   } catch (e) {
-    // Silent fail — ไม่รบกวนผู้ใช้
     console.warn('[AutoGenerate]', e.message)
   }
 }
@@ -634,9 +645,11 @@ onMounted(async () => {
   await ensureRecordsForSelectedDate()
   await loadData()
 })
-watch(() => schoolStore.currentTerm, async () => {
-  await ensureRecordsForSelectedDate()
-  await loadData()
+watch(() => schoolStore.isTimetableLocked, async (locked) => {
+  if (locked) {
+    await ensureRecordsForSelectedDate()
+    await loadData()
+  }
 })
 
 // ─── Dialog ────────────────────────────────────────────────────────────
@@ -669,67 +682,60 @@ const dialogTitle = computed(() => {
 const presentCount = computed(() => Object.values(attendance.value).filter(v => v).length)
 const absentCount  = computed(() => Object.values(attendance.value).filter(v => !v).length)
 
-async function openDialog(slot) {
-  // Navigate to full-page detail view
-  const id = slot.teach_actual_id || slot.id
-  if (id) {
-    router.push(`/teacher/teach-actual/${id}`)
-    return
+function slotQuery(s) {
+  return {
+    sn:  s.subject_name     || '',
+    si:  s.subject_plan_id  || '',
+    tpi: s.teacher_plan_id  || '',
+    tpn: s.teacher_plan_name || '',
   }
-  // Fallback: generate first then navigate
-  await generateRecords()
-  await loadData()
-  const fresh = mySlots.value.find(s => s.period === slot.period && s.class_id === slot.class_id)
-  if (fresh?.teach_actual_id || fresh?.id) {
-    router.push(`/teacher/teach-actual/${fresh.teach_actual_id || fresh.id}`)
-  }
-  return
-
-  // Legacy dialog code below (unreachable, kept for reference)
-  activeSlot.value = slot
-  step.value       = 0
-
-  // Pre-fill form from existing data
-  form.value = {
-    topic:               slot.topic || '',
-    subject_actual_id:   slot.subject_actual_id || slot.subject_plan_id || '',
-    activity_type:       slot.activity_type || 'บรรยาย',
-    teacher_actual_name: slot.teacher_actual_name || slot.teacher_plan_name || '',
-    note:                slot.note || '',
-    behavior_note:       slot.behavior_note || '',
-    issues:              slot.issues || '',
-    img1:                slot.img1 || '',
-    img2:                slot.img2 || '',
-  }
-
-  // Pre-fill attendance
-  const existingInclass = slot.inclass || []
-  attendance.value = {}
-  students.value   = []
-
-  dialogVisible.value = true
-
-  // Load students for the class (lazy)
-  loadStudentsForClass(slot.class_id, existingInclass)
 }
 
-async function loadStudentsForClass(classId, existingInclass) {
-  loadingStudents.value = true
+async function openDialog(slot) {
+  const id = slot.teach_actual_id || slot.id
+  if (id) {
+    router.push({ path: `/teacher/teach-actual/${id}`, query: slotQuery(slot) })
+    return
+  }
+  // Slot has no DB record yet — upsert to get/create ID, then navigate
+  generating.value = true
   try {
-    const studs = await getStudents(classId)
-    students.value = studs
-    // Initialize attendance map
-    const map = {}
-    studs.forEach(s => {
-      map[s.student_id] = existingInclass.length > 0
-        ? existingInclass.includes(s.student_id)
-        : true  // ค่า default = มาเรียน
-    })
-    attendance.value = map
+    const termId    = schoolStore.currentTerm || '2568_1'
+    const schoolId  = authStore.schoolId
+    const periodNum = Number(slot.period ?? slot.period_number)
+    const classId   = slot.class_id
+    const teacherId = slot.teacher_plan_id || slot.teacher_id || authStore.profile?.teacher_id || null
+
+    // merge-upsert (not ignoreDuplicates) returns the record ID for both new and existing rows.
+    // Setting planned_teacher_id ensures the teacher passes RLS SELECT on the record.
+    const { data: record, error: upsertErr } = await supabase
+      .from('teach_actuals')
+      .upsert([{
+        school_id:          schoolId,
+        term_id:            termId,
+        class_id:           classId,
+        date:               selectedDate.value,
+        period_number:      periodNum,
+        slot_type:          slot.slot_type || 'normal',
+        planned_teacher_id: teacherId,
+        is_filled:          false,
+      }], { onConflict: 'school_id,term_id,class_id,date,period_number' })
+      .select('id')
+      .single()
+
+    if (upsertErr) throw upsertErr
+
+    await loadData()
+
+    if (record?.id) {
+      router.push({ path: `/teacher/teach-actual/${record.id}`, query: slotQuery(slot) })
+    } else {
+      ElMessage.warning(`ไม่สามารถเปิดบันทึกได้: คาบ ${periodNum} ห้อง "${classId}"`)
+    }
   } catch (e) {
-    console.error('Load students error:', e)
+    ElMessage.error('เปิดบันทึกไม่สำเร็จ: ' + e.message)
   } finally {
-    loadingStudents.value = false
+    generating.value = false
   }
 }
 

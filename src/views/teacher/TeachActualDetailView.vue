@@ -7,6 +7,7 @@
         <el-button plain size="small" class="tad-back-btn" @click="$router.back()">← กลับ</el-button>
         <div class="tad-topbar-title">
           📝 คาบ {{ ta?.period }} · {{ ta?.class_name || ta?.class_id }} · {{ formatDate(ta?.date) }}
+          <el-tag v-if="ta?.is_filled" type="success" size="small" style="margin-left:8px;vertical-align:middle">✓ บันทึกแล้ว</el-tag>
         </div>
         <el-button type="success" size="small" :loading="saving" class="tad-save-btn" @click="saveAll">
           💾 บันทึก
@@ -392,7 +393,7 @@ const route       = useRoute()
 const router      = useRouter()
 const authStore   = useAuthStore()
 const schoolStore = useSchoolStore()
-const { getStudents, getBehaviorSettings, getAttendanceStatuses, getSubjects, getPublishedTimetableSlots } = useSchoolDb()
+const { getStudents, getBehaviorSettings, getAttendanceStatuses, getSubjects } = useSchoolDb()
 
 const term = () => schoolStore.currentTerm || '2568_1'
 const taId = computed(() => route.params.id)
@@ -501,6 +502,24 @@ function fixPhotoUrl(url) {
   return url
 }
 
+// re-compress an existing data URL to smaller size (for storing in DB when no cloud storage)
+function compressDataUrlForDB(dataUrl, maxW = 800, maxH = 800, quality = 0.72) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      let w = img.width, h = img.height
+      if (w > maxW) { h = Math.round(h * maxW / w); w = maxW }
+      if (h > maxH) { w = Math.round(w * maxH / h); h = maxH }
+      const canvas = document.createElement('canvas')
+      canvas.width = w; canvas.height = h
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+      resolve(canvas.toDataURL('image/jpeg', quality))
+    }
+    img.onerror = () => resolve(dataUrl)
+    img.src = dataUrl
+  })
+}
+
 function compressToBase64(file, maxW = 1200, maxH = 1200, quality = 0.82) {
   return new Promise((resolve, reject) => {
     const img = new Image()
@@ -529,11 +548,12 @@ async function loadGasSettings() {
     .eq('id', schoolId)
     .single()
   if (error || !data) throw new Error('ไม่พบการตั้งค่า GAS')
-  const info = data.settings?.school_info || {}
-  const gasUrl   = (info.gas_upload_web_app_url || info.gas_web_app_url || '').trim()
-  const folderId = (info.gdrive_folder_id || '').trim()
-  if (!gasUrl)   throw new Error('กรุณาตั้งค่า GAS Upload Web App URL ในหน้าตั้งค่า')
-  if (!folderId) throw new Error('กรุณาตั้งค่า Google Drive Folder ID ในหน้าตั้งค่า')
+  // settings บันทึกไว้ที่ settings.teaching_log_settings (จาก TeachingLogSettingsView)
+  const tl = data.settings?.teaching_log_settings || {}
+  const gasUrl   = (tl.gas_upload_web_app_url || tl.gas_web_app_url || '').trim()
+  const folderId = (tl.gdrive_folder_id || '').trim()
+  if (!gasUrl)   throw new Error('กรุณาตั้งค่า GAS Upload Web App URL ในหน้าตั้งค่าบันทึกเข้าสอน')
+  if (!folderId) throw new Error('กรุณาตั้งค่า Google Drive Folder ID ในหน้าตั้งค่าบันทึกเข้าสอน')
   return { gasUrl, folderId }
 }
 
@@ -707,16 +727,17 @@ async function loadPage() {
       router.back()
       return
     }
-    // Normalise field names from Supabase schema to local usage
+    // Seed from route query (passed by TeachingLogView) so subject shows immediately
+    const q = route.query
     ta.value = {
       ...taData,
       id: taData.id,
       period: taData.period_number,
       class_name: taData.class_id,
-      subject_plan_id: taData.subject_id,
-      subject_name: taData.subject_id,
-      teacher_plan_id: taData.planned_teacher_id,
-      teacher_plan_name: taData.planned_teacher_id,
+      subject_plan_id: taData.subject_id  || q.si  || '',
+      subject_name:    taData.subject_id  || q.sn  || '',
+      teacher_plan_id:  taData.planned_teacher_id || q.tpi || '',
+      teacher_plan_name: taData.planned_teacher_id || q.tpn || '',
       slot_type: taData.slot_type || 'normal',
       // images array → img1/img2/img3
       img1: Array.isArray(taData.images) ? (taData.images[0] || '') : '',
@@ -744,13 +765,46 @@ async function loadPage() {
     const loadedStatuses = await getAttendanceStatuses()
     attendanceStatuses.value = loadedStatuses.length ? loadedStatuses : DEFAULT_STATUSES
 
-    const [allBeh, subjects, slots] = await Promise.all([
-      getBehaviorSettings(), getSubjects(), getPublishedTimetableSlots()
+    const t = schoolStore.currentTerm || '2568_1'
+    const [allBeh, subjects, slotRes] = await Promise.all([
+      getBehaviorSettings(),
+      getSubjects(),
+      supabase.from('timetable_slots')
+        .select('*')
+        .eq('school_id', authStore.schoolId)
+        .eq('term_id', t)
+        .eq('class_id', d.class_id)
+        .neq('slot_type', 'activity'),
     ])
     learningBeh.value   = allBeh.filter(b => b.behavior_type === 'learning' && b.is_active !== false)
     attendanceBeh.value = allBeh.filter(b => b.behavior_type === 'attendance' && b.is_active !== false)
     allSubjects.value   = subjects
-    classSlots.value    = slots.filter(s => s.class_id === d.class_id)
+    classSlots.value    = (slotRes.data || []).map(s => ({
+      ...s,
+      subject_code: s.subject_id || '',
+      teacher_id:   s.teacher_id || '',
+      teacher_name: s.teacher_name || s.teacher_id || '',
+    }))
+
+    // Enrich ta with subject/teacher info from timetable_slots
+    // (teach_actuals stores null for these because DB columns were UUID type)
+    if (!ta.value.subject_plan_id || !ta.value.teacher_plan_id) {
+      const DAYS_ARR = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์']
+      const DAY_TO_NUM = { จันทร์:1, อังคาร:2, พุธ:3, พฤหัสบดี:4, ศุกร์:5, เสาร์:6, อาทิตย์:7 }
+      const dayNum = DAY_TO_NUM[DAYS_ARR[new Date(taData.date + 'T00:00:00').getDay()]]
+      const planSlot = classSlots.value.find(s =>
+        s.period_number === taData.period_number && s.day_of_week === dayNum
+      ) || classSlots.value.find(s => s.period_number === taData.period_number)
+      if (planSlot) {
+        ta.value = {
+          ...ta.value,
+          subject_plan_id:   planSlot.subject_id   || ta.value.subject_plan_id   || '',
+          subject_name:      planSlot.subject_name || planSlot.subject_id         || ta.value.subject_name || '',
+          teacher_plan_id:   planSlot.teacher_id   || ta.value.teacher_plan_id   || '',
+          teacher_plan_name: planSlot.teacher_name || planSlot.teacher_id         || ta.value.teacher_plan_name || '',
+        }
+      }
+    }
 
     loadingStudents.value = true
     const studs = await getStudents(d.class_id)
@@ -826,26 +880,33 @@ async function saveAll() {
     if (photoBase64s.value.some(b => b)) {
       uploadingPhotos.value = true
       try {
-        const gasSettings = await loadGasSettings()
+        let gasSettings = null
+        try { gasSettings = await loadGasSettings() } catch { /* GAS not configured — fallback to base64 */ }
         for (let i = 0; i < 3; i++) {
           if (!photoBase64s.value[i]) continue
-          try {
-            const fileName = `teaching_${String(taId.value)}_photo${i + 1}`
-            photoUrls.value[i] = await uploadPhotoViaGAS(fileName, photoBase64s.value[i], gasSettings.folderId, gasSettings.gasUrl)
+          if (gasSettings) {
+            try {
+              const fileName = `teaching_${String(taId.value)}_photo${i + 1}`
+              photoUrls.value[i] = await uploadPhotoViaGAS(fileName, photoBase64s.value[i], gasSettings.folderId, gasSettings.gasUrl)
+              photoBase64s.value[i] = ''
+            } catch (err) {
+              ElMessage.warning(`อัพโหลดภาพที่ ${i + 1} ไม่สำเร็จ: ${err.message}`)
+              // fallback: store compressed base64 in DB
+              photoUrls.value[i] = await compressDataUrlForDB(photoBase64s.value[i])
+              photoBase64s.value[i] = ''
+            }
+          } else {
+            // ไม่มี GAS — บีบอัดและเก็บ base64 ใน DB โดยตรง
+            photoUrls.value[i] = await compressDataUrlForDB(photoBase64s.value[i])
             photoBase64s.value[i] = ''
-          } catch (err) {
-            ElMessage.warning(`อัพโหลดภาพที่ ${i + 1} ไม่สำเร็จ: ${err.message}`)
           }
         }
-      } catch (err) {
-        ElMessage.warning('ไม่สามารถอัพโหลดภาพ: ' + err.message)
       } finally {
         uploadingPhotos.value = false
       }
     }
 
     // 2. เตรียม plain data ทั้งหมด — toRaw() เพื่อลบ Vue Proxy ออก
-    const uid         = String(authStore.profile?.uid || '')
     const t           = String(term())
     const taIdStr     = String(taId.value)
     const taRaw       = toRaw(ta.value) || {}
@@ -862,12 +923,14 @@ async function saveAll() {
     const studentRecordsPayload = buildStudentRecordsPayload()
 
     // 3. คำนวณ delta สำหรับ behavior scores
-    const needsUpdate = []
-    const deltaMap    = {}
+    // sid = student_code (key ใน UI), dbId = UUID (key ใน DB)
+    const needsUpdate = []   // เก็บ UUID สำหรับ query students
+    const deltaMap    = {}   // keyed by sid (student_code)
 
     for (const stu of rawStudents) {
-      const sid        = String(stu.student_id)
-      const rec        = studentRecordsPayload[sid]
+      const sid   = String(stu.student_id)   // student_code เช่น "12334" — ใช้เป็น key ใน UI
+      const dbId  = String(stu.id || '')     // UUID — ใช้ filter ใน DB
+      const rec   = studentRecordsPayload[sid]
       const attPoints  = rec.attendance_points
       const lrnPoints  = rec.learning_points
       const newTotal   = rec.total_deduction
@@ -875,138 +938,151 @@ async function saveAll() {
       const deltaAtt   = attPoints - Number(prevRaw.attendance || 0)
       const deltaLrn   = lrnPoints - Number(prevRaw.learning  || 0)
       const deltaTotal = newTotal  - Number(prevRaw.total     || 0)
-      deltaMap[sid] = { attPoints, lrnPoints, newTotal, deltaAtt, deltaLrn, deltaTotal }
-      if (deltaAtt !== 0 || deltaLrn !== 0 || deltaTotal !== 0) needsUpdate.push(sid)
+      deltaMap[sid] = { dbId, attPoints, lrnPoints, newTotal, deltaAtt, deltaLrn, deltaTotal }
+      if ((deltaAtt !== 0 || deltaLrn !== 0 || deltaTotal !== 0) && dbId) needsUpdate.push(dbId)
     }
 
-    // 4. อ่านคะแนนปัจจุบันจาก students table สำหรับคนที่มี delta
-    const summaryMap = {}
-    if (needsUpdate.length) {
-      const { data: stuRows } = await supabase
-        .from('students')
-        .select('id, student_code, total_behavior_score, attendance_behavior_score, learning_behavior_score')
-        .in('id', needsUpdate)
-      ;(stuRows || []).forEach(row => {
-        summaryMap[row.id] = {
-          total_score:      row.total_behavior_score      ?? 100,
-          attendance_score: row.attendance_behavior_score ?? 100,
-          learning_score:   row.learning_behavior_score   ?? 100,
-        }
-      })
-    }
-
-    // 5. บันทึก behavior_logs + อัปเดต students scores
-    for (const stu of rawStudents) {
-      const sid = String(stu.student_id)
-      const rec = studentRecordsPayload[sid]
-      const { attPoints, lrnPoints, deltaAtt, deltaLrn, deltaTotal } = deltaMap[sid]
-
-      if (deltaAtt !== 0 || deltaLrn !== 0 || deltaTotal !== 0) {
-        const sumData = summaryMap[sid] || { total_score: 100, attendance_score: 100, learning_score: 100 }
-        const newTotalScore = Number((sumData.total_score      ?? 100) + deltaTotal)
-        const newAttScore   = Number((sumData.attendance_score ?? 100) + deltaAtt)
-        const newLrnScore   = Number((sumData.learning_score   ?? 100) + deltaLrn)
-
-        // อัปเดตคะแนนบน students row
-        await supabase
+    // 4-5. บันทึก behavior_logs + อัปเดต students scores
+    let behaviorErr = null
+    try {
+      // โหลดคะแนนปัจจุบันของนักเรียนทุกคน (ใช้ UUID)
+      const allDbIds = rawStudents.map(s => String(s.id || '')).filter(Boolean)
+      const summaryMap = {}
+      if (allDbIds.length) {
+        const { data: stuRows, error: selErr } = await supabase
           .from('students')
-          .update({
-            total_behavior_score:      newTotalScore,
-            attendance_behavior_score: newAttScore,
-            learning_behavior_score:   newLrnScore,
-          })
-          .eq('id', sid)
+          .select('id, total_behavior_score, attendance_behavior_score, learning_behavior_score')
+          .in('id', allDbIds)
+        if (selErr) throw selErr
+        ;(stuRows || []).forEach(row => {
+          summaryMap[String(row.id)] = {
+            total_score:      row.total_behavior_score      ?? 0,
+            attendance_score: row.attendance_behavior_score ?? 0,
+            learning_score:   row.learning_behavior_score   ?? 0,
+          }
+        })
+      }
 
-        if (deltaAtt !== 0) {
-          await supabase.from('behavior_logs').upsert([{
-            id:            `ta_${taIdStr}_${sid}_attendance`,
-            term_id:       t,
-            student_id:    sid,
-            class_id:      String(stu.class_id || taRaw.class_id || ''),
-            school_id:     schoolId,
-            behavior_type: 'attendance',
-            recorded_by:   uid,
-            points_change: Number(attPoints),
-            score_after:   newAttScore,
-            note:          String(rec.note || ''),
-            created_at:    new Date().toISOString(),
-          }], { onConflict: 'id' })
-        }
+      // อัปเดต students scores (delta-based — เฉพาะที่เปลี่ยนแปลง)
+      for (const stu of rawStudents) {
+        const sid  = String(stu.student_id)
+        const { dbId, attPoints, lrnPoints, newTotal, deltaAtt, deltaLrn, deltaTotal } = deltaMap[sid]
 
-        if (deltaLrn !== 0) {
-          await supabase.from('behavior_logs').upsert([{
-            id:            `ta_${taIdStr}_${sid}_learning`,
-            term_id:       t,
-            student_id:    sid,
-            class_id:      String(stu.class_id || taRaw.class_id || ''),
-            school_id:     schoolId,
-            behavior_type: 'learning',
-            recorded_by:   uid,
-            points_change: Number(lrnPoints),
-            score_after:   newLrnScore,
-            note:          String(rec.note || ''),
-            created_at:    new Date().toISOString(),
-          }], { onConflict: 'id' })
+        if (deltaAtt !== 0 || deltaLrn !== 0 || deltaTotal !== 0) {
+          const sumData = summaryMap[dbId] || { total_score: 0, attendance_score: 0, learning_score: 0 }
+          const newTotalScore = Number((sumData.total_score      ?? 0) + deltaTotal)
+          const newAttScore   = Number((sumData.attendance_score ?? 0) + deltaAtt)
+          const newLrnScore   = Number((sumData.learning_score   ?? 0) + deltaLrn)
+
+          const { error: stuErr } = await supabase
+            .from('students')
+            .update({
+              total_behavior_score:      newTotalScore,
+              attendance_behavior_score: newAttScore,
+              learning_behavior_score:   newLrnScore,
+            })
+            .eq('id', dbId)
+          if (stuErr) throw stuErr
+
+          prevScoreBreakdown.value[sid] = { attendance: attPoints, learning: lrnPoints, total: newTotal }
+          summaryMap[dbId] = { total_score: newTotalScore, attendance_score: newAttScore, learning_score: newLrnScore }
         }
       }
-    }
 
-    const inclassIds = rawStudents
-      .filter(s => ['มาเรียน', 'มาสาย'].includes(studentRecordsPayload[String(s.student_id)]?.status))
-      .map(s => String(s.student_id))
+      // ลบ behavior_logs เก่าของคาบนี้ แล้ว insert ใหม่
+      await supabase.from('behavior_logs').delete().eq('source_id', taIdStr)
 
-    // หาครูเจ้าของวิชาที่สอนจริง — ใช้ classSlots ที่โหลดไว้แล้ว
-    const actualSubjectCode = String(form.value.subject_actual_id || '')
-    let subjectActualTeacherId = ''
-    if (actualSubjectCode && actualSubjectCode !== String(taRaw.subject_id || taRaw.subject_plan_id || '')) {
-      const matchSlot = classSlots.value.find(s => slotSubjectCode(s) === actualSubjectCode)
-      subjectActualTeacherId = String(slotTeacherId(matchSlot) || '')
+      const logRows = []
+      const now = new Date().toISOString()
+      for (const stu of rawStudents) {
+        const sid  = String(stu.student_id)
+        const dbId = String(stu.id || '')
+        const rec  = studentRecordsPayload[sid]
+        if (!dbId) continue
+
+        const attPoints = rec.attendance_points
+        const lrnPoints = rec.learning_points
+        const sumData = summaryMap[dbId] || { attendance_score: 100, learning_score: 100 }
+
+        if (attPoints !== 0) {
+          logRows.push({
+            source_id:     taIdStr,
+            source_type:   'teach_actual',
+            term_id:       t,
+            student_id:    sid,
+            school_id:     schoolId,
+            behavior_type: 'attendance',
+            points_change: attPoints,
+            score_after:   sumData.attendance_score,
+            note:          String(rec.note || ''),
+            created_at:    now,
+          })
+        }
+        if (lrnPoints !== 0) {
+          logRows.push({
+            source_id:     taIdStr,
+            source_type:   'teach_actual',
+            term_id:       t,
+            student_id:    sid,
+            school_id:     schoolId,
+            behavior_type: 'learning',
+            points_change: lrnPoints,
+            score_after:   sumData.learning_score,
+            note:          String(rec.note || ''),
+            created_at:    now,
+          })
+        }
+      }
+
+      if (logRows.length) {
+        const { error: insertErr } = await supabase.from('behavior_logs').insert(logRows)
+        if (insertErr) throw insertErr
+      }
+    } catch (e) {
+      behaviorErr = e
     }
 
     // 6. บันทึก teach_actual
-    const { error: saveErr } = await supabase
-      .from('teach_actuals')
-      .update({
-        topic:             String(form.value.topic || ''),
-        actual_teacher_id: subjectActualTeacherId || uid,
-        activity_type:     String(form.value.activity_type || 'บรรยาย'),
-        note:              String(form.value.note || ''),
-        images:            [img1, img2, img3].filter(Boolean),
-        student_records:   studentRecordsPayload,
-        inclass:           inclassIds,
-        is_filled:         true,
-        updated_at:        new Date().toISOString(),
-      })
-      .eq('id', taIdStr)
+    const taUpdate = {
+      topic:           String(form.value.topic || ''),
+      activity_type:   String(form.value.activity_type || 'บรรยาย'),
+      note:            String(form.value.note || ''),
+      images:          [img1, img2, img3].filter(Boolean),
+      student_records: studentRecordsPayload,
+      is_filled:       true,
+      updated_at:      new Date().toISOString(),
+    }
+    let { error: saveErr } = await supabase.from('teach_actuals').update(taUpdate).eq('id', taIdStr)
+    if (saveErr?.message?.match(/column|schema/i)) {
+      // column ยังไม่มี — รัน migration: ADD COLUMN note/student_records แล้วจะบันทึกครบ
+      const { topic, activity_type, images, is_filled, updated_at } = taUpdate
+      ;({ error: saveErr } = await supabase.from('teach_actuals').update({ topic, activity_type, images, is_filled, updated_at }).eq('id', taIdStr))
+    }
     if (saveErr) throw saveErr
-
-    // อัพเดท prevScore snapshot
-    rawStudents.forEach(s => {
-      const sid = String(s.student_id)
-      prevScoreBreakdown.value[sid] = {
-        attendance: deltaMap[sid].attPoints,
-        learning:   deltaMap[sid].lrnPoints,
-        total:      deltaMap[sid].newTotal,
-      }
-    })
 
     const now = new Date()
     savedAt.value = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`
-    ElMessage.success('✅ บันทึกเรียบร้อยแล้ว')
-
-    // เก็บ payload สำหรับคาบคู่
-    lastSavedPayload.value = {
-      topic: String(form.value.topic || ''),
-      subject_actual_id: String(form.value.subject_actual_id || ''),
-      activity_type: String(form.value.activity_type || 'บรรยาย'),
-      note: String(form.value.note || ''),
-      img1, img2, img3,
-      student_records: studentRecordsPayload,
-      inclass: inclassIds,
+    if (behaviorErr) {
+      ElMessage.warning('⚠️ บันทึกข้อมูลการสอนแล้ว แต่ยังบันทึกคะแนนไม่ได้ — กรุณาเพิ่ม column ใน DB ก่อน')
+    } else {
+      ElMessage.success('✅ บันทึกเรียบร้อยแล้ว')
     }
 
-    // ตรวจสอบคาบคู่
+    lastSavedPayload.value = {
+      topic:           String(form.value.topic || ''),
+      activity_type:   String(form.value.activity_type || 'บรรยาย'),
+      note:            String(form.value.note || ''),
+      student_records: studentRecordsPayload,
+      img1, img2, img3,
+    }
+
+    // ตรวจสอบคาบคู่ ถ้ามีคาบคู่จะแสดง dialog ก่อนกลับ
     await checkDoublePeriod(taRaw, t)
+
+    // กลับหน้าเลือกคาบ (ถ้าไม่มี dialog คาบคู่)
+    if (!doublePeriodDialog.value) {
+      setTimeout(() => router.back(), 800)
+    }
 
   } catch (e) {
     ElMessage.error('บันทึกไม่สำเร็จ: ' + e.message)
@@ -1019,10 +1095,12 @@ async function saveAll() {
 async function checkDoublePeriod(taRaw, t) {
   try {
     const classId = String(taRaw.class_id || '')
-    const subject = String(taRaw.subject_id || taRaw.subject_plan_id || '')
     const date    = String(taRaw.date || '')
     const period  = Number(taRaw.period_number ?? taRaw.period)
     if (!classId || !date) return
+
+    // ใช้ subject_plan_id ที่ enrich จาก timetable_slots (ta.value) แทน subject_id ที่เป็น null ใน DB
+    const mySubject = String(ta.value?.subject_plan_id || ta.value?.subject_id || '')
 
     const { data } = await supabase
       .from('teach_actuals')
@@ -1032,12 +1110,17 @@ async function checkDoublePeriod(taRaw, t) {
       .eq('date', date)
       .eq('school_id', authStore.schoolId)
 
-    const adjacent = (data || []).find(r =>
-      r.id !== String(taId.value) &&
-      Math.abs(Number(r.period_number) - period) === 1 &&
-      String(r.subject_id || '') === subject &&
-      !r.is_filled
-    )
+    // หาคาบที่อยู่ติดกัน: prefer period+1 (ถัดไป) ก่อน period-1 (ก่อนหน้า)
+    const isValidAdjacent = r => {
+      if (r.id === String(taId.value)) return false
+      if (Math.abs(Number(r.period_number) - period) !== 1) return false
+      if (r.is_filled) return false
+      const rSubject = String(r.subject_id || '')
+      if (mySubject && rSubject && mySubject !== rSubject) return false
+      return true
+    }
+    const adjacent = (data || []).find(r => Number(r.period_number) === period + 1 && isValidAdjacent(r))
+                  || (data || []).find(r => Number(r.period_number) === period - 1 && isValidAdjacent(r))
 
     if (adjacent) {
       doublePeriodTarget.value = { ...adjacent, period: adjacent.period_number }
@@ -1053,23 +1136,25 @@ async function saveDoublePeriod() {
     const targetId = String(doublePeriodTarget.value.id)
     const payload  = lastSavedPayload.value
 
-    const { error } = await supabase
-      .from('teach_actuals')
-      .update({
-        topic:             payload.topic,
-        activity_type:     payload.activity_type,
-        note:              payload.note || '',
-        images:            [payload.img1, payload.img2, payload.img3].filter(Boolean),
-        student_records:   payload.student_records,
-        inclass:           payload.inclass,
-        is_filled:         true,
-        updated_at:        new Date().toISOString(),
-      })
-      .eq('id', targetId)
-    if (error) throw error
+    const dblUpdate = {
+      topic:           payload.topic,
+      activity_type:   payload.activity_type,
+      note:            payload.note || '',
+      images:          [payload.img1, payload.img2, payload.img3].filter(Boolean),
+      student_records: payload.student_records || {},
+      is_filled:       true,
+      updated_at:      new Date().toISOString(),
+    }
+    let { error: dblErr } = await supabase.from('teach_actuals').update(dblUpdate).eq('id', targetId)
+    if (dblErr?.message?.match(/column|schema/i)) {
+      const { topic, activity_type, images, is_filled, updated_at } = dblUpdate
+      ;({ error: dblErr } = await supabase.from('teach_actuals').update({ topic, activity_type, images, is_filled, updated_at }).eq('id', targetId))
+    }
+    if (dblErr) throw dblErr
 
     ElMessage.success(`✅ บันทึกคาบ ${doublePeriodTarget.value.period} เรียบร้อยแล้ว`)
     doublePeriodDialog.value = false
+    setTimeout(() => router.back(), 800)
   } catch (e) {
     ElMessage.error('บันทึกคาบคู่ไม่สำเร็จ: ' + e.message)
   } finally {
