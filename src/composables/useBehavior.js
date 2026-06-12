@@ -26,10 +26,20 @@ export function useBehavior() {
     return `${y}-${m}-${day}`
   }
 
-  function recorderName() {
+  async function recorderName() {
     const p = authStore.profile
     if (!p) return ''
-    return p.displayName || [p.prefix, p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || ''
+    const teacherCode = p.teacher_id || p.teacherId
+    if (teacherCode) {
+      const { data } = await supabase
+        .from('teachers')
+        .select('prefix, first_name, last_name')
+        .eq('school_id', schoolId())
+        .eq('teacher_code', teacherCode)
+        .maybeSingle()
+      if (data) return [data.prefix, data.first_name, data.last_name].filter(Boolean).join(' ')
+    }
+    return p.displayName || p.email || ''
   }
 
   /**
@@ -74,7 +84,7 @@ export function useBehavior() {
       student_id:                   student.student_id,
       class_id:                     student.class_id,
       recorded_by:                  recordedById,
-      recorded_by_name_snapshot:    recorderName(),
+      recorded_by_name_snapshot:    await recorderName(),
       source_type:                  source,
       source_id:                    refTeachingLogId || null,
       behavior_type:                behaviorType,
@@ -152,7 +162,7 @@ export function useBehavior() {
         student_id:                   studentId,
         class_id:                     student.class_id,
         recorded_by:                  recordedById,
-        recorded_by_name_snapshot:    recorderName(),
+        recorded_by_name_snapshot:    await recorderName(),
         source_type:                  'auto_attendance',
         source_id:                    teachingLogId,
         behavior_type:                'attendance',

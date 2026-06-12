@@ -422,6 +422,7 @@ const students       = ref([])
 const attendanceStatuses = ref([])
 const learningBeh    = ref([])
 const attendanceBeh  = ref([])
+const currentTeacherName = ref('')
 
 const form = ref({
   topic: '', subject_actual_id: '', activity_type: 'บรรยาย', note: '',
@@ -765,6 +766,19 @@ async function loadPage() {
     const loadedStatuses = await getAttendanceStatuses()
     attendanceStatuses.value = loadedStatuses.length ? loadedStatuses : DEFAULT_STATUSES
 
+    // ดึงชื่อครูจากตาราง teachers
+    const teacherCode = authStore.profile?.teacher_id || authStore.profile?.teacherId
+    if (teacherCode) {
+      const { data: tRow } = await supabase
+        .from('teachers')
+        .select('prefix, first_name, last_name')
+        .eq('school_id', authStore.schoolId)
+        .eq('teacher_code', teacherCode)
+        .maybeSingle()
+      if (tRow) currentTeacherName.value = [tRow.prefix, tRow.first_name, tRow.last_name].filter(Boolean).join(' ')
+    }
+    if (!currentTeacherName.value) currentTeacherName.value = authStore.profile?.displayName || authStore.profile?.email || ''
+
     const t = schoolStore.currentTerm || '2568_1'
     const [allBeh, subjects, slotRes] = await Promise.all([
       getBehaviorSettings(),
@@ -998,7 +1012,7 @@ async function saveAll() {
 
       // ชื่อครูผู้ทำรายการ
       const p = authStore.profile
-      const recorderNameStr = p?.displayName || [p?.prefix, p?.first_name, p?.last_name].filter(Boolean).join(' ') || p?.email || ''
+      const recorderNameStr = currentTeacherName.value || p?.email || ''
 
       for (const stu of rawStudents) {
         const sid  = String(stu.student_id)
