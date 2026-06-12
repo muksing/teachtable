@@ -322,18 +322,39 @@ async function loadReport() {
   loading.value = true
   expandedStudentId.value = null
   try {
-    const students = await getStudents(filterClassId.value || null)
-    reportRows.value = students.map((s) => ({
-      ...s,
-      summary: {
-        carry_over_score: s.behavior_carry_over       ?? 0,
-        total_score:      s.total_behavior_score      ?? 0,
-        general_score:    s.general_behavior_score    ?? 0,
-        attendance_score: s.attendance_behavior_score ?? 0,
-        learning_score:   s.learning_behavior_score   ?? 0,
-        inclass_score:    (s.attendance_behavior_score ?? 0) + (s.learning_behavior_score ?? 0),
+    const [students, allLogs] = await Promise.all([
+      getStudents(filterClassId.value || null),
+      getBehaviorLogs(filterClassId.value ? { classId: filterClassId.value } : {}),
+    ])
+
+    // Compute scores from actual log entries
+    const logSums = {}
+    for (const log of allLogs) {
+      const sid = log.student_id
+      if (!logSums[sid]) logSums[sid] = { general: 0, attendance: 0, learning: 0 }
+      if (log.behavior_type === 'general')    logSums[sid].general    += (log.points_change || 0)
+      else if (log.behavior_type === 'attendance') logSums[sid].attendance += (log.points_change || 0)
+      else if (log.behavior_type === 'learning')   logSums[sid].learning   += (log.points_change || 0)
+    }
+
+    reportRows.value = students.map((s) => {
+      const sums        = logSums[s.student_id] || { general: 0, attendance: 0, learning: 0 }
+      const carryOver   = s.behavior_carry_over ?? 0
+      const general     = sums.general
+      const attendance  = sums.attendance
+      const learning    = sums.learning
+      return {
+        ...s,
+        summary: {
+          carry_over_score: carryOver,
+          general_score:    general,
+          attendance_score: attendance,
+          learning_score:   learning,
+          total_score:      carryOver + general + attendance + learning,
+          inclass_score:    attendance + learning,
+        }
       }
-    }))
+    })
   } catch (e) {
     ElMessage.error('โหลดรายงานไม่สำเร็จ: ' + e.message)
   } finally {
