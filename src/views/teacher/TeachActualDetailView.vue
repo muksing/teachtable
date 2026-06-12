@@ -766,18 +766,8 @@ async function loadPage() {
     const loadedStatuses = await getAttendanceStatuses()
     attendanceStatuses.value = loadedStatuses.length ? loadedStatuses : DEFAULT_STATUSES
 
-    // ดึงชื่อครูจากตาราง teachers
-    const teacherCode = authStore.profile?.teacher_id || authStore.profile?.teacherId
-    if (teacherCode) {
-      const { data: tRow } = await supabase
-        .from('teachers')
-        .select('prefix, first_name, last_name')
-        .eq('school_id', authStore.schoolId)
-        .eq('teacher_code', teacherCode)
-        .maybeSingle()
-      if (tRow) currentTeacherName.value = [tRow.prefix, tRow.first_name, tRow.last_name].filter(Boolean).join(' ')
-    }
-    if (!currentTeacherName.value) currentTeacherName.value = authStore.profile?.displayName || authStore.profile?.email || ''
+    const p = authStore.profile
+    currentTeacherName.value = p?.displayName || p?.display_name || p?.email || ''
 
     const t = schoolStore.currentTerm || '2568_1'
     const [allBeh, subjects, slotRes] = await Promise.all([
