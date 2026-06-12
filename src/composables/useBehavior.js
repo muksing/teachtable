@@ -29,12 +29,13 @@ export function useBehavior() {
   async function recorderName() {
     const p = authStore.profile
     if (!p) return ''
-    if (p.email) {
+    const teacherCode = p.teacher_id || p.teacherId
+    if (teacherCode) {
       const { data } = await supabase
         .from('teachers')
         .select('prefix, first_name, last_name')
         .eq('school_id', schoolId())
-        .eq('email', p.email)
+        .eq('teacher_code', teacherCode)
         .limit(1)
         .maybeSingle()
       if (data?.first_name) return [data.prefix, data.first_name, data.last_name].filter(Boolean).join(' ')

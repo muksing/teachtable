@@ -767,12 +767,13 @@ async function loadPage() {
     attendanceStatuses.value = loadedStatuses.length ? loadedStatuses : DEFAULT_STATUSES
 
     const p = authStore.profile
-    if (p?.email) {
+    const teacherCode = p?.teacher_id || p?.teacherId
+    if (teacherCode) {
       const { data: tRow } = await supabase
         .from('teachers')
         .select('prefix, first_name, last_name')
         .eq('school_id', authStore.schoolId)
-        .eq('email', p.email)
+        .eq('teacher_code', teacherCode)
         .limit(1)
         .maybeSingle()
       if (tRow?.first_name) currentTeacherName.value = [tRow.prefix, tRow.first_name, tRow.last_name].filter(Boolean).join(' ')
