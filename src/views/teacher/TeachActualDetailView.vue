@@ -998,7 +998,7 @@ async function saveAll() {
 
       // ชื่อครูผู้ทำรายการ
       const p = authStore.profile
-      const recorderNameStr = [p?.prefix, p?.first_name, p?.last_name].filter(Boolean).join(' ') || p?.email || ''
+      const recorderNameStr = p?.displayName || [p?.prefix, p?.first_name, p?.last_name].filter(Boolean).join(' ') || p?.email || ''
 
       for (const stu of rawStudents) {
         const sid  = String(stu.student_id)

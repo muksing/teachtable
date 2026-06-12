@@ -29,7 +29,7 @@ export function useBehavior() {
   function recorderName() {
     const p = authStore.profile
     if (!p) return ''
-    return [p.prefix, p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || ''
+    return p.displayName || [p.prefix, p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || ''
   }
 
   /**
