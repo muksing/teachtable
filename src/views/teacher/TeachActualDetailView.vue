@@ -994,6 +994,12 @@ async function saveAll() {
 
       const logRows = []
       const now = new Date().toISOString()
+      const taDate = String(taRaw.date || '')
+
+      // ชื่อครูผู้ทำรายการ
+      const p = authStore.profile
+      const recorderNameStr = [p?.prefix, p?.first_name, p?.last_name].filter(Boolean).join(' ') || p?.email || ''
+
       for (const stu of rawStudents) {
         const sid  = String(stu.student_id)
         const dbId = String(stu.id || '')
@@ -1002,34 +1008,47 @@ async function saveAll() {
 
         const attPoints = rec.attendance_points
         const lrnPoints = rec.learning_points
-        const sumData = summaryMap[dbId] || { attendance_score: 100, learning_score: 100 }
+        const sumData = summaryMap[dbId] || { attendance_score: 0, learning_score: 0 }
+
+        // label สำหรับ attendance = สถานะการมาเรียน เช่น "มาสาย", "ขาด"
+        const attLabel = rec.status || 'เช็คชื่อ'
+        // label สำหรับ learning = รายการพฤติกรรมที่เลือก เช่น "ไม่ตั้งใจเรียน, ก่อกวน"
+        const lrnLabel = (rec.selected_behaviors || []).map(b => b.label).filter(Boolean).join(', ') || 'พฤติกรรมในห้องเรียน'
 
         if (attPoints !== 0) {
           logRows.push({
-            source_id:     taIdStr,
-            source_type:   'teach_actual',
-            term_id:       t,
-            student_id:    sid,
-            school_id:     schoolId,
-            behavior_type: 'attendance',
-            points_change: attPoints,
-            score_after:   sumData.attendance_score,
-            note:          String(rec.note || ''),
-            created_at:    now,
+            source_id:                    taIdStr,
+            source_type:                  'teach_actual',
+            term_id:                      t,
+            student_id:                   sid,
+            school_id:                    schoolId,
+            behavior_type:                'attendance',
+            behavior_type_label_snapshot: 'พฤติกรรมในห้องเรียน',
+            label_snapshot:               attLabel,
+            points_change:                attPoints,
+            score_after:                  sumData.attendance_score,
+            note:                         String(rec.note || ''),
+            recorded_by_name_snapshot:    recorderNameStr,
+            date:                         taDate,
+            created_at:                   now,
           })
         }
         if (lrnPoints !== 0) {
           logRows.push({
-            source_id:     taIdStr,
-            source_type:   'teach_actual',
-            term_id:       t,
-            student_id:    sid,
-            school_id:     schoolId,
-            behavior_type: 'learning',
-            points_change: lrnPoints,
-            score_after:   sumData.learning_score,
-            note:          String(rec.note || ''),
-            created_at:    now,
+            source_id:                    taIdStr,
+            source_type:                  'teach_actual',
+            term_id:                      t,
+            student_id:                   sid,
+            school_id:                    schoolId,
+            behavior_type:                'learning',
+            behavior_type_label_snapshot: 'พฤติกรรมในห้องเรียน',
+            label_snapshot:               lrnLabel,
+            points_change:                lrnPoints,
+            score_after:                  sumData.learning_score,
+            note:                         String(rec.note || ''),
+            recorded_by_name_snapshot:    recorderNameStr,
+            date:                         taDate,
+            created_at:                   now,
           })
         }
       }
