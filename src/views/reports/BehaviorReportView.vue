@@ -108,16 +108,6 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column v-if="!filterType || filterType==='general'" label="ความประพฤติ" width="110" align="center">
-            <template #default="{ row }">
-              <span :class="scoreClass(row.summary?.general_score)">{{ row.summary?.general_score ?? 0 }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column v-if="!filterType || filterType!=='general'" label="ในห้องเรียน" width="105" align="center">
-            <template #default="{ row }">
-              <span :class="scoreClass(row.summary?.inclass_score)">{{ row.summary?.inclass_score ?? 0 }}</span>
-            </template>
-          </el-table-column>
           <!-- Detail icon column -->
           <el-table-column label="รายละเอียด" width="96" align="center" class-name="brv-no-print">
             <template #default="{ row }">
@@ -158,12 +148,17 @@
                   <el-tag :type="scoreTagType(expandedStudentRow.summary?.total_score)" size="small" effect="dark" class="mr-1">
                     รวม {{ expandedStudentRow.summary?.total_score ?? 0 }}
                   </el-tag>
-                  <el-tag type="success" size="small" plain class="mr-1">
-                    ความประพฤติ {{ expandedStudentRow.summary?.general_score ?? 0 }}
-                  </el-tag>
-                  <el-tag type="primary" size="small" plain>
-                    ในห้องเรียน {{ expandedStudentRow.summary?.inclass_score ?? 0 }}
-                  </el-tag>
+                </div>
+                <!-- filter ตารางรายละเอียด -->
+                <div class="mt-2 flex gap-2" v-if="detailLogs.length">
+                  <el-button
+                    v-for="opt in [{label:'รวม',value:''},{label:'ทั่วไป',value:'general'},{label:'ในห้องเรียน',value:'inclass'}]"
+                    :key="opt.value"
+                    size="small"
+                    :type="detailFilterType === opt.value ? 'primary' : ''"
+                    :plain="detailFilterType !== opt.value"
+                    @click="detailFilterType = opt.value"
+                  >{{ opt.label }}</el-button>
                 </div>
               </div>
               <div class="brv-detail-head-right">
