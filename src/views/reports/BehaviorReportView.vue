@@ -92,6 +92,13 @@
           <el-table-column label="ที่" width="52" align="center">
             <template #default="{ $index }">{{ $index + 1 }}</template>
           </el-table-column>
+          <el-table-column label="รูป" width="56" align="center" class-name="brv-no-print">
+            <template #default="{ row }">
+              <el-avatar :size="36" :src="row.photo_url || ''" style="cursor:pointer" @click="openDetail(row)">
+                <span style="font-size:14px">👤</span>
+              </el-avatar>
+            </template>
+          </el-table-column>
           <el-table-column prop="student_id" label="รหัส" width="90" />
           <el-table-column label="ชื่อ-นามสกุล" min-width="160">
             <template #default="{ row }">{{ row.prefix || '' }}{{ row.name }} {{ row.surname }}</template>
