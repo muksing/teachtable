@@ -1030,6 +1030,7 @@ async function saveAll() {
         // label สำหรับ learning = รายการพฤติกรรมที่เลือก เช่น "ไม่ตั้งใจเรียน, ก่อกวน"
         const lrnLabel = (rec.selected_behaviors || []).map(b => b.label).filter(Boolean).join(', ') || 'พฤติกรรมในห้องเรียน'
 
+        const sessionImages = [img1, img2, img3].filter(Boolean)
         if (attPoints !== 0) {
           logRows.push({
             source_id:                    taIdStr,
@@ -1043,6 +1044,7 @@ async function saveAll() {
             points_change:                attPoints,
             score_after:                  sumData.attendance_score,
             note:                         String(rec.note || ''),
+            image_urls:                   sessionImages,
             recorded_by_name_snapshot:    recorderNameStr,
             date:                         taDate,
             created_at:                   now,
@@ -1061,6 +1063,7 @@ async function saveAll() {
             points_change:                lrnPoints,
             score_after:                  sumData.learning_score,
             note:                         String(rec.note || ''),
+            image_urls:                   sessionImages,
             recorded_by_name_snapshot:    recorderNameStr,
             date:                         taDate,
             created_at:                   now,

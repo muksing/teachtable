@@ -38,11 +38,11 @@
           </div>
           <div class="brv-filter-group">
             <div class="brv-filter-label">คะแนนรวม ≥</div>
-            <el-input-number v-model="scoreMin" :min="0" :max="9999" :step="10" style="width:110px" controls-position="right" />
+            <el-input-number v-model="scoreMin" :min="-9999" :max="9999" :step="10" style="width:110px" controls-position="right" />
           </div>
           <div class="brv-filter-group">
             <div class="brv-filter-label">คะแนนรวม ≤</div>
-            <el-input-number v-model="scoreMax" :min="0" :max="9999" :step="10" style="width:110px" controls-position="right" />
+            <el-input-number v-model="scoreMax" :min="-9999" :max="9999" :step="10" style="width:110px" controls-position="right" />
           </div>
           <el-button type="primary" :loading="loading" @click="loadReport">ดูรายงาน</el-button>
           <el-button v-if="hasData" plain @click="resetFilters">รีเซ็ต</el-button>
@@ -94,18 +94,28 @@
           </el-table-column>
           <el-table-column prop="student_id" label="รหัส" width="90" />
           <el-table-column label="ชื่อ-นามสกุล" min-width="160">
-            <template #default="{ row }">{{ row.name }} {{ row.surname }}</template>
+            <template #default="{ row }">{{ row.prefix || '' }}{{ row.name }} {{ row.surname }}</template>
           </el-table-column>
-          <el-table-column label="ยกมา" width="80" align="center">
+          <el-table-column label="ยกมา" width="75" align="center">
             <template #default="{ row }">
               <span class="text-gray-500 font-medium">{{ row.summary?.carry_over_score ?? 0 }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="คะแนนรวม" width="100" align="center">
+          <el-table-column label="รวม" width="80" align="center">
             <template #default="{ row }">
               <el-tag :type="scoreTagType(row.summary?.total_score)" size="small" effect="dark">
                 {{ row.summary?.total_score ?? 0 }}
               </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="ทั่วไป" width="80" align="center">
+            <template #default="{ row }">
+              <span :class="scoreClass(row.summary?.general_score)">{{ row.summary?.general_score ?? 0 }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="ในห้องเรียน" width="100" align="center">
+            <template #default="{ row }">
+              <span :class="scoreClass(row.summary?.inclass_score)">{{ row.summary?.inclass_score ?? 0 }}</span>
             </template>
           </el-table-column>
           <!-- Detail icon column -->
@@ -162,7 +172,8 @@
                 </div>
               </div>
               <div class="brv-detail-head-right">
-                <el-button size="small" type="primary" plain @click="printDetail">🖨 พิมพ์</el-button>
+                <el-button size="small" type="primary" plain @click="printDetail">🖨 พิมพ์หน้าจอ</el-button>
+                <el-button size="small" type="warning" plain @click="printDetailPdf">📄 PDF</el-button>
                 <el-button size="small" type="success" plain @click="exportDetailExcel">📥 Excel</el-button>
                 <el-button size="small" @click="expandedStudentId=null">✕ ปิด</el-button>
               </div>
@@ -368,7 +379,7 @@ async function openDetail(row) {
     return
   }
   expandedStudentId.value   = row.student_id
-  expandedStudentName.value = `${row.name || ''} ${row.surname || ''}`.trim()
+  expandedStudentName.value = `${row.prefix || ''}${row.name || ''} ${row.surname || ''}`.trim()
   detailLogs.value          = []
   detailFilterType.value    = ''
   loadingDetail.value       = true
@@ -445,6 +456,47 @@ function printDetail() {
   document.body.classList.add('brv-printing-detail')
   window.print()
   setTimeout(() => document.body.classList.remove('brv-printing-detail'), 1000)
+}
+
+// ─── PDF print (table only, no images) ────────────────────────
+function printDetailPdf() {
+  const logs = filteredDetailLogs.value
+  const total = logs.reduce((s, r) => s + (r.points_change || 0), 0)
+  const typeLabel = { '': 'ทั้งหมด', general: 'ความประพฤติทั่วไป', inclass: 'พฤติกรรมในห้องเรียน' }[detailFilterType.value] || 'ทั้งหมด'
+  const rows = logs.map((r, i) => `
+    <tr>
+      <td style="text-align:center">${i + 1}</td>
+      <td>${thaiDate(r.date || r.created_at?.substring(0, 10))}</td>
+      <td>${r.label_snapshot || '—'}</td>
+      <td>${r.behavior_type_label_snapshot || BEHAVIOR_TYPE_LABELS[r.behavior_type] || r.behavior_type || '—'}</td>
+      <td style="text-align:center;color:${r.points_change >= 0 ? 'green' : 'red'}">${r.points_change >= 0 ? '+' : ''}${r.points_change}</td>
+      <td>${r.note || ''}</td>
+      <td>${r.recorded_by_name_snapshot || '—'}</td>
+    </tr>`).join('')
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>ประวัติพฤติกรรม ${expandedStudentName.value}</title>
+    <style>
+      body { font-family: 'Sarabun', Arial, sans-serif; font-size: 13px; margin: 20px; }
+      h2 { margin: 0 0 4px; font-size: 16px; }
+      .meta { color: #555; font-size: 12px; margin-bottom: 12px; }
+      table { border-collapse: collapse; width: 100%; }
+      th { background: #1e3a8a; color: white; padding: 6px 8px; text-align: left; }
+      td { border: 1px solid #ddd; padding: 5px 8px; }
+      tr:nth-child(even) td { background: #f5f5f5; }
+      .sum-row td { background: #1e3a8a; color: white; font-weight: bold; }
+      @media print { body { margin: 10px; } }
+    </style></head><body>
+    <h2>ประวัติพฤติกรรม: ${expandedStudentName.value}</h2>
+    <div class="meta">รหัส: ${expandedStudentId.value} | ห้อง: ${className.value || '—'} | ภาคเรียน ${currentTerm.value} | ประเภท: ${typeLabel}</div>
+    <table>
+      <thead><tr><th>ที่</th><th>วันที่</th><th>พฤติกรรม</th><th>ประเภท</th><th>คะแนน</th><th>หมายเหตุ</th><th>บันทึกโดย</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr class="sum-row"><td colspan="4">รวม</td><td style="text-align:center">${total >= 0 ? '+' : ''}${total} คะแนน</td><td colspan="2"></td></tr></tfoot>
+    </table>
+    <script>window.onload=()=>{window.print();}<\/script>
+    </body></html>`
+  const w = window.open('', '_blank', 'width=900,height=700')
+  if (w) { w.document.write(html); w.document.close() }
 }
 
 // ─── Excel summary ─────────────────────────────────────────────
