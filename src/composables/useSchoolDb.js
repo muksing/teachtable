@@ -66,6 +66,7 @@ function mapTeachActual(row) {
     is_filled: row.is_filled ?? false,
     activity_type: row.activity_type ?? 'บรรยาย',
     topic: row.topic ?? '',
+    timestamp: row.updated_at || null,
   }
 }
 
@@ -1132,7 +1133,12 @@ export function useSchoolDb() {
 
     const actualsMap = new Map()
     for (const row of (actualsRes.data || [])) {
-      actualsMap.set(`${row.date}_${row.class_id}_${row.period_number}`, mapTeachActual(row))
+      const mapped = mapTeachActual(row)
+      // Use stored record_by_name if present; fall back to planned teacher name
+      if (!mapped.record_by_name && mapped.is_filled) {
+        mapped.record_by_name = teacherNameMap.get(row.planned_teacher_id) || ''
+      }
+      actualsMap.set(`${row.date}_${row.class_id}_${row.period_number}`, mapped)
     }
 
     const results = []

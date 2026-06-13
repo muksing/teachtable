@@ -1083,12 +1083,12 @@ async function saveAll() {
       note:            String(form.value.note || ''),
       images:          [img1, img2, img3].filter(Boolean),
       student_records: studentRecordsPayload,
+      record_by_name:  currentTeacherName.value || '',
       is_filled:       true,
       updated_at:      new Date().toISOString(),
     }
     let { error: saveErr } = await supabase.from('teach_actuals').update(taUpdate).eq('id', taIdStr)
     if (saveErr?.message?.match(/column|schema/i)) {
-      // column ยังไม่มี — รัน migration: ADD COLUMN note/student_records แล้วจะบันทึกครบ
       const { topic, activity_type, images, is_filled, updated_at } = taUpdate
       ;({ error: saveErr } = await supabase.from('teach_actuals').update({ topic, activity_type, images, is_filled, updated_at }).eq('id', taIdStr))
     }
