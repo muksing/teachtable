@@ -7,7 +7,7 @@
         <div>
           <h1 class="text-xl font-bold text-gray-800">{{ club?.name || '...' }}</h1>
           <span class="text-sm text-gray-500">
-            {{ club?.type === 'normal' ? 'ชุมนุมปกติ' : 'ชุมนุมพิเศษ' }} · ภาคเรียน {{ term }}
+            {{ club?.type === 'normal' ? 'ชุมนุมปกติ' : 'ชุมนุมพิเศษ' }} · {{ termDisplay }}
           </span>
         </div>
         <el-tag v-if="club" :type="club.is_active ? 'success' : 'danger'" size="small" class="ml-2">
@@ -209,13 +209,18 @@
               </div>
             </div>
             <!-- Existing images -->
-            <div v-if="editingFileUrls.length" class="mt-2">
-              <div class="text-xs text-gray-500 mb-1">ภาพที่บันทึกแล้ว:</div>
-              <div class="flex flex-wrap gap-2">
-                <a v-for="f in editingFileUrls" :key="f.url" :href="f.url" target="_blank" rel="noopener">
-                  <img :src="getThumbnailUrl(f.url)" class="w-16 h-16 object-cover rounded border" :alt="f.name" />
-                </a>
+            <div v-if="editingFileUrls.length" class="mt-3">
+              <div class="text-sm font-semibold text-gray-600 mb-2">🖼 ภาพที่บันทึกแล้ว ({{ editingFileUrls.length }} ภาพ)</div>
+              <div class="flex flex-wrap gap-3">
+                <div v-for="f in editingFileUrls" :key="f.url" class="relative group">
+                  <a :href="f.url" target="_blank" rel="noopener">
+                    <img :src="getThumbnailUrl(f.url)"
+                      class="w-28 h-28 object-cover rounded-xl border-2 border-gray-200 hover:border-indigo-400 transition"
+                      :alt="f.name || 'ภาพกิจกรรม'" />
+                  </a>
+                </div>
               </div>
+              <div class="text-xs text-gray-400 mt-1">คลิกภาพเพื่อดูขนาดเต็ม — อัพโหลดภาพใหม่ด้านบนเพื่อเพิ่มภาพ</div>
             </div>
 
             <template #footer>
@@ -235,6 +240,7 @@
             <div class="flex gap-2">
               <el-button size="small" plain @click="printClubReport">🖨️ พิมพ์</el-button>
               <el-button size="small" plain @click="exportExcel">📥 Excel ปพ.5</el-button>
+              <el-button size="small" type="danger" plain @click="exportFullPdf">📄 PDF รายงานฉบับสมบูรณ์</el-button>
             </div>
           </div>
 
@@ -298,6 +304,50 @@
             </div>
           </div>
         </el-tab-pane>
+
+        <!-- ===== ประเมินผล ===== -->
+        <el-tab-pane label="📝 ประเมินผล" name="evaluation">
+          <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
+            <span class="text-gray-600 font-medium">ประเมินผลการเข้าร่วมชุมนุม {{ members.length }} คน</span>
+            <div class="flex gap-2">
+              <el-button size="small" plain @click="setAllPass">✅ ผ่านทั้งหมด</el-button>
+              <el-button type="primary" size="small" :loading="evalLoading" @click="saveEvaluation">💾 บันทึกการประเมิน</el-button>
+            </div>
+          </div>
+
+          <div class="mb-4 p-3 rounded-lg" style="background:#eff6ff">
+            <div class="text-sm font-semibold mb-2" style="color:#1d4ed8">เกณฑ์การประเมิน</div>
+            <el-input v-model="evalCriteria" type="textarea" :rows="2"
+              placeholder="ระบุเกณฑ์ เช่น เข้าร่วมกิจกรรมไม่น้อยกว่า 80% และมีส่วนร่วมในกิจกรรม..." />
+          </div>
+
+          <div v-if="members.length === 0" class="text-center py-10 text-gray-400">ยังไม่มีสมาชิก</div>
+          <el-table v-else :data="sortedMembers" border stripe
+            :header-cell-style="{ background:'#4f46e5', color:'white', fontWeight:'600', fontSize:'13px' }">
+            <el-table-column type="index" label="#" width="50" align="center" />
+            <el-table-column prop="student_id" label="เลขประจำตัว" width="120" align="center" />
+            <el-table-column prop="student_name" label="ชื่อ-สกุล" min-width="150" />
+            <el-table-column prop="class_room" label="ห้อง" width="90" align="center" />
+            <el-table-column label="เข้าร่วม %" width="90" align="center">
+              <template #default="{ row }">
+                {{ sessions.length ? Math.round(memberPresent(row) / sessions.length * 100) : 0 }}%
+              </template>
+            </el-table-column>
+            <el-table-column label="ผลการประเมิน" width="150" align="center">
+              <template #default="{ row }">
+                <el-select v-model="evalMap[row.student_id]" size="small" style="width:120px">
+                  <el-option label="ผ่าน" value="ผ่าน" />
+                  <el-option label="ไม่ผ่าน" value="ไม่ผ่าน" />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="หมายเหตุ" min-width="180">
+              <template #default="{ row }">
+                <el-input v-model="evalNoteMap[row.student_id]" size="small" placeholder="หมายเหตุ..." />
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
       </el-tabs>
     </div>
   </AppLayout>
@@ -323,11 +373,12 @@ const { getStudents, getAttendanceStatuses } = useSchoolDb()
 
 const gasUploadUrl   = computed(() => schoolStore.schoolInfo?.gas_upload_web_app_url || '')
 const gdriveFolderId = computed(() => schoolStore.schoolInfo?.gdrive_folder_id || '')
-const schoolName     = computed(() => schoolStore.schoolInfo?.name || schoolStore.schoolName || 'โรงเรียน')
-const schoolLogo     = computed(() => schoolStore.schoolInfo?.logo_url || '')
+const schoolName     = computed(() => schoolStore.schoolInfo?.settings?.name || schoolStore.schoolInfo?.name || schoolStore.schoolName || 'โรงเรียน')
+const schoolLogo     = computed(() => schoolStore.schoolInfo?.settings?.logo_url || schoolStore.schoolInfo?.logo_url || '')
 const schoolId       = computed(() => authStore.schoolId)
 const teacherId      = computed(() => authStore.profile?.teacher_id || authStore.profile?.uid || '')
 const teacherName    = computed(() => authStore.profile?.displayName || authStore.profile?.email || '')
+const termDisplay    = computed(() => schoolStore.termLabel || term.value)
 
 // ── Attendance statuses ───────────────────────────────────────────
 const DEFAULT_STATUSES = [
@@ -485,6 +536,12 @@ const attendanceMap    = reactive({})
 const attendanceNoteMap = reactive({})
 const behaviorMap      = reactive({})  // per-student behavior point adjustment
 
+// ── Evaluation state ──────────────────────────────────────────────
+const evalLoading  = ref(false)
+const evalMap      = reactive({})
+const evalNoteMap  = reactive({})
+const evalCriteria = ref('')
+
 // ── Helpers ───────────────────────────────────────────────────────
 function toDate(val) {
   if (!val) return new Date(0)
@@ -558,7 +615,7 @@ function getThumbnailUrl(url) {
   if (m1) fileId = m1[1]
   if (!fileId) { const m2 = url.match(/[?&]id=([^&#]+)/); if (m2) fileId = m2[1]; }
   if (!fileId) { const m3 = url.match(/\/file\/d\/([^/?&#]+)/); if (m3) fileId = m3[1]; }
-  return fileId ? `https://drive.google.com/thumbnail?id=${id}&sz=w800` : url
+  return fileId ? `https://drive.google.com/thumbnail?id=${fileId}&sz=w800` : url
 }
 
 // ── Load students ─────────────────────────────────────────────────
@@ -608,6 +665,7 @@ async function addMembers() {
         student_no:   s.student_no || '',
         class_id:     s.class_id   || '',
         class_room:   s.class_room || '',
+        photo_url:    s.photo_url  || '',
         enrolled_at:  now,
       }
     }
@@ -775,20 +833,33 @@ async function saveBehaviorLogs(sessionId, newAtt, prevAtt) {
 
   // Read current behavior summaries from Supabase
   const studentIds = membersNeedUpdate.map(m => m.student_id)
-  const { data: existingLogs } = await supabase
-    .from('behavior_logs')
-    .select('student_id, score_after')
-    .eq('school_id', schoolId.value)
-    .eq('term_id', term.value)
-    .in('student_id', studentIds)
-    .order('created_at', { ascending: false })
+  const [{ data: existingLogs }, { data: studentScores }] = await Promise.all([
+    supabase
+      .from('behavior_logs')
+      .select('student_id, score_after')
+      .eq('school_id', schoolId.value)
+      .eq('term_id', term.value)
+      .in('student_id', studentIds)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('students')
+      .select('student_code, total_behavior_score')
+      .eq('school_id', schoolId.value)
+      .in('student_code', studentIds),
+  ])
 
-  // Build a map of latest score_after per student
+  // Build a map of latest general score_after per student (from behavior_logs)
   const latestScore = {}
   for (const row of (existingLogs || [])) {
     if (!(row.student_id in latestScore)) {
       latestScore[row.student_id] = row.score_after ?? 0
     }
+  }
+
+  // Build a map of current total_behavior_score per student (from students table)
+  const currentTotal = {}
+  for (const row of (studentScores || [])) {
+    currentTotal[row.student_code] = row.total_behavior_score ?? 0
   }
 
   const logUpserts = []
@@ -827,9 +898,11 @@ async function saveBehaviorLogs(sessionId, newAtt, prevAtt) {
       created_at:                   now,
     })
 
+    const newTotal = (currentTotal[m.student_id] ?? 0) + delta
     studentUpdates.push({
       student_id:             m.student_id,
       general_behavior_score: scoreAfter,
+      total_behavior_score:   newTotal,
     })
   }
 
@@ -842,10 +915,34 @@ async function saveBehaviorLogs(sessionId, newAtt, prevAtt) {
   for (const upd of studentUpdates) {
     await supabase
       .from('students')
-      .update({ general_behavior_score: upd.general_behavior_score, updated_at: now })
-      .eq('student_id', upd.student_id)
+      .update({ general_behavior_score: upd.general_behavior_score, total_behavior_score: upd.total_behavior_score, updated_at: now })
+      .eq('student_code', upd.student_id)
       .eq('school_id', schoolId.value)
   }
+}
+
+// ── Evaluation ───────────────────────────────────────────────────
+async function saveEvaluation() {
+  evalLoading.value = true
+  try {
+    const evals = { criteria: evalCriteria.value }
+    for (const m of members.value) {
+      evals[m.student_id] = {
+        result: evalMap[m.student_id] || 'ผ่าน',
+        note:   evalNoteMap[m.student_id] || '',
+      }
+    }
+    await persistClub({ ...clubDoc.value, evaluations: evals })
+    ElMessage.success('บันทึกการประเมินสำเร็จ')
+  } catch (e) {
+    ElMessage.error('บันทึกไม่สำเร็จ: ' + e.message)
+  } finally {
+    evalLoading.value = false
+  }
+}
+
+function setAllPass() {
+  for (const m of members.value) evalMap[m.student_id] = 'ผ่าน'
 }
 
 // ── Shared: build logo+school header HTML ─────────────────────────
@@ -867,6 +964,8 @@ function buildSchoolHeader(subtitle) {
 const PRINT_BASE_CSS = `
   body { font-family:'TH Sarabun New',Sarabun,sans-serif; font-size:14px; padding:16px 24px; }
   table { border-collapse:collapse; width:100%; margin-top:10px; }
+  thead { display:table-header-group; }
+  tfoot { display:table-footer-group; }
   th { background:#1e3a8a; color:#fff; padding:5px 8px; border:1px solid #3b5bdb; text-align:center; font-weight:700; }
   td { padding:4px 8px; border:1px solid #9ca3af; }
   .center { text-align:center; }
@@ -920,7 +1019,7 @@ ${buildSchoolHeader(`บันทึกการเข้าร่วมกิ�
 <div style="text-align:center;font-size:13px;color:#374151">
   ชุมนุม: ${escape(clubDoc.value?.name)} &nbsp;|&nbsp; ครั้งที่ ${s.session_number}
   &nbsp;|&nbsp; วันที่ ${escape(formatDate(s.session_date))}
-  &nbsp;|&nbsp; ภาคเรียน ${escape(term.value)}
+  &nbsp;|&nbsp; ภาคเรียน ${escape(termDisplay.value)}
 </div>
 ${topicLine}${noteLine}
 <table>
@@ -1028,7 +1127,7 @@ function buildSummaryReportHtml() {
 <body>
 ${buildSchoolHeader(`บันทึกเวลาเรียน — ชุมนุม ${escape(clubDoc.value?.name)}`)}
 <div style="font-size:13px;margin-bottom:8px">
-  ภาคเรียน ${escape(term.value)} &nbsp;|&nbsp; ครูที่ปรึกษา ${escape(clubDoc.value?.teacher_name || '')}
+  ภาคเรียน ${escape(termDisplay.value)} &nbsp;|&nbsp; ครูที่ปรึกษา ${escape(clubDoc.value?.teacher_name || '')}
   &nbsp;|&nbsp; สมาชิก ${memArr.length} คน จัด ${sesArr.length} ครั้ง
 </div>
 <table>
@@ -1111,7 +1210,7 @@ function buildSessionListHtml() {
 <body>
 ${buildSchoolHeader(`รายการจัดกิจกรรมชุมนุม — ${escape(clubDoc.value?.name)}`)}
 <div style="font-size:13px;margin-bottom:8px">
-  ภาคเรียน ${escape(term.value)} &nbsp;|&nbsp; ครูที่ปรึกษา ${escape(clubDoc.value?.teacher_name || '')}
+  ภาคเรียน ${escape(termDisplay.value)} &nbsp;|&nbsp; ครูที่ปรึกษา ${escape(clubDoc.value?.teacher_name || '')}
 </div>
 <table>
   <thead>
@@ -1134,6 +1233,253 @@ ${buildSchoolHeader(`รายการจัดกิจกรรมชุม�
 function printSessionList() {
   const win = window.open('', '_blank', 'width=900,height=680')
   win.document.write(buildSessionListHtml())
+  win.document.close()
+}
+
+function exportFullPdf() {
+  const escape = t => String(t || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  const clubName    = escape(clubDoc.value?.name || '')
+  const teacherName_ = escape(clubDoc.value?.teacher_name || teacherName.value || '')
+  const termVal     = escape(termDisplay.value)
+  const memArr      = sortedMembers.value
+  const sesArr      = sortedSessions.value
+  const logo        = schoolLogo.value
+  const logoHtml    = logo
+    ? `<img src="${logo}" style="width:120px;height:120px;object-fit:contain;border-radius:12px" crossorigin="anonymous">`
+    : `<div style="font-size:90px;line-height:1">🏫</div>`
+
+  // ── Page 1: Cover ──────────────────────────────────────────────
+  const coverHtml = `
+  <div style="page-break-after:always;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:90vh;text-align:center">
+    ${logoHtml}
+    <div style="font-size:22px;font-weight:800;color:#1e3a8a;margin-top:20px">${escape(schoolName.value)}</div>
+    <div style="font-size:18px;font-weight:700;margin-top:24px;border:2px solid #1e3a8a;padding:8px 32px;border-radius:8px">รายงานการจัดกิจกรรมชุมนุม</div>
+    <div style="font-size:20px;font-weight:700;margin-top:16px;color:#4f46e5">${clubName}</div>
+    <div style="margin-top:24px;font-size:15px;color:#374151;line-height:2">
+      <div>${termVal}</div>
+      <div>ครูที่ปรึกษา: ${teacherName_}</div>
+      <div>จำนวนสมาชิก: ${memArr.length} คน</div>
+      <div>จำนวนครั้งที่จัด: ${sesArr.length} ครั้ง</div>
+    </div>
+  </div>`
+
+  // ── Page 2: Member cards (5 per row) ──────────────────────────
+  const cardRows = []
+  for (let i = 0; i < memArr.length; i += 5) cardRows.push(memArr.slice(i, i + 5))
+  const cardRowsHtml = cardRows.map(row => {
+    const cards = row.map(m => {
+      const photoHtml = m.photo_url
+        ? `<img src="${m.photo_url}" style="width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0" crossorigin="anonymous">`
+        : `<div style="width:88px;height:88px;background:#f1f5f9;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:36px">👤</div>`
+      return `<div style="flex:0 0 calc(20% - 8px);text-align:center;padding:10px 6px;border:1px solid #e5e7eb;border-radius:10px;background:#fafafa">
+        <div style="display:flex;justify-content:center;margin-bottom:6px">${photoHtml}</div>
+        <div style="font-size:12px;font-weight:700;color:#1e3a8a;line-height:1.3">${escape(m.student_name)}</div>
+        <div style="font-size:12px;color:#374151;margin-top:2px">ห้อง ${escape(m.class_room)}</div>
+        <div style="font-size:11px;color:#6b7280">เลขที่ ${escape(String(m.student_no || '—'))}</div>
+      </div>`
+    }).join('')
+    return `<div style="display:flex;gap:10px;margin-bottom:10px">${cards}</div>`
+  }).join('')
+
+  const memberCardsHtml = `
+  <div style="page-break-after:always">
+    ${buildSchoolHeader(`รายชื่อสมาชิกชุมนุม — ${clubName}`)}
+    <div style="font-size:13px;margin-bottom:10px">${termVal} &nbsp;|&nbsp; ครูที่ปรึกษา ${teacherName_} &nbsp;|&nbsp; สมาชิกทั้งหมด ${memArr.length} คน</div>
+    ${cardRowsHtml || '<div style="color:#9ca3af">ยังไม่มีสมาชิก</div>'}
+  </div>`
+
+  // ── Page 3: Attendance grid (ปพ.5) ────────────────────────────
+  const sessionHeaders = sesArr.map((s, si) =>
+    `<th style="background:#4f46e5;color:#fff;padding:4px 5px;border:1px solid #3b5bdb;text-align:center;min-width:42px;font-size:10px;vertical-align:bottom">
+      <div>ครั้ง${si + 1}</div>
+      <div style="font-size:9px;font-weight:400">${escape(formatDateShort(s.session_date))}</div>
+    </th>`).join('')
+
+  const attendRows = memArr.map((m, idx) => {
+    const cells = sesArr.map(s => {
+      const sym = STATUS_SYMBOL[getStatus(s, m.student_id)] ?? ''
+      const cls = STATUS_CELL_CLS[getStatus(s, m.student_id)] || ''
+      const bg  = cls === 'pp5-present' ? '#dcfce7' : cls === 'pp5-absent' ? '#fee2e2'
+        : cls === 'pp5-late' ? '#fef9c3' : cls === 'pp5-sick' ? '#f3e8ff'
+        : cls === 'pp5-leave' ? '#dbeafe' : cls === 'pp5-offsite' ? '#f1f5f9' : '#fff'
+      return `<td style="padding:2px 4px;border:1px solid #cbd5e1;text-align:center;font-weight:700;font-size:10px;background:${bg}">${escape(sym)}</td>`
+    }).join('')
+    const pres = memberPresent(m)
+    const pct  = sesArr.length ? Math.round(pres / sesArr.length * 100) : 0
+    return `<tr>
+      <td style="padding:2px 5px;border:1px solid #cbd5e1;text-align:center;font-size:11px">${idx + 1}</td>
+      <td style="padding:2px 5px;border:1px solid #cbd5e1;text-align:center;font-size:11px">${escape(m.student_id)}</td>
+      <td style="padding:2px 5px;border:1px solid #cbd5e1;font-size:11px">${escape(m.student_name)}</td>
+      <td style="padding:2px 5px;border:1px solid #cbd5e1;text-align:center;font-size:11px">${escape(m.class_room)}</td>
+      ${cells}
+      <td style="padding:2px 5px;border:1px solid #cbd5e1;text-align:center;font-weight:700;color:#166534;font-size:11px">${pres}</td>
+      <td style="padding:2px 5px;border:1px solid #cbd5e1;text-align:center;font-weight:700;color:#991b1b;font-size:11px">${memberAbsent(m)}</td>
+      <td style="padding:2px 5px;border:1px solid #cbd5e1;text-align:center;font-weight:600;font-size:11px">${pct}%</td>
+    </tr>`
+  }).join('')
+  const footCells = sesArr.map(s =>
+    `<td style="padding:2px 5px;border:1px solid #cbd5e1;text-align:center;background:#f8fafc;font-weight:700;font-size:10px">${sessionPresentCount(s)}</td>`).join('')
+
+  const attendHtml = `
+  <div class="pp5-section" style="page-break-after:always">
+    ${buildSchoolHeader(`รายการเช็คชื่อเข้าร่วมกิจกรรมชุมนุม — ${clubName}`)}
+    <div style="font-size:12px;margin-bottom:6px">${termVal} &nbsp;|&nbsp; ครูที่ปรึกษา ${teacherName_} &nbsp;|&nbsp; สมาชิก ${memArr.length} คน จัด ${sesArr.length} ครั้ง</div>
+    <table style="border-collapse:collapse;width:100%;font-size:11px">
+      <thead><tr>
+        <th style="background:#1e3a8a;color:#fff;padding:4px;border:1px solid #3b5bdb;width:32px">ที่</th>
+        <th style="background:#1e3a8a;color:#fff;padding:4px;border:1px solid #3b5bdb;width:100px">เลขประจำตัว</th>
+        <th style="background:#1e3a8a;color:#fff;padding:4px;border:1px solid #3b5bdb;min-width:130px">ชื่อ-สกุล</th>
+        <th style="background:#1e3a8a;color:#fff;padding:4px;border:1px solid #3b5bdb;width:60px">ห้อง</th>
+        ${sessionHeaders}
+        <th style="background:#166534;color:#fff;padding:4px;border:1px solid #3b5bdb;width:36px">มา</th>
+        <th style="background:#991b1b;color:#fff;padding:4px;border:1px solid #3b5bdb;width:36px">ขาด</th>
+        <th style="background:#1e40af;color:#fff;padding:4px;border:1px solid #3b5bdb;width:42px">%มา</th>
+      </tr></thead>
+      <tbody>${attendRows}</tbody>
+      <tfoot><tr>
+        <td colspan="4" style="padding:2px 5px;border:1px solid #cbd5e1;background:#f8fafc;font-weight:700;font-size:11px">รวมเข้าร่วม</td>
+        ${footCells}
+        <td colspan="3" style="border:1px solid #cbd5e1;background:#f8fafc"></td>
+      </tr></tfoot>
+    </table>
+    <div style="margin-top:6px;font-size:10px;color:#6b7280">
+      <b>มา</b>=มาเรียน &nbsp; <b>สาย</b>=มาสาย &nbsp; <b>โดด</b>=โดดเรียน &nbsp; <b>ขาด</b>=ขาดเรียน &nbsp; <b>ป่วย</b>=ลาป่วย &nbsp; <b>กิจ</b>=ลากิจ &nbsp; <b>ราชการ</b>=ไปราชการ
+    </div>
+  </div>`
+
+  // ── Pages 4+: Session activity report pages (summary + photos, no roll-call) ──
+  const sessionDetailPages = [...sessions.value]
+    .sort((a, b) => (a.session_number || 0) - (b.session_number || 0))
+    .map(s => {
+      const fileUrls  = s.file_urls || []
+      const photoRows = []
+      for (let i = 0; i < fileUrls.length; i += 5) photoRows.push(fileUrls.slice(i, i + 5))
+      const photosHtml = fileUrls.length
+        ? `<div style="margin-top:16px">
+            <div style="font-weight:700;font-size:14px;margin-bottom:10px;color:#1e3a8a;border-bottom:1px solid #e2e8f0;padding-bottom:4px">ภาพประกอบกิจกรรม</div>
+            ${photoRows.map(row => `
+              <div style="display:flex;gap:10px;margin-bottom:10px">
+                ${row.map(f => `<img src="${getThumbnailUrl(f.url)}" style="flex:1;max-width:calc(20% - 9px);height:150px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0" crossorigin="anonymous">`).join('')}
+              </div>`).join('')}
+          </div>`
+        : `<div style="margin-top:20px;color:#9ca3af;font-style:italic">— ไม่มีภาพประกอบ —</div>`
+
+      return `<div style="page-break-after:always">
+        ${buildSchoolHeader(`รายงานการจัดกิจกรรมชุมนุม — ${clubName}`)}
+        <div style="margin:10px 0;padding:12px 16px;background:#f8fafc;border-radius:8px;border-left:4px solid #4f46e5">
+          <div style="font-size:16px;font-weight:800;color:#1e3a8a">ครั้งที่ ${s.session_number}</div>
+          <div style="font-size:13px;color:#374151;margin-top:4px">
+            วันที่ ${escape(formatDate(s.session_date))} &nbsp;|&nbsp; ${termVal}
+          </div>
+          ${s.topic ? `<div style="font-size:14px;font-weight:700;margin-top:6px;color:#4f46e5">เรื่อง/กิจกรรม: ${escape(s.topic)}</div>` : ''}
+          ${s.note  ? `<div style="font-size:12px;color:#6b7280;margin-top:4px">หมายเหตุ: ${escape(s.note)}</div>` : ''}
+        </div>
+        <div style="display:flex;gap:24px;margin:14px 0;justify-content:center">
+          <div style="text-align:center;padding:12px 24px;background:#dcfce7;border-radius:10px">
+            <div style="font-size:28px;font-weight:800;color:#166534">${countPresent(s)}</div>
+            <div style="font-size:13px;color:#166534;font-weight:600">นักเรียนเข้าร่วม</div>
+          </div>
+          <div style="text-align:center;padding:12px 24px;background:#fee2e2;border-radius:10px">
+            <div style="font-size:28px;font-weight:800;color:#991b1b">${countAbsent(s)}</div>
+            <div style="font-size:13px;color:#991b1b;font-weight:600">ขาด</div>
+          </div>
+          <div style="text-align:center;padding:12px 24px;background:#fef9c3;border-radius:10px">
+            <div style="font-size:28px;font-weight:800;color:#854d0e">${countLeave(s)}</div>
+            <div style="font-size:13px;color:#854d0e;font-weight:600">ลา</div>
+          </div>
+          <div style="text-align:center;padding:12px 24px;background:#e0e7ff;border-radius:10px">
+            <div style="font-size:28px;font-weight:800;color:#3730a3">${members.value.length}</div>
+            <div style="font-size:13px;color:#3730a3;font-weight:600">สมาชิกทั้งหมด</div>
+          </div>
+        </div>
+        ${photosHtml}
+      </div>`
+    }).join('')
+
+  // ── Last page: Evaluation results ─────────────────────────────
+  const evals = clubDoc.value?.evaluations || {}
+  const criteriaText = evals.criteria || evalCriteria.value || ''
+  const evalRows = memArr.map((m, idx) => {
+    const ev     = evals[m.student_id] || {}
+    const result = ev.result || evalMap[m.student_id] || '—'
+    const note   = ev.note   || evalNoteMap[m.student_id] || ''
+    const pres   = memberPresent(m)
+    const pct    = sesArr.length ? Math.round(pres / sesArr.length * 100) : 0
+    const resultColor = result === 'ผ่าน' ? '#166534' : result === 'ไม่ผ่าน' ? '#991b1b' : '#374151'
+    return `<tr>
+      <td style="padding:4px 8px;border:1px solid #9ca3af;text-align:center">${idx + 1}</td>
+      <td style="padding:4px 8px;border:1px solid #9ca3af;text-align:center">${escape(m.student_id)}</td>
+      <td style="padding:4px 8px;border:1px solid #9ca3af">${escape(m.student_name)}</td>
+      <td style="padding:4px 8px;border:1px solid #9ca3af;text-align:center">${escape(m.class_room)}</td>
+      <td style="padding:4px 8px;border:1px solid #9ca3af;text-align:center">${pct}%</td>
+      <td style="padding:4px 8px;border:1px solid #9ca3af;text-align:center;font-weight:700;color:${resultColor}">${escape(result)}</td>
+      <td style="padding:4px 8px;border:1px solid #9ca3af">${escape(note)}</td>
+    </tr>`
+  }).join('')
+  const passCount = memArr.filter(m => (evals[m.student_id]?.result || evalMap[m.student_id]) === 'ผ่าน').length
+
+  const evalHtml = `
+  <div>
+    ${buildSchoolHeader(`ผลการประเมินกิจกรรมชุมนุม — ${clubName}`)}
+    <div style="font-size:13px;margin-bottom:6px">${termVal} &nbsp;|&nbsp; ครูที่ปรึกษา ${teacherName_}</div>
+    ${criteriaText ? `<div style="font-size:12px;margin-bottom:8px;padding:6px 10px;background:#eff6ff;border-radius:4px;color:#1e40af">เกณฑ์: ${escape(criteriaText)}</div>` : ''}
+    <table style="border-collapse:collapse;width:100%;font-size:13px">
+      <thead><tr>
+        <th style="background:#1e3a8a;color:#fff;padding:5px 8px;border:1px solid #3b5bdb;width:40px">ที่</th>
+        <th style="background:#1e3a8a;color:#fff;padding:5px 8px;border:1px solid #3b5bdb;width:110px">เลขประจำตัว</th>
+        <th style="background:#1e3a8a;color:#fff;padding:5px 8px;border:1px solid #3b5bdb;min-width:150px">ชื่อ-สกุล</th>
+        <th style="background:#1e3a8a;color:#fff;padding:5px 8px;border:1px solid #3b5bdb;width:80px">ห้อง</th>
+        <th style="background:#1e3a8a;color:#fff;padding:5px 8px;border:1px solid #3b5bdb;width:80px">% เข้าร่วม</th>
+        <th style="background:#1e3a8a;color:#fff;padding:5px 8px;border:1px solid #3b5bdb;width:90px">ผลการประเมิน</th>
+        <th style="background:#1e3a8a;color:#fff;padding:5px 8px;border:1px solid #3b5bdb">หมายเหตุ</th>
+      </tr></thead>
+      <tbody>${evalRows}</tbody>
+    </table>
+    <div style="margin-top:10px;font-size:13px;font-weight:700">
+      ผ่าน ${passCount} คน &nbsp;|&nbsp; ไม่ผ่าน ${memArr.length - passCount} คน &nbsp;|&nbsp; รวม ${memArr.length} คน
+    </div>
+    <div style="display:flex;gap:80px;justify-content:center;margin-top:40px">
+      <div style="text-align:center">
+        <div style="border-bottom:1px solid #374151;width:220px;height:40px;margin:0 auto 4px"></div>
+        <div style="font-weight:700;font-size:13px">ครูที่ปรึกษาชุมนุม</div>
+        <div style="font-size:12px;color:#4b5563">(${escape(clubDoc.value?.teacher_name || '.............................')})</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:4px">วันที่ ........../........../..........&nbsp;</div>
+      </div>
+      <div style="text-align:center">
+        <div style="border-bottom:1px solid #374151;width:220px;height:40px;margin:0 auto 4px"></div>
+        <div style="font-weight:700;font-size:13px">ผู้บริหาร</div>
+        <div style="font-size:12px;color:#4b5563">(.............................)</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:4px">วันที่ ........../........../..........&nbsp;</div>
+      </div>
+    </div>
+  </div>`
+
+  const html = `<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>รายงานชุมนุม — ${clubName}</title>
+<style>
+  body { font-family:'TH Sarabun New',Sarabun,sans-serif; font-size:14px; padding:16px 24px; }
+  table { border-collapse:collapse; }
+  thead { display:table-header-group; }
+  tfoot { display:table-footer-group; }
+  @page { margin:1.2cm; }
+  @page landscape { size:landscape; margin:1cm; }
+  .pp5-section { page:landscape; }
+</style>
+</head>
+<body>
+${coverHtml}
+${memberCardsHtml}
+${attendHtml}
+${sessionDetailPages}
+${evalHtml}
+<script>window.onload=function(){window.print();}<\/script>
+</body></html>`
+
+  const win = window.open('', '_blank', 'width=1100,height=780')
+  win.document.write(html)
   win.document.close()
 }
 
@@ -1164,26 +1510,44 @@ function onFileChange(e) {
 function removeFile(i) { sessionFiles.value = sessionFiles.value.filter((_, idx) => idx !== i) }
 
 async function uploadSessionFiles(sessionId) {
-  if (!sessionFiles.value.length || !gasUploadUrl.value) return []
+  if (!sessionFiles.value.length) return []
+  if (!gasUploadUrl.value) {
+    ElMessage.error('ยังไม่ได้ตั้งค่า GAS Upload URL — กรุณาตั้งค่าในหน้าข้อมูลโรงเรียน')
+    return []
+  }
   const urls = []
+  const errors = []
   for (let i = 0; i < sessionFiles.value.length; i++) {
     const file = sessionFiles.value[i]
     try {
       const base64 = await toBase64(file)
+      const ext    = file.name.split('.').pop()?.toLowerCase() || 'jpg'
+      const mime   = file.type || `image/${ext}`
       const res = await fetch(gasUploadUrl.value, {
         method: 'POST', redirect: 'follow',
         headers: { 'Content-Type': 'text/plain' },
         body: JSON.stringify({
-          route: 'upload-student-photo',
-          folderId: gdriveFolderId.value,
-          fileName: `club_${clubId.value}_${sessionId}_${i + 1}.jpg`,
-          mimeType: 'image/jpeg',
+          route:      'upload-student-photo',
+          folderId:   gdriveFolderId.value,
+          fileName:   `club_${clubId.value}_${sessionId}_${i + 1}.${ext}`,
+          mimeType:   mime,
           base64Data: base64.split(',')[1],
         }),
       })
-      const data = JSON.parse(await res.text())
-      if (data.url) urls.push({ name: file.name, url: data.url })
-    } catch { /* skip */ }
+      const text = await res.text()
+      let data
+      try { data = JSON.parse(text) } catch { throw new Error(`GAS response: ${text.slice(0, 100)}`) }
+      if (data?.url) {
+        urls.push({ name: file.name, url: data.url })
+      } else {
+        errors.push(`${file.name}: ไม่ได้รับ URL กลับมา (${JSON.stringify(data).slice(0, 80)})`)
+      }
+    } catch (e) {
+      errors.push(`${file.name}: ${e.message}`)
+    }
+  }
+  if (errors.length) {
+    ElMessage.error(`อัพโหลดไม่สำเร็จ ${errors.length} ไฟล์:\n${errors.join('\n')}`)
   }
   return urls
 }
@@ -1200,17 +1564,28 @@ function toBase64(file) {
 async function loadClub() {
   loading.value = true
   try {
-    const [snap, statuses] = await Promise.all([
-      getDoc(clubRef.value),
+    const [settings, statuses] = await Promise.all([
+      fetchSettings(),
       getAttendanceStatuses().catch(() => []),
     ])
-    if (!snap.exists()) {
+    const allClubs  = settings.clubs || {}
+    const termClubs = allClubs[term.value] || []
+    const found     = termClubs.find(c => c.club_id === clubId.value)
+    if (!found) {
       ElMessage.error('ไม่พบชุมนุมนี้')
       router.back()
       return
     }
-    clubDoc.value = { id: snap.id, ...snap.data() }
+    clubDoc.value = found
     if (statuses.length) attendanceStatuses.value = statuses
+
+    // populate evaluation state
+    const evals = found.evaluations || {}
+    evalCriteria.value = evals.criteria || ''
+    for (const sid of Object.keys(found.members || {})) {
+      evalMap[sid]     = evals[sid]?.result ?? 'ผ่าน'
+      evalNoteMap[sid] = evals[sid]?.note   ?? ''
+    }
   } catch (e) {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ: ' + e.message)
   } finally {
