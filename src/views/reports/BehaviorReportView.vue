@@ -145,19 +145,31 @@
             <!-- Detail header -->
             <div class="brv-detail-head">
               <div class="brv-detail-head-left">
-                <div class="brv-detail-name">{{ expandedStudentName }}</div>
-                <div class="brv-detail-meta">
-                  <span>🆔 {{ expandedStudentId }}</span>
-                  <span v-if="className">🏫 {{ className }}</span>
-                  <span>ภาคเรียน {{ currentTerm }}</span>
-                </div>
-                <div class="brv-detail-scores" v-if="expandedStudentRow">
-                  <el-tag type="info" size="small" plain class="mr-1">
-                    ยกมา {{ expandedStudentRow.summary?.carry_over_score ?? 0 }}
-                  </el-tag>
-                  <el-tag :type="scoreTagType(expandedStudentRow.summary?.total_score)" size="small" effect="dark" class="mr-1">
-                    รวม {{ expandedStudentRow.summary?.total_score ?? 0 }}
-                  </el-tag>
+                <!-- photo + info row -->
+                <div class="flex items-center gap-3">
+                  <el-avatar
+                    :size="64"
+                    :src="expandedStudentRow?.photo_url || ''"
+                    :style="{ border: '2px solid #db2777', flexShrink: 0 }"
+                  >
+                    <span style="font-size:22px">👤</span>
+                  </el-avatar>
+                  <div>
+                    <div class="brv-detail-name">{{ expandedStudentName }}</div>
+                    <div class="brv-detail-meta">
+                      <span>🆔 {{ expandedStudentId }}</span>
+                      <span v-if="className">🏫 {{ className }}</span>
+                      <span>ภาคเรียน {{ currentTerm }}</span>
+                    </div>
+                    <div class="brv-detail-scores" v-if="expandedStudentRow">
+                      <el-tag type="info" size="small" plain class="mr-1">
+                        ยกมา {{ expandedStudentRow.summary?.carry_over_score ?? 0 }}
+                      </el-tag>
+                      <el-tag :type="scoreTagType(expandedStudentRow.summary?.total_score)" size="small" effect="dark" class="mr-1">
+                        รวม {{ expandedStudentRow.summary?.total_score ?? 0 }}
+                      </el-tag>
+                    </div>
+                  </div>
                 </div>
                 <!-- filter ตารางรายละเอียด -->
                 <div class="mt-2 flex gap-2" v-if="detailLogs.length">
