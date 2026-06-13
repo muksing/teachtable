@@ -371,8 +371,14 @@ const schoolStore = useSchoolStore()
 const authStore   = useAuthStore()
 const { getStudents, getAttendanceStatuses } = useSchoolDb()
 
-const gasUploadUrl   = computed(() => schoolStore.schoolInfo?.gas_upload_web_app_url || '')
-const gdriveFolderId = computed(() => schoolStore.schoolInfo?.gdrive_folder_id || '')
+const gasUploadUrl   = computed(() => {
+  const tl = schoolStore.schoolInfo?.settings?.teaching_log_settings || {}
+  return (tl.gas_upload_web_app_url || tl.gas_web_app_url || schoolStore.schoolInfo?.gas_upload_web_app_url || '').trim()
+})
+const gdriveFolderId = computed(() => {
+  const tl = schoolStore.schoolInfo?.settings?.teaching_log_settings || {}
+  return (tl.gdrive_folder_id || schoolStore.schoolInfo?.gdrive_folder_id || '').trim()
+})
 const schoolName     = computed(() => schoolStore.schoolInfo?.settings?.name || schoolStore.schoolInfo?.name || schoolStore.schoolName || 'โรงเรียน')
 const schoolLogo     = computed(() => schoolStore.schoolInfo?.settings?.logo_url || schoolStore.schoolInfo?.logo_url || '')
 const schoolId       = computed(() => authStore.schoolId)
