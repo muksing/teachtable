@@ -459,14 +459,15 @@ function pp5CellStatus(studentId, ta) {
 }
 
 const PP5_STATUS = {
-  'มาเรียน':   { label: '✓',  cls: 'pp5-p' },
-  'มาสาย':    { label: '⚠', cls: 'pp5-l' },
-  'โดดเรียน': { label: '✗',  cls: 'pp5-a' },
-  'ลาป่วย':   { label: 'ลป', cls: 'pp5-v' },
-  'ลากิจ':    { label: 'ลก', cls: 'pp5-v' },
-  'ไปราชการ': { label: 'รก', cls: 'pp5-v' },
+  'มาเรียน':   { label: 'มา',  cls: 'pp5-p' },
+  'มาสาย':    { label: 'สาย', cls: 'pp5-l' },
+  'โดดเรียน': { label: 'โดด', cls: 'pp5-a' },
+  'ขาดเรียน': { label: 'ขาด', cls: 'pp5-a' },
+  'ลาป่วย':   { label: 'ป่วย', cls: 'pp5-v' },
+  'ลากิจ':    { label: 'กิจ',  cls: 'pp5-v' },
+  'ไปราชการ': { label: 'รก',   cls: 'pp5-v' },
 }
-function pp5StatusLabel(st) { return PP5_STATUS[st]?.label || st || '✓' }
+function pp5StatusLabel(st) { return PP5_STATUS[st]?.label || st || 'มา' }
 function pp5StatusClass(st) { return PP5_STATUS[st]?.cls   || 'pp5-p' }
 
 // ─── Per-student summary for ปพ.5 ────────────────────────────────

@@ -326,6 +326,27 @@
               {{ isLocked ? '🔒 ล็อคอยู่' : '🔓 เปิดแก้ไข' }}
             </el-button>
 
+            <!-- Publish — Admin only -->
+            <template v-if="authStore.isAdmin">
+              <el-divider direction="vertical" style="height:20px;margin:0 2px" />
+              <el-tooltip placement="bottom" :show-after="300">
+                <template #content>
+                  <div style="font-size:12px;line-height:1.6">
+                    <b>Publish ตารางสอน</b><br/>
+                    คัดลอก draft → ตารางที่ใช้จริง<br/>
+                    ครู / รายงาน / พิมพ์ จะเห็นทันที
+                    <template v-if="lastPublishedAt"><br/><span style="opacity:.75">Publish ล่าสุด: {{ formatPublishedAt(lastPublishedAt) }}<br/>โดย {{ lastPublishedBy || '-' }}</span></template>
+                  </div>
+                </template>
+                <el-button
+                  size="small" type="primary" :loading="publishing"
+                  style="font-weight:700;background:#0f766e;border-color:#0f766e"
+                  @click="handlePublish">
+                  🚀 Publish{{ lastPublishedAt ? '' : ' (ยังไม่ได้ Publish)' }}
+                </el-button>
+              </el-tooltip>
+            </template>
+
             <!-- Export / Import — SchoolAdmin only -->
             <template v-if="authStore.isAdmin">
               <input ref="importFileRef" type="file" accept=".json" class="hidden" @change="handleImportFile" />
@@ -850,6 +871,7 @@ import { supabase } from '@/supabase/client'
 import { useTimetable } from '@/composables/useTimetable'
 import { useRealtimeTimetable } from '@/composables/useRealtimeTimetable'
 import { useAutoScheduler } from '@/composables/useAutoScheduler'
+import { useTimetableSource } from '@/composables/useTimetableSource'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 import { useSchedulerPresence } from '@/composables/useSchedulerPresence'
 import { useSchoolStore } from '@/stores/school'
@@ -910,7 +932,14 @@ const lockForm = reactive({
   target_teachers: [],
   target_rooms: [],
 })
-const lockSaving = ref(false)
+const lockSaving  = ref(false)
+const publishing  = ref(false)
+const { lastPublishedAt, lastPublishedBy } = useTimetableSource()
+
+function formatPublishedAt(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })
+}
 
 // Auto schedule dialog
 const autoDialogVisible = ref(false)
@@ -2329,6 +2358,77 @@ async function toggleSchedulingLock() {
     ElMessage.error('เกิดข้อผิดพลาด: ' + e.message)
   } finally {
     lockSaving.value = false
+  }
+}
+
+// ===== Publish Timetable =====
+async function handlePublish() {
+  if (!authStore.isAdmin) return
+  try {
+    await ElMessageBox.confirm(
+      'ยืนยัน Publish ตารางสอน?\n\nตารางที่จัดไว้ (draft) จะถูกคัดลอกเป็นตารางที่ใช้งานจริง\nครู รายงาน และการพิมพ์จะเห็นตารางใหม่ทันที',
+      'Publish ตารางสอน',
+      { type: 'warning', confirmButtonText: '🚀 Publish', cancelButtonText: 'ยกเลิก' }
+    )
+  } catch { return }
+
+  publishing.value = true
+  try {
+    const schoolId   = authStore.schoolId
+    const termId     = term()
+    const publishedBy = authStore.profile?.displayName || authStore.profile?.email || ''
+    const publishedAt = new Date().toISOString()
+
+    // 1. ดึง draft slots ทั้งหมด
+    const { data: slots, error: fetchErr } = await supabase
+      .from('timetable_slots')
+      .select('*')
+      .eq('school_id', schoolId)
+      .eq('term_id', termId)
+    if (fetchErr) throw fetchErr
+
+    // 2. ลบ published slots เก่าของ term นี้
+    const { error: delErr } = await supabase
+      .from('timetable_slots_published')
+      .delete()
+      .eq('school_id', schoolId)
+      .eq('term_id', termId)
+    if (delErr) throw delErr
+
+    // 3. Insert published slots ใหม่ (chunk 400)
+    if (slots && slots.length > 0) {
+      const payloads = slots.map(({ id: _id, created_at: _c, updated_at: _u, ...rest }) => ({
+        ...rest,
+        published_at: publishedAt,
+        published_by: publishedBy,
+      }))
+      const CHUNK = 400
+      for (let i = 0; i < payloads.length; i += CHUNK) {
+        const { error: insErr } = await supabase
+          .from('timetable_slots_published')
+          .insert(payloads.slice(i, i + CHUNK))
+        if (insErr) throw insErr
+      }
+    }
+
+    // 4. บันทึก publish metadata ใน school settings
+    const { data: schoolRow } = await supabase
+      .from('schools').select('settings').eq('id', schoolId).maybeSingle()
+    const settings = schoolRow?.settings || {}
+    await supabase.from('schools').update({
+      settings: { ...settings, timetable_published_at: publishedAt, timetable_published_by: publishedBy }
+    }).eq('id', schoolId)
+
+    schoolStore.setSchool({
+      ...schoolStore.schoolInfo,
+      settings: { ...(schoolStore.schoolInfo?.settings || {}), timetable_published_at: publishedAt, timetable_published_by: publishedBy }
+    })
+
+    ElMessage.success(`✅ Publish สำเร็จ — ${slots?.length || 0} คาบ · โดย ${publishedBy}`)
+  } catch (e) {
+    ElMessage.error('Publish ไม่สำเร็จ: ' + e.message)
+  } finally {
+    publishing.value = false
   }
 }
 

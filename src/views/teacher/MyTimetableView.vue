@@ -100,9 +100,11 @@ import { Loading } from '@element-plus/icons-vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
+import { useTimetableSource } from '@/composables/useTimetableSource'
 
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
+const { slotTable } = useTimetableSource()
 
 const loading = ref(false)
 const slots = ref([])
@@ -224,7 +226,7 @@ async function loadMyTimetable() {
     currentTerm.value = t
 
     const { data, error } = await supabase
-      .from('timetable_slots')
+      .from(slotTable.value)
       .select('*')
       .eq('school_id', sId)
       .eq('term_id', t)

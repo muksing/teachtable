@@ -136,6 +136,7 @@ export const useSchoolStore = defineStore('school', () => {
 
   return {
     schoolInfo,
+    settingsObj,
     currentTerm,
     schoolName,
     schoolId,

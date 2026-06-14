@@ -48,6 +48,36 @@
           </div>
         </div>
 
+        <!-- Teacher summary report -->
+        <div class="mta-teacher-summary">
+          <div class="mta-teacher-summary-title-row">
+            <div class="mta-teacher-summary-title">📊 สรุปการลืมบันทึก รายครู</div>
+            <el-button size="small" type="warning" @click="printSummary">🖨️ พิมพ์ตารางสรุป</el-button>
+          </div>
+          <el-table
+            :data="teacherSummary"
+            size="small"
+            border
+            class="mta-summary-table"
+            :header-cell-style="{ background:'#1e40af', color:'white', fontWeight:'700', fontSize:'12px' }"
+          >
+            <el-table-column label="ที่" width="50" align="center">
+              <template #default="{ $index }">{{ $index + 1 }}</template>
+            </el-table-column>
+            <el-table-column label="รหัสครู" width="90" prop="id" align="center">
+              <template #default="{ row }">
+                <span class="summary-code">{{ row.id || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="ชื่อ-สกุล" min-width="160" prop="name" />
+            <el-table-column label="คาบค้าง" width="80" align="center" prop="count">
+              <template #default="{ row }">
+                <el-tag type="danger" size="small" effect="dark">{{ row.count }}</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
         <!-- Filter bar -->
         <div class="mta-filter-bar">
           <el-select
@@ -86,6 +116,10 @@
           <span class="mta-filter-result" v-if="filterTeacher || filterDate">
             แสดง {{ filteredRows.length }} รายการ
           </span>
+
+          <el-button size="small" type="warning" class="ml-auto" @click="printDetail" :disabled="!filteredRows.length">
+            🖨️ พิมพ์รายละเอียด
+          </el-button>
         </div>
 
         <!-- Loading -->
@@ -121,9 +155,10 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="ครูผู้สอน (ตามแผน)" min-width="150" sortable prop="teacher_plan_name">
+            <el-table-column label="ครูผู้สอน" min-width="170" sortable prop="teacher_plan_name">
               <template #default="{ row }">
-                <div class="tbl-teacher">{{ row.teacher_plan_name || row.teacher_plan_id || '—' }}</div>
+                <div class="tbl-teacher">{{ row.teacher_plan_name || '—' }}</div>
+                <div class="tbl-code" v-if="row.teacher_plan_id">{{ row.teacher_plan_id }}</div>
               </template>
             </el-table-column>
 
@@ -140,11 +175,6 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="" width="80" fixed="right" align="center">
-              <template #default="{ row }">
-                <el-button type="danger" size="small" @click="goToDetail(row)">📋 กรอก</el-button>
-              </template>
-            </el-table-column>
           </el-table>
         </div>
 
@@ -208,16 +238,19 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
+import { useTimetableSource } from '@/composables/useTimetableSource'
 import { supabase } from '@/supabase/client'
 
 const router      = useRouter()
 const authStore   = useAuthStore()
 const schoolStore = useSchoolStore()
 const { getTeachActualsRange } = useSchoolDb()
+const { slotTable } = useTimetableSource()
 
 const loading      = ref(false)
 const allData      = ref([])
@@ -271,7 +304,7 @@ async function loadSlots() {
   const termId = schoolStore.currentTerm || '2568_1'
   const schoolId = authStore.schoolId
   const { data } = await supabase
-    .from('timetable_slots')
+    .from(slotTable.value)
     .select('class_id, period_number, teacher_id, teacher_name, subject_id, subject_name')
     .eq('school_id', schoolId)
     .eq('term_id', termId)
@@ -306,6 +339,7 @@ const unfilled = computed(() => {
   const myId = myTeacherId.value
   return enrichedData.value.filter(r => {
     if (r.is_filled) return false
+    if (!r.id && !r.teach_actual_id) return false  // ไม่แสดง virtual record (ไม่มีใน DB)
     return r.teacher_plan_id === myId
   })
 })
@@ -332,7 +366,7 @@ const groups = computed(() => {
 
 // ── Admin view data ───────────────────────────────────────────────────────
 const adminUnfilled = computed(() =>
-  enrichedData.value.filter(r => !r.is_filled)
+  enrichedData.value.filter(r => !r.is_filled && (r.id || r.teach_actual_id))
 )
 
 const teacherOptions = computed(() => {
@@ -368,6 +402,16 @@ const uniqueDateCount = computed(() =>
   new Set(adminUnfilled.value.map(r => r.date).filter(Boolean)).size
 )
 
+const teacherSummary = computed(() => {
+  const map = {}
+  for (const r of adminUnfilled.value) {
+    const id = r.teacher_plan_id || '—'
+    if (!map[id]) map[id] = { id, name: r.teacher_plan_name || id, count: 0 }
+    map[id].count++
+  }
+  return Object.values(map).sort((a, b) => b.count - a.count)
+})
+
 const displayCount = computed(() =>
   isAdmin.value ? filteredRows.value.length : unfilled.value.length
 )
@@ -391,17 +435,147 @@ async function loadData() {
   }
 }
 
-function goToDetail(item) {
+async function goToDetail(item) {
+  let taId = item.teach_actual_id || item.id
+  if (!taId) {
+    // คาบที่ยังไม่มี record ใน DB → upsert ก่อน แล้วค่อย navigate
+    const { data, error } = await supabase
+      .from('teach_actuals')
+      .upsert([{
+        school_id:          authStore.schoolId,
+        term_id:            schoolStore.currentTerm || '2568_1',
+        class_id:           item.class_id,
+        date:               item.date,
+        period_number:      item.period_number || item.period,
+        slot_type:          item.slot_type || 'regular',
+        planned_teacher_id: item.teacher_plan_id || '',
+        is_filled:          false,
+      }], { onConflict: 'school_id,term_id,class_id,date,period_number' })
+      .select('id')
+      .single()
+    if (error || !data) {
+      ElMessage.error('สร้างบันทึกไม่สำเร็จ: ' + (error?.message || 'ไม่ทราบสาเหตุ'))
+      return
+    }
+    taId = data.id
+  }
   router.push({
     name: 'TeachActualDetail',
-    params: { id: item.teach_actual_id || item.id },
+    params: { id: taId },
     query: {
-      sn:  item.subject_name     || '',
-      si:  item.subject_plan_id  || '',
-      tpi: item.teacher_plan_id  || '',
+      sn:  item.subject_name      || '',
+      si:  item.subject_plan_id   || '',
+      tpi: item.teacher_plan_id   || '',
       tpn: item.teacher_plan_name || '',
     },
   })
+}
+
+function printBaseStyle() {
+  return `@page { margin: 15mm; }
+  * { font-family: 'Sarabun','TH Sarabun New','Tahoma',sans-serif; font-size: 14px; }
+  body { color: #000; }
+  h1 { font-size: 18px; text-align: center; margin: 0 0 4px; }
+  h2 { font-size: 15px; text-align: center; margin: 0 0 6px; font-weight: 700; }
+  .meta { text-align:center; font-size:12px; color:#555; margin-bottom:20px; }
+  table { width:100%; border-collapse:collapse; margin-bottom:20px; }
+  thead th { background:#1e40af; color:white; padding:6px 10px; border:1px solid #ccc; font-weight:700; }
+  tbody td { padding:5px 10px; border:1px solid #ddd; }
+  .sign-row { display:flex; justify-content:flex-end; margin-top:40px; text-align:center; }
+  .sign-box { width:220px; }
+  .sign-line { border-top:1px solid #000; margin-top:60px; margin-bottom:4px; }`
+}
+
+function openPrint(title, html) {
+  const win = window.open('', '_blank', 'width=860,height=700')
+  if (!win) { ElMessage.warning('กรุณาอนุญาต popup เพื่อพิมพ์รายงาน'); return }
+  win.document.write(html)
+  win.document.close()
+  win.focus()
+  setTimeout(() => win.print(), 600)
+}
+
+function printSummary() {
+  const schoolName = schoolStore.settingsObj?.school_info?.school_name_th || 'โรงเรียน'
+  const now = new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
+  const rangeLabel = `${dayRange.value} วันล่าสุด`
+
+  const rows = teacherSummary.value.map((t, i) => `
+    <tr>
+      <td style="text-align:center">${i + 1}</td>
+      <td style="text-align:center;font-weight:700">${t.id || '—'}</td>
+      <td>${t.name || '—'}</td>
+      <td style="text-align:center;font-weight:800;color:#dc2626">${t.count}</td>
+    </tr>`).join('')
+
+  openPrint('สรุปการลืมบันทึก', `<!DOCTYPE html><html lang="th">
+<head><meta charset="UTF-8"><title>สรุปการลืมบันทึก</title>
+<style>${printBaseStyle()}</style></head>
+<body>
+<h1>${schoolName}</h1>
+<h2>รายงานสรุปการลืมบันทึกเข้าสอน</h2>
+<p class="meta">ช่วงเวลา: ${rangeLabel}&ensp;|&ensp;วันที่พิมพ์: ${now}&ensp;|&ensp;คาบค้างรวม: <strong>${adminUnfilled.value.length}</strong> คาบ จาก <strong>${uniqueTeacherCount.value}</strong> ครู</p>
+<table>
+  <thead><tr>
+    <th style="width:40px">ที่</th>
+    <th style="width:90px">รหัสครู</th>
+    <th>ชื่อ-สกุล</th>
+    <th style="width:110px">จำนวนคาบค้าง</th>
+  </tr></thead>
+  <tbody>${rows}</tbody>
+</table>
+<div class="sign-row">
+  <div class="sign-box">
+    <div class="sign-line"></div>
+    <div>ผู้อำนวยการโรงเรียน</div>
+    <div style="font-size:12px;color:#555">(ลงนามรับทราบ)</div>
+  </div>
+</div>
+</body></html>`)
+}
+
+function printDetail() {
+  const schoolName = schoolStore.settingsObj?.school_info?.school_name_th || 'โรงเรียน'
+  const now = new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
+  const rangeLabel = `${dayRange.value} วันล่าสุด`
+  const filterLabel = filterTeacher.value
+    ? (teacherOptions.value.find(t => t.id === filterTeacher.value)?.name || filterTeacher.value)
+    : 'ครูทุกคน'
+
+  const detailByTeacher = {}
+  for (const r of filteredRows.value) {
+    const id = r.teacher_plan_id || '—'
+    if (!detailByTeacher[id]) detailByTeacher[id] = { name: r.teacher_plan_name || id, rows: [] }
+    detailByTeacher[id].rows.push(r)
+  }
+  const sections = Object.entries(detailByTeacher).map(([id, { name, rows }]) => `
+    <h3 style="font-size:14px;margin:18px 0 6px;padding:6px 10px;background:#f1f5f9;border-left:4px solid #dc2626">
+      ${id}&ensp;${name}&ensp;<span style="color:#dc2626">(${rows.length} คาบ)</span>
+    </h3>
+    <table style="font-size:13px">
+      <thead><tr>
+        <th style="background:#475569">วันที่</th>
+        <th style="background:#475569;width:50px">คาบ</th>
+        <th style="background:#475569;width:80px">ห้อง</th>
+        <th style="background:#475569">วิชา</th>
+      </tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td>${thaiDateLabel(r.date)}</td>
+        <td style="text-align:center">${r.period || ''}</td>
+        <td style="text-align:center">${r.class_id || ''}</td>
+        <td>${r.subject_name || ''}</td>
+      </tr>`).join('')}</tbody>
+    </table>`).join('')
+
+  openPrint('รายละเอียดการลืมบันทึก', `<!DOCTYPE html><html lang="th">
+<head><meta charset="UTF-8"><title>รายละเอียดการลืมบันทึก</title>
+<style>${printBaseStyle()}</style></head>
+<body>
+<h1>${schoolName}</h1>
+<h2>รายละเอียดการลืมบันทึกเข้าสอน (จำแนกตามครู)</h2>
+<p class="meta">ช่วงเวลา: ${rangeLabel}&ensp;|&ensp;กรอง: ${filterLabel}&ensp;|&ensp;วันที่พิมพ์: ${now}&ensp;|&ensp;รวม <strong>${filteredRows.value.length}</strong> คาบ</p>
+${sections}
+</body></html>`)
 }
 
 onMounted(async () => {
@@ -465,6 +639,29 @@ onMounted(async () => {
   margin-bottom: 5px;
 }
 .mta-stat-label { font-size: 11px; font-weight: 700; opacity: 0.9; }
+
+/* ── Admin: Teacher summary ── */
+.mta-teacher-summary {
+  background: white;
+  border: 2px solid #bfdbfe;
+  border-radius: 14px;
+  padding: 14px 16px 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.mta-teacher-summary-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.mta-teacher-summary-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #1e40af;
+}
+.mta-summary-table { border-radius: 8px; overflow: hidden; }
+.summary-code { font-weight: 800; color: #7c3aed; font-size: 12px; }
 
 /* ── Admin: Filter bar ── */
 .mta-filter-bar {

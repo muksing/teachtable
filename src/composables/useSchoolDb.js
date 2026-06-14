@@ -4,6 +4,13 @@ import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 
+// คืนชื่อตารางที่ถูก Publish แล้ว ถ้ายังไม่เคย Publish → fallback timetable_slots
+function getSlotTable(schoolStore) {
+  return schoolStore.settingsObj?.timetable_published_at
+    ? 'timetable_slots_published'
+    : 'timetable_slots'
+}
+
 // ─── Day mapping ────────────────────────────────────────────────────────────
 const THAI_DAY_TO_NUMBER = {
   จันทร์: 1,
@@ -276,9 +283,24 @@ export function useSchoolDb() {
 
   async function deleteSubject(subjectCode) {
     if (!subjectCode) return
+    const schoolId = authStore.schoolId
+
+    // ลบ timetable_slots ที่ผูกวิชานี้ (ไม่งั้นครูยังเห็นรายการค้างบันทึก)
+    await supabase.from('timetable_slots')
+      .delete()
+      .eq('school_id', schoolId)
+      .eq('subject_id', subjectCode)
+
+    // ลบ teach_actuals ที่ยังไม่ได้บันทึก (is_filled=false) สำหรับวิชานี้
+    await supabase.from('teach_actuals')
+      .delete()
+      .eq('school_id', schoolId)
+      .eq('subject_id', subjectCode)
+      .eq('is_filled', false)
+
     const { error } = await supabase.from('subjects')
       .delete()
-      .eq('school_id', authStore.schoolId)
+      .eq('school_id', schoolId)
       .eq('subject_code', subjectCode)
     if (error) throw error
   }
@@ -498,7 +520,7 @@ export function useSchoolDb() {
   async function getTeachingAssignments() {
     const termId = term()
     const { data, error } = await supabase
-      .from('timetable_slots')
+      .from(getSlotTable(schoolStore))
       .select('class_id, subject_id, subject_name, teacher_id, teacher_name')
       .eq('school_id', authStore.schoolId)
       .eq('term_id', termId)
@@ -980,7 +1002,7 @@ export function useSchoolDb() {
     const dayNum = THAI_DAY_TO_NUMBER[THAI_DAYS_ARR[new Date(dateKey + 'T00:00:00').getDay()]]
     const [slotsRes, actualsRes, teachersRes] = await Promise.all([
       supabase
-        .from('timetable_slots')
+        .from(getSlotTable(schoolStore))
         .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, room_id, slot_type')
         .eq('school_id', schoolId)
         .eq('term_id', timetableTerm)
@@ -1093,7 +1115,7 @@ export function useSchoolDb() {
 
     const [slotsRes, actualsRes, settingsResult, classesRes, teachersRes] = await Promise.all([
       supabase
-        .from('timetable_slots')
+        .from(getSlotTable(schoolStore))
         .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
         .eq('school_id', schoolId)
         .eq('term_id', termId)
@@ -1111,7 +1133,7 @@ export function useSchoolDb() {
         .select('class_name, homeroom_teacher_id')
         .eq('school_id', schoolId),
       supabase.from('teachers')
-        .select('teacher_code, prefix, first_name, last_name')
+        .select('teacher_code, prefix, name, surname')
         .eq('school_id', schoolId),
     ])
     if (slotsRes.error) throw slotsRes.error
@@ -1121,7 +1143,7 @@ export function useSchoolDb() {
     const classesWithHomeroom  = (classesRes.data || []).filter(c => c.homeroom_teacher_id)
     const teacherNameMap = new Map()
     for (const t of (teachersRes?.data || [])) {
-      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim())
+      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim())
     }
 
     const slotsByDay = {}
@@ -1149,8 +1171,11 @@ export function useSchoolDb() {
       const thaiDay     = THAI_DAYS_ARR[d.getDay()]
       const dayNum      = THAI_DAY_TO_NUMBER[thaiDay]
       const slotsForDay = slotsByDay[dayNum] || []
+      const seenKeys    = new Set()  // กัน duplicate slot ในวันเดียวกัน
       for (const slot of slotsForDay) {
-        const key      = `${dateStr}_${slot.class_id}_${slot.period_number}`
+        const key = `${dateStr}_${slot.class_id}_${slot.period_number}`
+        if (seenKeys.has(key)) continue
+        seenKeys.add(key)
         const existing = actualsMap.get(key)
         const slotInfo = {
           subject_plan_id:   slot.subject_id   || '',
@@ -1216,7 +1241,7 @@ export function useSchoolDb() {
     const schoolId = authStore.schoolId
 
     let slotsQ = supabase
-      .from('timetable_slots')
+      .from(getSlotTable(schoolStore))
       .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
       .eq('school_id', schoolId)
       .eq('term_id', termId)

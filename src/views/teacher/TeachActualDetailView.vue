@@ -388,11 +388,13 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
+import { useTimetableSource } from '@/composables/useTimetableSource'
 
 const route       = useRoute()
 const router      = useRouter()
 const authStore   = useAuthStore()
 const schoolStore = useSchoolStore()
+const { slotTable } = useTimetableSource()
 const { getStudents, getBehaviorSettings, getAttendanceStatuses, getSubjects } = useSchoolDb()
 
 const term = () => schoolStore.currentTerm || '2568_1'
@@ -784,7 +786,7 @@ async function loadPage() {
     const [allBeh, subjects, slotRes] = await Promise.all([
       getBehaviorSettings(),
       getSubjects(),
-      supabase.from('timetable_slots')
+      supabase.from(slotTable.value)
         .select('*')
         .eq('school_id', authStore.schoolId)
         .eq('term_id', t)

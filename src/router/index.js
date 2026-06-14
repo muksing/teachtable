@@ -39,6 +39,7 @@ const routes = [
   { path: '/admin/students', name: 'Students', component: () => import('@/views/admin/StudentsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'] } },
   { path: '/admin/behavior-settings', name: 'BehaviorSettings', component: () => import('@/views/admin/BehaviorSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/attendance-status', name: 'AttendanceStatus', component: () => import('@/views/admin/AttendanceStatusView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
+  { path: '/admin/attendance-maeso', name: 'AttendanceMaeSo', component: () => import('@/views/admin/AttendanceMaeSoView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'] } },
   { path: '/admin/teaching-log-settings', name: 'TeachingLogSettings', component: () => import('@/views/admin/TeachingLogSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/school-settings', name: 'SchoolSettings', component: () => import('@/views/admin/SchoolSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/renewal', name: 'Renewal', component: () => import('@/views/admin/RenewalView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
@@ -78,6 +79,11 @@ const routes = [
 
   { path: '/teacher/teach-actual/:id', name: 'TeachActualDetail', component: () => import('@/views/teacher/TeachActualDetailView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'], featureGate: 'teaching_log_enabled' } },
   { path: '/teacher/missed-records', name: 'MissedTeachActual', component: () => import('@/views/teacher/MissedTeachActualView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'], featureGate: 'teaching_log_enabled' } },
+
+  // คะแนนเก็บ
+  { path: '/teacher/score-entry', name: 'ScoreEntry', component: () => import('@/views/teacher/ScoreEntryView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'] } },
+  { path: '/admin/notification-settings', name: 'NotificationSettings', component: () => import('@/views/admin/NotificationTargetSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
+  { path: '/reports/parent-letter', name: 'ParentLetter', component: () => import('@/views/reports/ParentLetterView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'] } },
 
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' }
 ]

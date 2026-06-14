@@ -13,7 +13,9 @@
       <div class="sb-header">
         <div class="sb-school">
           <div class="sb-logo">
-            <img v-if="schoolStore.schoolInfo?.logo_url" :src="schoolStore.schoolInfo.logo_url" class="w-full h-full object-cover rounded-xl" />
+            <img v-if="schoolStore.settingsObj?.logo_url || schoolStore.schoolInfo?.settings?.logo_url || schoolStore.schoolInfo?.logo_url"
+                 :src="schoolStore.settingsObj?.logo_url || schoolStore.schoolInfo?.settings?.logo_url || schoolStore.schoolInfo?.logo_url"
+                 class="w-full h-full object-contain rounded-xl" style="background:#fff;padding:2px;border-radius:10px" />
             <span v-else class="text-2xl">🏫</span>
           </div>
           <div class="sb-school-info">
@@ -222,6 +224,7 @@ const allGroups = computed(() => {
           { to:'/admin/behavior-settings', icon:'📚', bg:'#fef3c7', label:'ตั้งค่าพฤติกรรมการเรียน', sub:'การเรียนและพฤติกรรมทั่วไป', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
           { to:'/admin/teaching-log-settings', icon:'🧾', bg:'#e0f2fe', label:'ตั้งค่าบันทึกเข้าสอน', sub:'Google Drive วันหยุด บันทึกล่วงหน้า', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
           { to:'/admin/teach-actuals', icon:'🗑️', bg:'#fee2e2', label:'จัดการบันทึกเข้าสอน', sub:'ตรวจสอบ ลบข้อมูล', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
+          { to:'/admin/notification-settings', icon:'📩', bg:'#ede9fe', label:'ตั้งค่าจดหมายแจ้งผู้ปกครอง', sub:'เกณฑ์กลุ่มเสี่ยง ข้อความ นัดหมาย', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
         ] : []),
         { type:'section', label:'ทำรายการบันทึกการสอน', icon:'📝', badgeStyle:'background:linear-gradient(90deg,#059669,#10b981);' },
         { to:'/teacher/teaching-log', icon:'📝', bg:'#e0f2fe', label:'บันทึกเข้าสอน (รวมเช็คชื่อ)', sub:'เลือกวัน บันทึกสอนและเช็คชื่อ', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
@@ -230,13 +233,16 @@ const allGroups = computed(() => {
         { to:'/teacher/missed-records', icon:'⚠️', bg:'#fef3c7', label:'รายวิชาที่ลืมบันทึก', sub:'คาบค้างบันทึกในช่วงย้อนหลัง', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/teacher/daily-attendance', icon:'📋', bg:'#f0fdf4', label:'เช็คชื่อรายวัน / สรุปส่ง ผปค.', sub:'ครูประจำชั้น · บันทึกรายวัน · แจ้งผู้ปกครอง', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/teacher/behavior-entry', icon:'📝', bg:'#fdf4ff', label:'บันทึกพฤติกรรม', sub:'เลือกนักเรียน · แนบรูปภาพประกอบ', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'], featureGate: 'behavior_system_enabled' },
+        { to:'/teacher/score-entry', icon:'🔢', bg:'#f0fdf4', label:'บันทึกคะแนนเก็บ', sub:'กรอกคะแนนรายหน่วย · Paste จาก Excel', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         ...(schoolStore.isClubModuleEnabled ? [
           { to:'/teacher/club-open', icon:'🎯', bg:'#ffedd5', label:'เปิดชุมนุม', sub:'ครูเปิดชุมนุมปกติและพิเศษ', roles:[AUTH_ROLES.SCHOOL_TEACHER, 'teacher', AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
         ] : []),
         { type:'section', label:'รายงานการสอน', icon:'📊', badgeStyle:'background:linear-gradient(135deg,#0284c7,#0891b2);color:#fff;' },
         { to:'/reports/teaching-log', icon:'📘', bg:'#dbeafe', label:'รายงานบันทึกสอน', sub:'คาบที่บันทึก/ยังไม่บันทึก', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/reports/attendance', icon:'📋', bg:'#cffafe', label:'รายงานการมาเรียน (รายวิชา)', sub:'สรุปรายคน กรองห้อง/วิชา', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
+        { to:'/admin/attendance-maeso', icon:'🚨', bg:'#fee2e2', label:'รายงานสรุป มส.', sub:'นักเรียนเวลาเรียนต่ำกว่า 80% · PDF รายห้อง/ทั้งหมด', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/reports/behavior', icon:'📈', bg:'#fae8ff', label:'รายงานพฤติกรรม', sub:'คะแนนสะสมและเหตุการณ์', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'], featureGate: 'behavior_system_enabled' },
+        { to:'/reports/parent-letter', icon:'✉️', bg:'#fef9c3', label:'จดหมายแจ้งคะแนนและเวลาเรียน', sub:'พิมพ์ PDF · ส่ง LINE รายคน', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
       ],
     }] : []),
   ];

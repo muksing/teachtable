@@ -254,7 +254,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { supabase } from '@/supabase/client'
 import html2canvas from 'html2canvas'
@@ -267,11 +267,13 @@ import { useSchoolStore } from '@/stores/school'
 import { useTimetable } from '@/composables/useTimetable'
 import { useSignature } from '@/composables/useSignature'
 import { useSchoolDb } from '@/composables/useSchoolDb'
+import { useTimetableSource } from '@/composables/useTimetableSource'
 
 const schoolStore = useSchoolStore()
 const authStore = useAuthStore()
 const { buildSignatureHTML, getModuleSignatures } = useSignature()
 const { getRooms, getTeachers, getClasses } = useSchoolDb()
+const { slotTable } = useTimetableSource()
 const term = computed(() => schoolStore.currentTerm || '2568_1')
 const isLocked = computed(() => schoolStore.isTimetableLocked)
 const { DAYS, PERIODS, PERIOD_TIMES } = useTimetable()
@@ -305,7 +307,10 @@ const totalPages = computed(() =>
   selectedClasses.value.length + selectedTeachers.value.length + selectedLabs.value.length
 )
 
-const subjectSlotCount = computed(() => slots.value.filter(s => s.type === 'subject').length)
+// นับ 'subject' และ 'normal' (slots เก่าจาก migration)
+const subjectSlotCount = computed(() =>
+  slots.value.filter(s => s.type === 'subject' || s.type === 'normal' || !s.type).length
+)
 
 // ── ระดับชั้น ──────────────────────────────────────────────────────────
 // ดึง level จาก c.level (field จากระบบ) หรือ fallback parse จาก class_id
@@ -381,17 +386,24 @@ function clearAll(type) {
 }
 
 onMounted(loadData)
+// reload เมื่อ auth พร้อม (schoolId กลายเป็น non-null หลัง session restore)
+watch(() => authStore.schoolId, (id) => { if (id && !slots.value.length) loadData() })
+// reload เมื่อ admin ล็อคตาราง (เหมือน MyTimetableView)
+watch(isLocked, (locked) => { if (locked) loadData() })
+
 async function loadData() {
+  const schoolId = authStore.schoolId
+  if (!schoolId) return  // auth ยังไม่พร้อม — watch จะ trigger ใหม่
   loading.value = true
   try {
-    const schoolId = authStore.schoolId
     const t = term.value
+    console.log('[PrintTimetable] loadData start — schoolId:', schoolId, 'term:', t)
 
     // โหลดพร้อมกัน: ห้องเรียน, ครู, timetable_slots
     const [classData, teacherData, { data: slotData, error: slotErr }] = await Promise.all([
       getClasses(),
       getTeachers(),
-      supabase.from('timetable_slots')
+      supabase.from(slotTable.value)
         .select('*')
         .eq('school_id', schoolId)
         .eq('term_id', t)
@@ -411,8 +423,24 @@ async function loadData() {
       preferred_room: row.room_id || '',
       type:           row.slot_type,
       subject_code:   row.subject_id || '',
+      // fallback: ถ้า subject_name null ใช้ subject_id (รหัสวิชา) แทน
+      subject_name:   row.subject_name || row.subject_id || '',
+      // fallback: ถ้า teacher_name null ใช้ teacher_id แทน
+      teacher_name:   row.teacher_name || row.teacher_id || '',
       is_coteach:     false,
     }))
+
+    console.log('[PrintTimetable] loaded slots:', slots.value.length,
+      '| classes:', classes.value.length,
+      '| teachers:', teachers.value.length)
+    if (slots.value.length > 0) {
+      const s = slots.value[0]
+      console.log('[PrintTimetable] sample slot:', {
+        class_id: s.class_id, teacher_id: s.teacher_id,
+        subject_code: s.subject_code, subject_name: s.subject_name,
+        teacher_name: s.teacher_name, day: s.day, period: s.period, type: s.type,
+      })
+    }
 
     // Labs = room IDs จาก subject slots เท่านั้น
     const occupiedRoomIds = new Set(
@@ -424,6 +452,7 @@ async function loadData() {
     const subjectCount = slots.value.filter(s => s.type === 'subject').length
     if (!subjectCount) ElMessage.warning('ยังไม่มีคาบวิชา — จัดตารางสอนก่อนแล้วค่อยพิมพ์')
   } catch (e) {
+    console.error('[PrintTimetable] loadData error:', e)
     ElMessage.error('โหลดข้อมูลล้มเหลว: ' + e.message)
   } finally {
     loading.value = false
@@ -436,18 +465,21 @@ function truncate(str, n) {
   return str.length > limit ? str.substring(0, limit - 1) + '…' : str
 }
 
-// ดึง slots สำหรับ entity นั้น
+// ดึง slots สำหรับ entity นั้น — ใช้ String() เพื่อป้องกัน type mismatch
 function getEntitySlots(entityId, entityType) {
+  const eid = String(entityId || '').trim()
   return slots.value.filter(s => {
-    if (entityType === 'class')   return s.class_id === entityId && !s.is_coteach
-    if (entityType === 'teacher') return s.teacher_id === entityId && !s.is_coteach
-    if (entityType === 'lab')     return s.preferred_room === entityId
+    if (entityType === 'class')   return String(s.class_id   || '').trim() === eid
+    if (entityType === 'teacher') return String(s.teacher_id || '').trim() === eid
+    if (entityType === 'lab')     return String(s.preferred_room || '').trim() === eid
     return false
   })
 }
 
 function getSlot(entityId, entityType, day, period) {
-  return getEntitySlots(entityId, entityType).find(s => s.day === day && s.period === period) || null
+  const d = Number(day), p = Number(period)
+  return getEntitySlots(entityId, entityType)
+    .find(s => Number(s.day) === d && Number(s.period) === p) || null
 }
 
 // สร้าง reference list พร้อมจำนวนคาบ
@@ -565,7 +597,7 @@ function buildPageHTML(entityId, entityType) {
 
       if (!slot) {
         cellHtml = `<div style="color:#cbd5e1;text-align:center;font-size:8pt;line-height:1.8;padding-top:2px;">-</div>`
-      } else if (slot.type === 'activity' || slot.type === 'manual_lock') {
+      } else if (slot.type === 'activity' || slot.type === 'manual_lock' || slot.type === 'lock') {
         cellHtml = `<div style="text-align:center;padding:2px 3px;font-size:7.2pt;color:#6b7280;line-height:1.7;
           border-left:3px solid ${dayColor.line};border-radius:7px;background:linear-gradient(180deg, #ffffff 0%, ${dayColor.soft} 100%);">
           🔒 ${truncate(slot.act_name || slot.name || 'กิจกรรม', 14)}</div>`
@@ -724,6 +756,21 @@ const tdStyle = `border:1px solid #e5e7eb;padding:1px 6px 7px;font-size:7.5pt;li
 // Export PDF — render ทีละหน้า element ต้องอยู่ใน viewport จริง (browser ไม่ paint นอก viewport)
 async function exportPDF(section) {
   const items = getItems(section)
+  console.log('[PrintTimetable] exportPDF section:', section, '| items:', items.length, '| total slots:', slots.value.length)
+  if (slots.value.length > 0) {
+    const s = slots.value[0]
+    console.log('[PrintTimetable] sample slot for PDF:', { class_id: s.class_id, teacher_id: s.teacher_id, subject_code: s.subject_code, subject_name: s.subject_name, teacher_name: s.teacher_name, day: s.day, period: s.period })
+  }
+  if (items.length > 0) {
+    const testItem = items[0]
+    const matchedSlots = getEntitySlots(testItem.id, testItem.type)
+    console.log('[PrintTimetable] getEntitySlots("' + testItem.id + '", "' + testItem.type + '") →', matchedSlots.length, 'slots')
+    if (matchedSlots.length === 0 && slots.value.length > 0) {
+      // แสดงตัวอย่าง class_ids ทั้งหมดใน slots เพื่อเทียบกับ testItem.id
+      const ids = [...new Set(slots.value.map(s => s.class_id || s.teacher_id))].slice(0, 5)
+      console.log('[PrintTimetable] slots IDs sample:', ids, '| searching for:', testItem.id)
+    }
+  }
   if (!items.length) return
   generating.value = `${section}_pdf`
 

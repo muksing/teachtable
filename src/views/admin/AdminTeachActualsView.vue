@@ -105,10 +105,12 @@ import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
+import { useTimetableSource } from '@/composables/useTimetableSource'
 
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
-const { getClasses, getTeachers, getSubjects } = useSchoolDb()
+const { slotTable } = useTimetableSource()
+const { getClasses, getTeachers, getSubjects, getSchoolSettings } = useSchoolDb()
 
 const loading = ref(false)
 const filterDate = ref('')
@@ -137,43 +139,85 @@ async function loadData() {
   loading.value = true
   try {
     const schoolId = authStore.schoolId
-    const term = schoolStore.currentTerm || '2568_1'
+    const termId = schoolStore.currentTerm || '2568_1'
 
-    let query = supabase
+    // query teach_actuals ตรงๆ (เฉพาะ records ที่มีจริงใน DB)
+    let actualsQ = supabase
       .from('teach_actuals')
       .select('*')
       .eq('school_id', schoolId)
-      .eq('term_id', term)
+      .eq('term_id', termId)
+    if (filterDate.value) actualsQ = actualsQ.eq('date', filterDate.value)
+    else if (filterClass.value) actualsQ = actualsQ.eq('class_id', filterClass.value)
 
-    // Apply primary filter server-side; secondary filters applied in memory
-    if (filterDate.value) {
-      query = query.eq('date', filterDate.value)
-    } else if (filterClass.value) {
-      query = query.eq('class_id', filterClass.value)
-    } else if (filterSubject.value) {
-      query = query.eq('subject_id', filterSubject.value)
+    // load timetable_slots คู่กันเพื่อ enrich ชื่อครู + วิชา
+    const [actualsRes, slotsRes] = await Promise.all([
+      actualsQ,
+      supabase
+        .from(slotTable.value)
+        .select('class_id, period_number, day_of_week, teacher_id, teacher_name, subject_id, subject_name')
+        .eq('school_id', schoolId)
+        .eq('term_id', termId),
+    ])
+    if (actualsRes.error) throw actualsRes.error
+
+    // โหลด teachers + settings (สำหรับ enrich homeroom records)
+    const [settingsResult, teachersRes] = await Promise.all([
+      getSchoolSettings(),
+      supabase.from('teachers').select('teacher_code, prefix, name, surname').eq('school_id', schoolId),
+    ])
+    const homeroomPeriods = settingsResult.teaching_log_settings?.homeroom_special_periods || []
+
+    // สร้าง lookup: classId_periodNum_dayOfWeek → slot (สำหรับ regular)
+    const THAI_DAYS_ARR_LOCAL = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์']
+    const THAI_DAY_TO_NUM = { อาทิตย์:7, จันทร์:1, อังคาร:2, พุธ:3, พฤหัสบดี:4, ศุกร์:5, เสาร์:6 }
+    const slotMap = new Map()
+    for (const s of (slotsRes.data || [])) {
+      slotMap.set(`${s.class_id}_${s.period_number}_${s.day_of_week}`, s)
+    }
+    const teacherNameMap = new Map()
+    for (const t of (teachersRes.data || [])) {
+      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim())
+    }
+    // lookup homeroom teacher ของแต่ละห้อง: class_name → homeroom_teacher_id
+    const classHomeroomMap = new Map()
+    for (const c of classesList.value) {
+      if (c.homeroom_teacher_id) classHomeroomMap.set(c.class_name || c.class_id, c.homeroom_teacher_id)
     }
 
-    const { data, error } = await query
-    if (error) throw error
+    allData.value = (actualsRes.data || [])
+      .map(row => {
+        const isHomeroom = row.slot_type === 'homeroom'
+        const dayName = THAI_DAYS_ARR_LOCAL[new Date((row.date || '') + 'T00:00:00').getDay()]
+        const dayNum = THAI_DAY_TO_NUM[dayName]
+        const slot = isHomeroom ? null : slotMap.get(`${row.class_id}_${row.period_number}_${dayNum}`)
 
-    allData.value = (data || [])
-      .map(row => ({
-        ...row,
-        period: row.period_number,
-        teacher_plan_name: row.planned_teacher_id,
-        subject_name: row.subject_id,
-        teacher_plan_id: row.planned_teacher_id,
-        subject_plan_id: row.subject_id,
-        subject_actual_teacher_id: row.actual_teacher_id,
-        subject_actual_id: row.subject_id,
-      }))
+        let teacherName = teacherNameMap.get(slot?.teacher_id) || slot?.teacher_name || row.planned_teacher_id || ''
+        let subjectName = slot?.subject_name || row.subject_id || ''
+
+        if (isHomeroom) {
+          // ดึงชื่อครูที่ปรึกษาจาก classes
+          const hmTeacherId = classHomeroomMap.get(row.class_id) || ''
+          teacherName = teacherNameMap.get(hmTeacherId) || hmTeacherId
+          // ดึงชื่อวิชาจาก settings โดย match period_number
+          const hp = homeroomPeriods.find(p => Number(p.period) === row.period_number)
+          subjectName = hp?.name || 'เข้าแถว/โฮมรูม'
+        }
+
+        return {
+          ...row,
+          period: row.period_number,
+          teacher_plan_name: teacherName,
+          subject_name: subjectName,
+          teacher_plan_id: slot?.teacher_id || row.planned_teacher_id || '',
+          subject_plan_id: slot?.subject_id || row.subject_id || '',
+        }
+      })
       .sort((a, b) => {
         if (a.date !== b.date) return a.date > b.date ? -1 : 1
         if (a.class_id !== b.class_id) return a.class_id > b.class_id ? 1 : -1
         return (a.period_number || 0) - (b.period_number || 0)
       })
-
     filterData()
   } catch (error) {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ: ' + error.message)

@@ -441,21 +441,9 @@ function getPeriodTime(period) {
 
 const THAI_DAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์']
 
-// ── ข้อมูลภาคเรียนจาก school_info (ไม่ใช่จาก currentTerm) ─────────────────
+// ── ข้อมูลภาคเรียนจากข้อมูลพื้นฐานโรงเรียน ─────────────────────────────────
 const schoolInfo_ = computed(() => schoolStore.settingsObj?.school_info || {})
-const termDisplay = computed(() => {
-  const si = schoolInfo_.value
-  const y = si.year
-  const s = si.semester
-  if (y && s) return `ปีการศึกษา ${y} ภาคเรียนที่ ${s}`
-  // fallback: parse '2568_1' → 'ปีการศึกษา 2568 ภาคเรียนที่ 1'
-  const ct = schoolStore.currentTerm || ''
-  if (ct.includes('_')) {
-    const [yr, sem] = ct.split('_')
-    if (yr && sem) return `ปีการศึกษา ${yr} ภาคเรียนที่ ${sem}`
-  }
-  return ct || '-'
-})
+const termDisplay = computed(() => schoolStore.termLabel)
 
 // ─── Date ───────────────────────────────────────────────────────────────
 const selectedDate = ref(new Date().toISOString().split('T')[0])

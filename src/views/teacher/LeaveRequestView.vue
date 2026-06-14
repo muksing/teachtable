@@ -227,7 +227,7 @@ import { useSchoolDb } from '@/composables/useSchoolDb'
 const schoolStore = useSchoolStore()
 const authStore   = useAuthStore()
 const {
-  getPublishedTimetableSlots, filterSlotsForTeacherOnDate,
+  getTimetable, filterSlotsForTeacherOnDate,
   createLeaveRequest, getLeaveRequests, cancelLeaveRequest,
 } = useSchoolDb()
 
@@ -365,7 +365,7 @@ async function onDatesChange(dates) {
   loadingSlots.value = true
   try {
     if (!timetable.value.length) {
-      timetable.value = await getPublishedTimetableSlots()
+      timetable.value = await getTimetable()
     }
     const found = []
     const empty = []

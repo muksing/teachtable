@@ -6,10 +6,13 @@
 
     <div class="login-card">
       <div class="brand">
-        <div class="brand-icon">🏫</div>
+        <div class="brand-icon">
+          <img v-if="schoolLogo" :src="schoolLogo" class="brand-logo-img" alt="โลโก้โรงเรียน" />
+          <span v-else>🏫</span>
+        </div>
         <div>
-          <div class="brand-name">TeachTable</div>
-          <div class="brand-sub">ระบบจัดการโรงเรียน</div>
+          <div class="brand-name">{{ schoolDisplayName || 'TeachTable' }}</div>
+          <div class="brand-sub">{{ schoolDisplayName ? 'ระบบบริหารจัดการโรงเรียน' : 'ระบบจัดการโรงเรียน' }}</div>
         </div>
       </div>
 
@@ -62,6 +65,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMasterAuth } from '@/composables/useMasterAuth'
 import { useAuthStore } from '@/stores/auth'
+import { supabase } from '@/supabase/client'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -80,10 +84,30 @@ const rules = {
   ]
 }
 
-onMounted(() => {
+const schoolLogo       = ref('')
+const schoolDisplayName = ref('')
+
+async function loadSchoolBranding() {
+  try {
+    const { data } = await supabase
+      .from('schools')
+      .select('name, settings')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .single()
+    if (data) {
+      schoolDisplayName.value = data.settings?.school_info?.school_name_th || data.name || ''
+      schoolLogo.value        = data.settings?.logo_url || ''
+    }
+  } catch { /* หน้า login ไม่แสดง error ถ้าโหลดไม่ได้ */ }
+}
+
+onMounted(async () => {
   if (authStore.isLoggedIn) {
     router.push(authStore.isSuperAdmin ? '/superadmin/dashboard' : '/dashboard')
+    return
   }
+  loadSchoolBranding()
 })
 
 async function handleLogin() {
@@ -179,6 +203,16 @@ async function handleLogin() {
   background: linear-gradient(145deg, #0284c7, #0ea5e9);
   font-size: 26px;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.brand-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 14px;
+  background: white;
+  padding: 4px;
 }
 
 .brand-name {
