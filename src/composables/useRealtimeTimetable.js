@@ -88,12 +88,16 @@ export function useRealtimeTimetable() {
     const sid = schoolId()
     const t = term()
 
+    console.log('[RT subscribe] schoolId:', sid, '| term:', t)
+
     // โหลดข้อมูลเริ่มต้น
     const { data, error } = await supabase
       .from('timetable_slots')
       .select('*')
       .eq('school_id', sid)
       .eq('term_id', t)
+
+    console.log('[RT subscribe] loaded slots:', data?.length ?? 0, '| error:', error?.message)
 
     if (!error && data) {
       const slots = data.map(rowToSlot)
@@ -227,6 +231,8 @@ export function useRealtimeTimetable() {
       id: safeId(day, period, slot.class_id),
     })
 
+    console.log('[placeSlot] writing:', { school_id: sid, term_id: t, class_id: payload.class_id, day: payload.day, period: payload.period })
+
     const { data, error } = await supabase
       .from('timetable_slots')
       .upsert({
@@ -246,6 +252,8 @@ export function useRealtimeTimetable() {
         updated_at: new Date().toISOString(),
       }, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
       .select()
+
+    console.log('[placeSlot] result rows:', data?.length ?? 0, '| error:', error?.message)
 
     if (error) {
       console.error('[placeSlot] DB error:', error, { school_id: sid, term_id: t, class_id: payload.class_id })
