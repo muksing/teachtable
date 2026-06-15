@@ -90,18 +90,26 @@ export function useRealtimeTimetable() {
 
     console.log('[RT subscribe] schoolId:', sid, '| term:', t)
 
-    // โหลดข้อมูลเริ่มต้น (limit 5000 เพื่อเลี่ยง Supabase default cap 1000)
-    const { data, error } = await supabase
-      .from('timetable_slots')
-      .select('*')
-      .eq('school_id', sid)
-      .eq('term_id', t)
-      .limit(5000)
+    // โหลดทุกแถว (pagination กัน Supabase max_rows cap)
+    let allRows = []
+    const PAGE = 1000
+    let pageError = null
+    for (let from = 0; ; from += PAGE) {
+      const { data: page, error: err } = await supabase
+        .from('timetable_slots')
+        .select('*')
+        .eq('school_id', sid)
+        .eq('term_id', t)
+        .range(from, from + PAGE - 1)
+      if (err) { pageError = err; break }
+      if (page?.length) allRows = allRows.concat(page)
+      if (!page || page.length < PAGE) break
+    }
 
-    console.log('[RT subscribe] loaded slots:', data?.length ?? 0, '| error:', error?.message)
+    console.log('[RT subscribe] loaded slots:', allRows.length, '| error:', pageError?.message)
 
-    if (!error && data) {
-      const slots = data.map(rowToSlot)
+    if (!pageError) {
+      const slots = allRows.map(rowToSlot)
       timetableSlots.value = slots
       rebuildMaps(slots)
       connected.value = true
@@ -483,18 +491,22 @@ export function useRealtimeTimetable() {
   async function reload() {
     const sid = schoolId()
     const t = term()
-    const { data, error } = await supabase
-      .from('timetable_slots')
-      .select('*')
-      .eq('school_id', sid)
-      .eq('term_id', t)
-      .limit(5000)
-    if (error) throw error
-    if (data) {
-      const slots = data.map(rowToSlot)
-      timetableSlots.value = slots
-      rebuildMaps(slots)
+    let allSlots = []
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data: chunk, error } = await supabase
+        .from('timetable_slots')
+        .select('*')
+        .eq('school_id', sid)
+        .eq('term_id', t)
+        .range(from, from + PAGE - 1)
+      if (error) throw error
+      if (chunk?.length) allSlots = allSlots.concat(chunk)
+      if (!chunk || chunk.length < PAGE) break
     }
+    const slots = allSlots.map(rowToSlot)
+    timetableSlots.value = slots
+    rebuildMaps(slots)
   }
 
   return {
