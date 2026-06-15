@@ -2536,10 +2536,19 @@ function handleExportCommand(cmd) {
 async function exportTimetableExcel() {
   const schoolId = authStore.schoolId
   const t = term()
-  const { data, error } = await supabase
-    .from('timetable_slots').select('*')
-    .eq('school_id', schoolId).eq('term_id', t)
-  if (error) { ElMessage.error('ส่งออกล้มเหลว: ' + error.message); return }
+  // paginate to bypass 1000-row server cap
+  let allData = []
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data: chunk, error } = await supabase
+      .from('timetable_slots').select('*')
+      .eq('school_id', schoolId).eq('term_id', t)
+      .range(from, from + PAGE - 1)
+    if (error) { ElMessage.error('ส่งออกล้มเหลว: ' + error.message); return }
+    if (chunk?.length) allData = allData.concat(chunk)
+    if (!chunk || chunk.length < PAGE) break
+  }
+  const data = allData
 
   const subjectSlots = (data || []).filter(s =>
     s.slot_type === 'subject' && s.class_id && !String(s.class_id).startsWith('__')
@@ -2552,7 +2561,8 @@ async function exportTimetableExcel() {
   const wb = XLSX.utils.book_new()
 
   // ── Sheet 1: รายการทั้งหมด ──────────────────────────────────────────────
-  const listHeaders = ['ห้องเรียน', 'วัน', 'คาบ', 'เวลา', 'รหัสวิชา', 'รายวิชา', 'ครูผู้สอน', 'ห้อง/Lab']
+  // Format ตรงกับ import: ห้อง | วัน | คาบ | รหัสวิชา | ชื่อวิชา | รหัสครู | ชื่อครู | ห้อง
+  const listHeaders = ['ห้องเรียน', 'วัน', 'คาบ', 'รหัสวิชา', 'รายวิชา', 'รหัสครู', 'ชื่อครู', 'ห้อง/Lab']
   const listRows = [...subjectSlots]
     .sort((a, b) =>
       (a.class_id || '').localeCompare(b.class_id || '') ||
@@ -2562,9 +2572,9 @@ async function exportTimetableExcel() {
       s.class_id,
       dayLabels[s.day_of_week] || s.day_of_week,
       s.period_number,
-      periodTimes[s.period_number] || '',
       s.subject_id || '',
       s.subject_name || '',
+      s.teacher_id || '',
       s.teacher_name || '',
       s.room_id || '',
     ])
@@ -2742,10 +2752,12 @@ async function handleImportExcel(event) {
     rt.timetableSlots.value.map(s => `${s.class_id}_${s.day}_${s.period}`)
   )
 
-  // build assign lookup: `classId_subjectId_teacherId` → assign_id
+  // build assign lookup: by teacher_id (primary) and teacher_name (fallback for old exports)
   const assignLookup = {}
+  const assignLookupByName = {}
   assignments.value.forEach(a => {
     assignLookup[`${a.class_id}_${a.subject_code}_${a.teacher_id}`] = a.assign_id || a.id
+    assignLookupByName[`${a.class_id}_${a.subject_code}_${a.teacher_name}`] = a.assign_id || a.id
   })
 
   const rows = dataRows.map((r, idx) => {
@@ -2760,7 +2772,9 @@ async function handleImportExcel(event) {
     const teacher_name = String(teacherNameRaw || '').trim()
     const room_id = String(roomRaw || '').trim() || null
 
-    const assign_id = assignLookup[`${class_id}_${subject_id}_${teacher_id}`] || null
+    const assign_id = assignLookup[`${class_id}_${subject_id}_${teacher_id}`]
+      || assignLookupByName[`${class_id}_${subject_id}_${teacher_name}`]
+      || null
     const key = `${class_id}_${day_of_week}_${period_number}`
 
     let _error = null
