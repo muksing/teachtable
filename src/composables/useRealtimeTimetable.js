@@ -247,10 +247,21 @@ export function useRealtimeTimetable() {
       }, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
       .select()
 
-    if (error) throw error
+    if (error) {
+      console.error('[placeSlot] DB error:', error, { school_id: sid, term_id: t, class_id: payload.class_id })
+      throw error
+    }
+
+    if (!data || data.length === 0) {
+      // Write was silently blocked — most likely causes:
+      // 1) RLS policy on timetable_slots blocks INSERT for this user
+      // 2) Unique constraint (school_id,term_id,class_id,day_of_week,period_number) missing
+      console.error('[placeSlot] silent failure — DB returned no rows', { school_id: sid, term_id: t })
+      throw new Error('บันทึกคาบสอนล้มเหลว\nสาเหตุที่เป็นไปได้: RLS policy ไม่อนุญาต หรือ unique constraint ขาดหาย\nกรุณาตรวจสอบ Supabase dashboard หรือแจ้งผู้ดูแลระบบ')
+    }
 
     // อัปเดต local state ทันที (ไม่ต้องรอ realtime)
-    const newSlot = data?.[0] ? rowToSlot(data[0]) : { ...payload, _db_id: null }
+    const newSlot = rowToSlot(data[0])
     const key = newSlot.id  // composite key
     const idx = timetableSlots.value.findIndex(s => s.id === key)
     if (idx >= 0) {

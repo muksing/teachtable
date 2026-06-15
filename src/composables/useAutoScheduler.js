@@ -189,11 +189,19 @@ export function useAutoScheduler() {
             updated_at: ts,
           }))
 
-          const { error: upsertErr } = await supabase
+          const { data: upsertData, error: upsertErr } = await supabase
             .from('timetable_slots')
             .upsert(rows, { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+            .select('id')
 
-          if (upsertErr) throw upsertErr
+          if (upsertErr) {
+            console.error('[autoScheduler] upsert error:', upsertErr)
+            throw upsertErr
+          }
+          if (!upsertData || upsertData.length === 0) {
+            console.error('[autoScheduler] silent write failure — DB returned 0 rows', { school_id: sid, rows: rows.length })
+            throw new Error('บันทึกตารางสอนล้มเหลว (DB ไม่รับข้อมูล)\nกรุณาตรวจสอบ RLS policy ของตาราง timetable_slots ใน Supabase')
+          }
         }
         log('✅ บันทึกสำเร็จ!')
 
