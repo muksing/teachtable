@@ -37,21 +37,31 @@ export function useAutoScheduler() {
       const sid = schoolId()
       const t = term()
 
-      // 1. โหลดข้อมูลทั้งหมดจาก Supabase
-      const [slotsRes, activitiesRes] = await Promise.all([
-        supabase.from('timetable_slots').select('*').eq('school_id', sid).eq('term_id', t),
-        supabase.from('activity_bookings').select('*').eq('school_id', sid).eq('term_id', t),
-      ])
+      // 1. โหลดข้อมูลทั้งหมดจาก Supabase (pagination กัน 1000-row cap)
+      const PAGE = 1000
+      let allSlotRows = []
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from('timetable_slots').select('*')
+          .eq('school_id', sid).eq('term_id', t)
+          .range(from, from + PAGE - 1)
+        if (error) throw error
+        if (data?.length) allSlotRows = allSlotRows.concat(data)
+        if (!data || data.length < PAGE) break
+      }
 
-      if (slotsRes.error) throw slotsRes.error
+      const activitiesRes = await supabase
+        .from('activity_bookings').select('*').eq('school_id', sid).eq('term_id', t)
       if (activitiesRes.error) throw activitiesRes.error
+
+      log(`📋 โหลด slot ${allSlotRows.length} คาบ`)
 
       // สร้าง grid state
       const grid = {}
       const teacherGrid = {}
       const roomGrid = {}
 
-      ;(slotsRes.data || []).forEach(row => {
+      ;(allSlotRows || []).forEach(row => {
         const s = {
           id: `${row.day_of_week}_${row.period_number}_${row.class_id}`,
           _db_id: row.id,
