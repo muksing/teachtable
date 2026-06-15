@@ -90,12 +90,13 @@ export function useRealtimeTimetable() {
 
     console.log('[RT subscribe] schoolId:', sid, '| term:', t)
 
-    // โหลดข้อมูลเริ่มต้น
+    // โหลดข้อมูลเริ่มต้น (limit 5000 เพื่อเลี่ยง Supabase default cap 1000)
     const { data, error } = await supabase
       .from('timetable_slots')
       .select('*')
       .eq('school_id', sid)
       .eq('term_id', t)
+      .limit(5000)
 
     console.log('[RT subscribe] loaded slots:', data?.length ?? 0, '| error:', error?.message)
 
@@ -487,6 +488,7 @@ export function useRealtimeTimetable() {
       .select('*')
       .eq('school_id', sid)
       .eq('term_id', t)
+      .limit(5000)
     if (error) throw error
     if (data) {
       const slots = data.map(rowToSlot)
