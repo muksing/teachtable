@@ -52,6 +52,13 @@ export const useSchoolStore = defineStore('school', () => {
   const isTeachingLogEnabled = computed(() => isFeatureEnabled('teaching_log_enabled'))
   const isClubModuleEnabled = computed(() => isFeatureEnabled('club_module_enabled'))
 
+  const isBehaviorSystemEnabled = computed(() => {
+    const tl = schoolInfo.value?.settings?.teaching_log_settings || {}
+    if (typeof tl.behavior_system_enabled === 'boolean') return tl.behavior_system_enabled
+    if (typeof schoolInfo.value?.behavior_system_enabled === 'boolean') return schoolInfo.value.behavior_system_enabled
+    return true
+  })
+
   const pricingPlan = computed(() => {
     const raw = settingsObj.value.pricing_plan || schoolInfo.value?.pricing_plan
     if (!raw || typeof raw !== 'object') return null
@@ -148,6 +155,7 @@ export const useSchoolStore = defineStore('school', () => {
     isFeatureEnabled,
     isTeachingLogEnabled,
     isClubModuleEnabled,
+    isBehaviorSystemEnabled,
     pricingPlan,
     subscriptionStatus,
     schedulerLimit,

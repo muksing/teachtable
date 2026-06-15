@@ -378,7 +378,7 @@ import { useSchoolDb } from '@/composables/useSchoolDb'
 
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
-const { getPublishedTimetableSlots, generateTeachActualsForDate } = useSchoolDb()
+const { getTimetable, generateTeachActualsForDate } = useSchoolDb()
 
 const schoolId = computed(() => authStore.schoolId)
 
@@ -497,7 +497,7 @@ async function generateWeekRecords() {
     const schoolDays = schoolStore.schoolInfo?.school_days || ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์']
     const holidays = normalizeHolidays(form.holidays)
     const holidaySet = new Set(holidays.map(h => h.date))
-    const timetable = await getPublishedTimetableSlots()
+    const timetable = await getTimetable()
 
     let total = 0
     for (let i = 0; i < 7; i++) {
@@ -608,6 +608,10 @@ async function saveSettings() {
     schoolStore.setSchool({
       ...(schoolStore.schoolInfo || {}),
       ...payload,
+      settings: {
+        ...(schoolStore.schoolInfo?.settings || {}),
+        teaching_log_settings: payload,
+      },
     })
 
     ElMessage.success('บันทึกการตั้งค่าเรียบร้อยแล้ว')

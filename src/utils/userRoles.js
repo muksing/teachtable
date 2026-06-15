@@ -76,6 +76,7 @@ export function getPrimaryRole(dataOrRoles) {
 }
 
 export function normalizeUserAccessRecord(data = {}) {
+  if (!data) data = {}  // default {} ไม่ครอบ null — ต้องจัดการแยก
   const roles = canonicalizeRoles(extractRolesFromUser(data))
   const primaryRole = roles[0] || null
   const schoolRole = toLegacySchoolRole(primaryRole)

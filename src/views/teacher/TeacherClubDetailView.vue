@@ -190,37 +190,46 @@
               </el-table-column>
             </el-table>
 
-            <!-- File upload — required for new session -->
+            <!-- File upload section -->
             <div class="mt-4 pt-3" style="border-top:1px solid #e2e8f0">
-              <div class="flex items-center gap-2 mb-2">
+              <div class="flex items-center gap-2 mb-3">
                 <span class="text-sm font-semibold text-gray-600">📎 ภาพประกอบกิจกรรม</span>
                 <el-tag v-if="!editingSessionId" type="danger" size="small">บังคับ</el-tag>
-                <span class="text-xs text-gray-400">(สูงสุด 5 ไฟล์)</span>
               </div>
-              <div class="flex flex-wrap gap-2 items-center">
-                <label class="club-file-btn">
-                  <input type="file" accept="image/*" multiple @change="onFileChange" style="display:none" />
-                  📁 เลือกภาพ
-                </label>
-                <div v-for="(f, i) in sessionFiles" :key="i" class="club-file-tag">
-                  {{ f.name }}
-                  <button class="ml-1 text-red-400" @click="removeFile(i)">✕</button>
+
+              <!-- Existing saved images -->
+              <div v-if="editingFileUrls.length" class="mb-3">
+                <div class="text-xs text-gray-500 mb-2">ภาพที่บันทึกแล้ว ({{ editingFileUrls.length }} ภาพ)</div>
+                <div class="flex flex-wrap gap-2">
+                  <div v-for="f in editingFileUrls" :key="f.url" class="club-img-card">
+                    <a :href="f.url" target="_blank" rel="noopener">
+                      <img :src="getThumbnailUrl(f.url)" class="club-img-thumb" :alt="f.name || 'ภาพกิจกรรม'" />
+                    </a>
+                    <button class="club-img-del" @click.prevent="removeExistingFile(f)" title="ลบภาพ">✕</button>
+                  </div>
                 </div>
               </div>
-            </div>
-            <!-- Existing images -->
-            <div v-if="editingFileUrls.length" class="mt-3">
-              <div class="text-sm font-semibold text-gray-600 mb-2">🖼 ภาพที่บันทึกแล้ว ({{ editingFileUrls.length }} ภาพ)</div>
-              <div class="flex flex-wrap gap-3">
-                <div v-for="f in editingFileUrls" :key="f.url" class="relative group">
-                  <a :href="f.url" target="_blank" rel="noopener">
-                    <img :src="getThumbnailUrl(f.url)"
-                      class="w-28 h-28 object-cover rounded-xl border-2 border-gray-200 hover:border-indigo-400 transition"
-                      :alt="f.name || 'ภาพกิจกรรม'" />
-                  </a>
+
+              <!-- Newly selected images preview -->
+              <div v-if="sessionFiles.length" class="mb-3">
+                <div class="text-xs text-gray-500 mb-2">ภาพใหม่ที่รอบันทึก ({{ sessionFiles.length }} ภาพ)</div>
+                <div class="flex flex-wrap gap-2">
+                  <div v-for="(f, i) in sessionFiles" :key="i" class="club-img-card">
+                    <img :src="previewUrls[i]" class="club-img-thumb" :alt="f.name" />
+                    <button class="club-img-del" @click="removeFile(i)" title="ลบ">✕</button>
+                    <div class="club-img-name">{{ f.name }}</div>
+                  </div>
                 </div>
               </div>
-              <div class="text-xs text-gray-400 mt-1">คลิกภาพเพื่อดูขนาดเต็ม — อัพโหลดภาพใหม่ด้านบนเพื่อเพิ่มภาพ</div>
+
+              <!-- Add button -->
+              <label class="club-file-btn">
+                <input type="file" accept="image/*" multiple @change="onFileChange" style="display:none" />
+                + เพิ่มภาพ
+              </label>
+              <span v-if="sessionFiles.length || editingFileUrls.length" class="text-xs text-gray-400 ml-2">
+                รวม {{ editingFileUrls.length + sessionFiles.length }} ภาพ
+              </span>
             </div>
 
             <template #footer>
@@ -356,7 +365,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
@@ -532,6 +541,7 @@ const sessionDialogVisible = ref(false)
 const sessionLoading       = ref(false)
 const uploadingFiles       = ref(false)
 const sessionFiles         = ref([])
+const previewUrls          = ref([])
 const editingSessionId     = ref(null)
 const editingSessionNum    = ref(0)
 const editingSessionDate   = ref('')
@@ -541,6 +551,15 @@ const sessionForm      = reactive({ session_date: new Date(), topic: '', note: '
 const attendanceMap    = reactive({})
 const attendanceNoteMap = reactive({})
 const behaviorMap      = reactive({})  // per-student behavior point adjustment
+
+watch(sessionFiles, (files) => {
+  previewUrls.value.forEach(u => URL.revokeObjectURL(u))
+  previewUrls.value = files.map(f => URL.createObjectURL(f))
+}, { deep: false })
+
+onUnmounted(() => {
+  previewUrls.value.forEach(u => URL.revokeObjectURL(u))
+})
 
 // ── Evaluation state ──────────────────────────────────────────────
 const evalLoading  = ref(false)
@@ -837,35 +856,20 @@ async function saveBehaviorLogs(sessionId, newAtt, prevAtt) {
   const sesDate  = formatDateStr(clubDoc.value?.sessions?.[sessionId]?.session_date)
   const now      = new Date().toISOString()
 
-  // Read current behavior summaries from Supabase
+  // Read current learning + total scores from students table (source of truth)
   const studentIds = membersNeedUpdate.map(m => m.student_id)
-  const [{ data: existingLogs }, { data: studentScores }] = await Promise.all([
-    supabase
-      .from('behavior_logs')
-      .select('student_id, score_after')
-      .eq('school_id', schoolId.value)
-      .eq('term_id', term.value)
-      .in('student_id', studentIds)
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('students')
-      .select('student_code, total_behavior_score')
-      .eq('school_id', schoolId.value)
-      .in('student_code', studentIds),
-  ])
+  const { data: studentScores } = await supabase
+    .from('students')
+    .select('student_code, learning_behavior_score, total_behavior_score')
+    .eq('school_id', schoolId.value)
+    .in('student_code', studentIds)
 
-  // Build a map of latest general score_after per student (from behavior_logs)
-  const latestScore = {}
-  for (const row of (existingLogs || [])) {
-    if (!(row.student_id in latestScore)) {
-      latestScore[row.student_id] = row.score_after ?? 0
-    }
-  }
-
-  // Build a map of current total_behavior_score per student (from students table)
-  const currentTotal = {}
+  const scoreMap = {}
   for (const row of (studentScores || [])) {
-    currentTotal[row.student_code] = row.total_behavior_score ?? 0
+    scoreMap[row.student_code] = {
+      learning: row.learning_behavior_score ?? 0,
+      total:    row.total_behavior_score    ?? 0,
+    }
   }
 
   const logUpserts = []
@@ -876,8 +880,9 @@ async function saveBehaviorLogs(sessionId, newAtt, prevAtt) {
     const prevPts = prevAtt[m.student_id]?.behavior_points ?? 0
     const delta   = newPts - prevPts
 
-    const scoreBefore = latestScore[m.student_id] ?? 0
+    const scoreBefore = scoreMap[m.student_id]?.learning ?? 0
     const scoreAfter  = scoreBefore + delta
+    const newTotal    = (scoreMap[m.student_id]?.total ?? 0) + delta
 
     const logId = `club_${clubId.value}_${sessionId}_${m.student_id}`
     logUpserts.push({
@@ -886,12 +891,12 @@ async function saveBehaviorLogs(sessionId, newAtt, prevAtt) {
       term_id:                      term.value,
       student_id:                   m.student_id,
       class_id:                     m.class_id || '',
-      behavior_type:                'general',
+      behavior_type:                'learning',
       source:                       'club',
       ref_club_id:                  clubId.value,
       ref_session_id:               sessionId,
       label_snapshot:               `ชุมนุม ${clubName} ครั้งที่ ${sesNum}`,
-      behavior_type_label_snapshot: 'กิจกรรมชุมนุม',
+      behavior_type_label_snapshot: 'พฤติกรรมในห้องเรียน',
       points_change:                newPts,
       score_before:                 scoreBefore,
       score_after:                  scoreAfter,
@@ -904,11 +909,10 @@ async function saveBehaviorLogs(sessionId, newAtt, prevAtt) {
       created_at:                   now,
     })
 
-    const newTotal = (currentTotal[m.student_id] ?? 0) + delta
     studentUpdates.push({
-      student_id:             m.student_id,
-      general_behavior_score: scoreAfter,
-      total_behavior_score:   newTotal,
+      student_id:              m.student_id,
+      learning_behavior_score: scoreAfter,
+      total_behavior_score:    newTotal,
     })
   }
 
@@ -921,7 +925,7 @@ async function saveBehaviorLogs(sessionId, newAtt, prevAtt) {
   for (const upd of studentUpdates) {
     await supabase
       .from('students')
-      .update({ general_behavior_score: upd.general_behavior_score, total_behavior_score: upd.total_behavior_score, updated_at: now })
+      .update({ learning_behavior_score: upd.learning_behavior_score, total_behavior_score: upd.total_behavior_score, updated_at: now })
       .eq('student_code', upd.student_id)
       .eq('school_id', schoolId.value)
   }
@@ -1358,19 +1362,16 @@ function exportFullPdf() {
     .sort((a, b) => (a.session_number || 0) - (b.session_number || 0))
     .map(s => {
       const fileUrls  = s.file_urls || []
-      const photoRows = []
-      for (let i = 0; i < fileUrls.length; i += 5) photoRows.push(fileUrls.slice(i, i + 5))
       const photosHtml = fileUrls.length
         ? `<div style="margin-top:16px">
             <div style="font-weight:700;font-size:14px;margin-bottom:10px;color:#1e3a8a;border-bottom:1px solid #e2e8f0;padding-bottom:4px">ภาพประกอบกิจกรรม</div>
-            ${photoRows.map(row => `
-              <div style="display:flex;gap:10px;margin-bottom:10px">
-                ${row.map(f => `<img src="${getThumbnailUrl(f.url)}" style="flex:1;max-width:calc(20% - 9px);height:150px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0" crossorigin="anonymous">`).join('')}
-              </div>`).join('')}
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              ${fileUrls.map(f => `<img src="${getThumbnailUrl(f.url)}" style="width:calc(20% - 7px);height:140px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0">`).join('')}
+            </div>
           </div>`
         : `<div style="margin-top:20px;color:#9ca3af;font-style:italic">— ไม่มีภาพประกอบ —</div>`
 
-      return `<div style="page-break-after:always">
+      return `<div style="page-break-inside:avoid;margin-bottom:24px;padding-bottom:20px;border-bottom:2px solid #e5e7eb">
         ${buildSchoolHeader(`รายงานการจัดกิจกรรมชุมนุม — ${clubName}`)}
         <div style="margin:10px 0;padding:12px 16px;background:#f8fafc;border-radius:8px;border-left:4px solid #4f46e5">
           <div style="font-size:16px;font-weight:800;color:#1e3a8a">ครั้งที่ ${s.session_number}</div>
@@ -1481,7 +1482,7 @@ ${memberCardsHtml}
 ${attendHtml}
 ${sessionDetailPages}
 ${evalHtml}
-<script>window.onload=function(){window.print();}<\/script>
+<script>window.onload=function(){var imgs=document.querySelectorAll('img');var n=imgs.length;if(!n){window.print();return;}var done=function(){if(--n<=0)window.print();};imgs.forEach(function(i){if(i.complete&&i.naturalHeight>0)done();else{i.onload=done;i.onerror=done;}});}<\/script>
 </body></html>`
 
   const win = window.open('', '_blank', 'width=1100,height=780')
@@ -1510,10 +1511,17 @@ function exportSessionListExcel() {
 
 // ── File upload ───────────────────────────────────────────────────
 function onFileChange(e) {
-  sessionFiles.value = Array.from(e.target.files || []).slice(0, 5)
+  const incoming = Array.from(e.target.files || [])
+  sessionFiles.value = [...sessionFiles.value, ...incoming].slice(0, 20)
   e.target.value = ''
 }
-function removeFile(i) { sessionFiles.value = sessionFiles.value.filter((_, idx) => idx !== i) }
+function removeFile(i) {
+  URL.revokeObjectURL(previewUrls.value[i])
+  sessionFiles.value = sessionFiles.value.filter((_, idx) => idx !== i)
+}
+function removeExistingFile(f) {
+  editingFileUrls.value = editingFileUrls.value.filter(e => e.url !== f.url)
+}
 
 async function uploadSessionFiles(sessionId) {
   if (!sessionFiles.value.length) return []
@@ -1648,6 +1656,25 @@ onMounted(loadClub)
   display:inline-flex; align-items:center; gap:4px; padding:3px 8px;
   border-radius:6px; font-size:12px; background:#f1f5f9; color:#475569;
   border:1px solid #e2e8f0; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.club-img-card {
+  position:relative; width:96px; flex-shrink:0;
+}
+.club-img-thumb {
+  width:96px; height:96px; object-fit:cover; border-radius:10px;
+  border:2px solid #e2e8f0; display:block;
+}
+.club-img-del {
+  position:absolute; top:4px; right:4px;
+  width:20px; height:20px; border-radius:50%;
+  background:#ef4444; color:#fff; font-size:11px; line-height:1;
+  border:none; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  box-shadow:0 1px 4px rgba(0,0,0,.25);
+}
+.club-img-del:hover { background:#dc2626; }
+.club-img-name {
+  font-size:10px; color:#6b7280; margin-top:2px;
+  width:96px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 </style>
 

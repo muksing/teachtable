@@ -281,8 +281,9 @@
           </el-form-item>
           <el-form-item label="สิทธิ์ (เลือกได้หลายบทบาท)">
             <el-select v-model="accountForm.roles" multiple class="w-full">
-              <el-option value="teacher" label="👨‍🏫 ครูผู้สอน" />
-              <el-option value="scheduler" label="📅 Scheduler (จัดตารางสอน)" />
+              <el-option value="school_teacher" label="👨‍🏫 ครูผู้สอน" />
+              <el-option value="school_scheduler" label="📅 Scheduler (จัดตารางสอน)" />
+              <el-option value="sub_coordinator" label="🔄 ผู้จัดสอนแทน" />
             </el-select>
           </el-form-item>
         </el-form>
@@ -552,7 +553,7 @@ const formRef = ref()
 const accountDialogVisible = ref(false)
 const accountTarget = ref(null)
 const accountFormRef = ref()
-const accountForm = reactive({ email: '', password: '', roles: ['teacher'] })
+const accountForm = reactive({ email: '', password: '', roles: ['school_teacher'] })
 const accountRules = {
   email: [
     { required: true, message: 'กรุณากรอกอีเมล', trigger: 'blur' },
@@ -651,20 +652,24 @@ const nextTeacherId = computed(() => {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 function getRoleColor(role) {
+  const r = toDisplayRole(role) || role
   return {
     admin: '#7c3aed',
     scheduler: '#2563eb',
     teacher: '#059669',
     superadmin: '#dc2626',
-  }[toDisplayRole(role)] || '#9ca3af'
+    sub_coordinator: '#f59e0b',
+  }[r] || '#9ca3af'
 }
 function roleLabel(role) {
+  const r = toDisplayRole(role) || role
   return {
     admin: '👑 Admin',
     scheduler: '📅 Scheduler',
     teacher: '👨‍🏫 ครู',
     superadmin: '🛡️ Super Admin',
-  }[toDisplayRole(role)] || role || '—'
+    sub_coordinator: '🔄 ผู้จัดสอนแทน',
+  }[r] || role || '—'
 }
 
 // ─── Load ──────────────────────────────────────────────────────────────────
@@ -930,7 +935,7 @@ function openAccountDialog(teacher) {
   Object.assign(accountForm, {
     email: teacher.email || '',
     password: '',
-    roles: ['teacher'],
+    roles: ['school_teacher'],
   })
   showAccPwd.value = false
   accountDialogVisible.value = true
@@ -1203,7 +1208,7 @@ async function confirmImport() {
       // สร้างบัญชีเฉพาะครูใหม่ที่มีอีเมล+เบอร์ และยังไม่มีบัญชี
       if (!_duplicate && data.email && data.phone && !userByTeacher.value[data.teacher_id]) {
         try {
-          await createAccountForTeacher(data, data.phone, 'teacher')
+          await createAccountForTeacher(data, data.phone, 'school_teacher')
           accountCreated++
         } catch (e) {
           // auth/email-already-in-use = มีบัญชีอยู่แล้ว ถือว่า OK

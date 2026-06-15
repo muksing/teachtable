@@ -104,39 +104,53 @@
 
             <div v-if="loadingSettings" class="text-center text-gray-400 py-4 text-sm">กำลังโหลด...</div>
             <div v-else>
-              <!-- เพิ่มคะแนน -->
-              <div class="be-beh-section">
-                <div class="be-beh-sect-label be-beh-pos">➕ เพิ่มคะแนน</div>
-                <div v-if="posSettings.length === 0" class="text-xs text-gray-400 py-2">ไม่มีรายการ</div>
-                <div class="be-beh-btns">
-                  <button
-                    v-for="s in posSettings"
-                    :key="s.setting_id || s.id"
-                    class="be-beh-btn be-beh-btn-pos"
-                    :class="{ 'be-beh-btn-active-pos': selectedSettingId === (s.setting_id || s.id) }"
-                    @click="selectSetting(s)"
+              <!-- ComboBox แยก + และ - -->
+              <div class="flex gap-2">
+                <!-- ➕ เพิ่มคะแนน -->
+                <div class="flex-1">
+                  <div class="text-xs font-semibold text-green-600 mb-1">➕ เพิ่มคะแนน</div>
+                  <el-select
+                    v-model="selectedPosId"
+                    placeholder="เลือกรายการ..."
+                    filterable clearable style="width:100%"
+                    @change="onPosChange"
+                    @clear="onPosChange(null)"
                   >
-                    <span class="be-beh-btn-label">{{ s.label }}</span>
-                    <span class="be-beh-btn-pts">+{{ s.points_default }}</span>
-                  </button>
+                    <el-option
+                      v-for="s in posSettings"
+                      :key="s.setting_id || s.id"
+                      :label="`${s.label} (+${s.points_default})`"
+                      :value="s.setting_id || s.id"
+                    >
+                      <span class="flex justify-between w-full">
+                        <span>{{ s.label }}</span>
+                        <span class="text-green-600 font-semibold ml-2">+{{ s.points_default }}</span>
+                      </span>
+                    </el-option>
+                  </el-select>
                 </div>
-              </div>
-
-              <!-- ลดคะแนน -->
-              <div class="be-beh-section mt-4">
-                <div class="be-beh-sect-label be-beh-neg">➖ ลดคะแนน</div>
-                <div v-if="negSettings.length === 0" class="text-xs text-gray-400 py-2">ไม่มีรายการ</div>
-                <div class="be-beh-btns">
-                  <button
-                    v-for="s in negSettings"
-                    :key="s.setting_id || s.id"
-                    class="be-beh-btn be-beh-btn-neg"
-                    :class="{ 'be-beh-btn-active-neg': selectedSettingId === (s.setting_id || s.id) }"
-                    @click="selectSetting(s)"
+                <!-- ➖ ลดคะแนน -->
+                <div class="flex-1">
+                  <div class="text-xs font-semibold text-red-500 mb-1">➖ ลดคะแนน</div>
+                  <el-select
+                    v-model="selectedNegId"
+                    placeholder="เลือกรายการ..."
+                    filterable clearable style="width:100%"
+                    @change="onNegChange"
+                    @clear="onNegChange(null)"
                   >
-                    <span class="be-beh-btn-label">{{ s.label }}</span>
-                    <span class="be-beh-btn-pts">{{ s.points_default }}</span>
-                  </button>
+                    <el-option
+                      v-for="s in negSettings"
+                      :key="s.setting_id || s.id"
+                      :label="`${s.label} (${s.points_default})`"
+                      :value="s.setting_id || s.id"
+                    >
+                      <span class="flex justify-between w-full">
+                        <span>{{ s.label }}</span>
+                        <span class="text-red-500 font-semibold ml-2">{{ s.points_default }}</span>
+                      </span>
+                    </el-option>
+                  </el-select>
                 </div>
               </div>
 
@@ -148,7 +162,8 @@
                 </span>
                 <el-input-number
                   v-model="pointsChange"
-                  :min="-100" :max="100"
+                  :min="selectedSetting?.points_min ?? -100"
+                  :max="selectedSetting?.points_max ?? 100"
                   size="small" style="width:120px; margin-left:10px"
                 />
               </div>
@@ -259,6 +274,8 @@ const studentSearch    = ref('')
 const selectedStudents = ref([])  // across all classes
 
 const selectedSettingId = ref('')
+const selectedPosId     = ref('')
+const selectedNegId     = ref('')
 const selectedSetting   = ref(null)
 const pointsChange      = ref(0)
 const note              = ref('')
@@ -269,8 +286,14 @@ const submitting    = ref(false)
 const resultMsg     = ref('')
 const resultType    = ref('success')
 
-const gasUploadUrl   = computed(() => schoolStore.schoolInfo?.gas_upload_web_app_url || '')
-const gdriveFolderId = computed(() => schoolStore.schoolInfo?.gdrive_folder_id || '')
+const gasUploadUrl   = computed(() => {
+  const tl = schoolStore.schoolInfo?.settings?.teaching_log_settings || {}
+  return tl.gas_upload_web_app_url || tl.gas_web_app_url || ''
+})
+const gdriveFolderId = computed(() => {
+  const tl = schoolStore.schoolInfo?.settings?.teaching_log_settings || {}
+  return tl.gdrive_folder_id || ''
+})
 
 // ── Behavior settings — only general type ────────────────────
 const generalSettings = computed(() =>
@@ -328,18 +351,29 @@ function deselectAllInClass() {
 }
 
 // ── Behavior selection ────────────────────────────────────────
-function selectSetting(s) {
-  const id = s.setting_id || s.id
-  if (selectedSettingId.value === id) {
-    // toggle off
+function applySettingById(id) {
+  if (!id) {
     selectedSettingId.value = ''
     selectedSetting.value = null
     pointsChange.value = 0
-  } else {
+    return
+  }
+  const s = generalSettings.value.find(x => (x.setting_id || x.id) === id)
+  if (s) {
     selectedSettingId.value = id
     selectedSetting.value = s
     pointsChange.value = s.points_default || 0
   }
+}
+
+function onPosChange(id) {
+  if (id) selectedNegId.value = ''
+  applySettingById(id || null)
+}
+
+function onNegChange(id) {
+  if (id) selectedPosId.value = ''
+  applySettingById(id || null)
 }
 
 // ── Class change — keep existing selection from other classes ─
@@ -447,6 +481,8 @@ async function submit() {
     imageFiles.value        = [null, null, null]
     imagePreviews.value     = ['', '', '']
     selectedSettingId.value = ''
+    selectedPosId.value     = ''
+    selectedNegId.value     = ''
     selectedSetting.value   = null
     pointsChange.value      = 0
   } catch (e) {

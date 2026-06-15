@@ -460,10 +460,26 @@ export function useRealtimeTimetable() {
     rebuildMaps(timetableSlots.value)
   }
 
+  async function reload() {
+    const sid = schoolId()
+    const t = term()
+    const { data, error } = await supabase
+      .from('timetable_slots')
+      .select('*')
+      .eq('school_id', sid)
+      .eq('term_id', t)
+    if (error) throw error
+    if (data) {
+      const slots = data.map(rowToSlot)
+      timetableSlots.value = slots
+      rebuildMaps(slots)
+    }
+  }
+
   return {
     timetableSlots, timetableMap, teacherMap, roomMap,
     connected, lastUpdate,
-    subscribe, unsubscribe,
+    subscribe, unsubscribe, reload,
     getClassSlot, getTeacherSlot, getRoomSlot,
     getSlotsForClass, getSlotsForTeacher, getSlotsForRoom,
     checkFree,

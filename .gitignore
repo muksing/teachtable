@@ -6,3 +6,5 @@ dist/
 functions/node_modules/
 scripts/service-account.json
 scripts/service-account-master.json
+
+.vercel

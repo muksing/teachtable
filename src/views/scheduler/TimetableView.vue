@@ -350,6 +350,7 @@
             <!-- Export / Import — SchoolAdmin only -->
             <template v-if="authStore.isAdmin">
               <input ref="importFileRef" type="file" accept=".json" class="hidden" @change="handleImportFile" />
+              <input ref="importExcelRef" type="file" accept=".xlsx,.xls" class="hidden" @change="handleImportExcel" />
               <el-dropdown trigger="click" @command="handleExportCommand">
                 <el-button size="small" plain>📤 ส่งออก ▾</el-button>
                 <template #dropdown>
@@ -359,9 +360,16 @@
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
-              <el-button size="small" plain @click="importFileRef?.click()" title="นำเข้าตารางสอนจากไฟล์ JSON ที่สำรองไว้">
-                📥 นำเข้า
-              </el-button>
+              <el-dropdown trigger="click" @command="handleImportCommand">
+                <el-button size="small" plain>📥 นำเข้า ▾</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="excel">📊 Excel — ตารางสอนแบบแสดงรายการ</el-dropdown-item>
+                    <el-dropdown-item command="excel-template">📋 ดาวน์โหลด Template Excel</el-dropdown-item>
+                    <el-dropdown-item command="json">🔧 JSON — กู้คืนข้อมูลสำรอง</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </template>
 
             <!-- Clear All button — SchoolAdmin only -->
@@ -858,6 +866,51 @@
       </template>
     </el-dialog>
 
+    <!-- ===== Excel Import Preview Dialog ===== -->
+    <el-dialog v-model="excelImportDlg.visible" title="📊 นำเข้าตารางสอนจาก Excel" width="860px" :close-on-click-modal="false">
+      <div v-if="excelImportDlg.rows.length">
+        <div class="flex gap-4 mb-3 text-sm flex-wrap">
+          <span class="text-green-600 font-semibold">✅ นำเข้าได้ {{ excelImportDlg.rows.filter(r=>!r._error).length }} แถว</span>
+          <span v-if="excelImportDlg.rows.some(r=>r._warn)" class="text-yellow-600 font-semibold">⚠️ คำเตือน {{ excelImportDlg.rows.filter(r=>r._warn).length }} แถว</span>
+          <span v-if="excelImportDlg.rows.some(r=>r._error)" class="text-red-500 font-semibold">❌ ข้ามได้ {{ excelImportDlg.rows.filter(r=>r._error).length }} แถว</span>
+        </div>
+        <el-table :data="excelImportDlg.rows" size="small" max-height="380" border stripe
+          :row-class-name="({row}) => row._error ? 'bg-red-50' : row._warn ? 'bg-yellow-50' : ''">
+          <el-table-column label="#" width="44" align="center">
+            <template #default="{ row }">
+              <span v-if="row._error" class="text-red-500">❌</span>
+              <span v-else-if="row._warn" class="text-yellow-500">⚠️</span>
+              <span v-else class="text-green-500">✅</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="class_id" label="ห้อง" width="80" align="center" />
+          <el-table-column label="วัน" width="90" align="center">
+            <template #default="{ row }">{{ getDayLabel(row.day_of_week) }}</template>
+          </el-table-column>
+          <el-table-column prop="period_number" label="คาบ" width="55" align="center" />
+          <el-table-column prop="subject_id" label="รหัสวิชา" width="110" />
+          <el-table-column prop="subject_name" label="ชื่อวิชา" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="teacher_name" label="ครู" min-width="120" show-overflow-tooltip />
+          <el-table-column prop="room_id" label="ห้อง/Lab" width="90" />
+          <el-table-column label="หมายเหตุ" min-width="160">
+            <template #default="{ row }">
+              <span v-if="row._error" class="text-red-500 text-xs">{{ row._error }}</span>
+              <span v-else-if="row._warn" class="text-yellow-600 text-xs">{{ row._warn }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="mt-3 text-xs text-gray-500">แถวที่มี ❌ จะถูกข้าม — ✅ และ ⚠️ จะถูกนำเข้า</div>
+      </div>
+      <template #footer>
+        <el-button @click="excelImportDlg.visible = false">ยกเลิก</el-button>
+        <el-button type="primary" :loading="excelImportDlg.saving"
+          :disabled="!excelImportDlg.rows.filter(r=>!r._error).length"
+          @click="confirmExcelImport">
+          📥 นำเข้า {{ excelImportDlg.rows.filter(r=>!r._error).length }} แถว
+        </el-button>
+      </template>
+    </el-dialog>
+
   </AppLayout>
 </template>
 
@@ -967,8 +1020,12 @@ const cardSortBy = ref('class')
 // Workflow: null = normal edit, '1' = post-clear (show activity btn), '2' = show supervision btn
 const workflowStep = ref(null)
 
-// Import file input ref
+// Import file input refs
 const importFileRef = ref(null)
+const importExcelRef = ref(null)
+
+// Excel import preview dialog
+const excelImportDlg = reactive({ visible: false, rows: [], saving: false })
 
 // Workflow loading: '1' = applying activities, '2' = applying supervisions
 const workflowLoading = ref('')
@@ -1585,17 +1642,26 @@ async function doApplySupervisions() {
 }
 
 function recalcAssignmentProgress() {
-  const placedByAssign = {}
+  const placedByAssign = {}  // assign_id → count
+  const placedByKey    = {}  // `class|subject|teacher` → count (fallback for slots without assign_id)
+
   rt.timetableSlots.value.forEach(s => {
     if (s.slot_type !== 'subject' && s.type !== 'subject') return
-    const assignId = s.assign_id
-    if (!assignId) return
-    placedByAssign[assignId] = (placedByAssign[assignId] || 0) + 1
+    if (s.assign_id) {
+      placedByAssign[s.assign_id] = (placedByAssign[s.assign_id] || 0) + 1
+    } else {
+      // fallback: slot นำเข้า/เก่าที่ไม่มี assign_id — จับคู่ด้วย class+subject+teacher
+      const k = `${s.class_id}|${s.subject_code || s.subject_id || ''}|${s.teacher_id || ''}`
+      placedByKey[k] = (placedByKey[k] || 0) + 1
+    }
   })
 
   assignments.value = assignments.value.map(a => {
-    const total = Number(a.periods_per_week) || 0
-    const placed = placedByAssign[a.assign_id || a.id] || 0
+    const total  = Number(a.periods_per_week) || 0
+    const byId   = placedByAssign[a.assign_id || a.id] || 0
+    const k      = `${a.class_id}|${a.subject_code || ''}|${a.teacher_id || ''}`
+    const byKey  = placedByKey[k] || 0
+    const placed = byId + byKey
     return {
       ...a,
       placed,
@@ -2325,6 +2391,7 @@ async function handleAutoSchedule() {
   } catch (e) {
     ElMessage.error(e.message)
   }
+  await rt.reload()
   await loadAssignmentsWithProgress()
 }
 
@@ -2615,6 +2682,153 @@ async function handleImportFile(event) {
   }
 }
 
+// ===== Excel Import (แบบ B — flat list) =====
+
+const THAI_DAY_MAP = {
+  'อาทิตย์': 7, 'จันทร์': 1, 'อังคาร': 2, 'พุธ': 3,
+  'พฤหัสบดี': 4, 'พฤหัส': 4, 'ศุกร์': 5, 'เสาร์': 6,
+  'sun': 7, 'mon': 1, 'tue': 2, 'wed': 3, 'thu': 4, 'fri': 5, 'sat': 6,
+}
+
+function parseDay(raw) {
+  if (!raw && raw !== 0) return null
+  const n = Number(raw)
+  if (!isNaN(n) && n >= 1 && n <= 7) return n
+  return THAI_DAY_MAP[String(raw).trim().toLowerCase()] || null
+}
+
+function handleImportCommand(cmd) {
+  if (cmd === 'excel') importExcelRef.value?.click()
+  else if (cmd === 'excel-template') downloadImportTemplate()
+  else if (cmd === 'json') importFileRef.value?.click()
+}
+
+function downloadImportTemplate() {
+  const wb = XLSX.utils.book_new()
+  const headers = ['ห้อง', 'วัน (1=จันทร์...5=ศุกร์ หรือชื่อภาษาไทย)', 'คาบ', 'รหัสวิชา', 'ชื่อวิชา', 'รหัสครู', 'ชื่อครู', 'ห้อง/Lab']
+  const example = [
+    ['ม.1/1', 'จันทร์', '1', 'T21101', 'ภาษาไทย', 'T001', 'นายสมชาย ใจดี', ''],
+    ['ม.1/1', '2', '3', 'ENG101', 'ภาษาอังกฤษ', 'T002', 'นางสาวสมหญิง รักดี', 'ห้อง Lab ภาษา'],
+  ]
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...example])
+  ws['!cols'] = headers.map((h, i) => ({ wch: [10, 32, 8, 14, 22, 12, 22, 16][i] }))
+  XLSX.utils.book_append_sheet(wb, ws, 'ตารางสอน')
+  XLSX.writeFile(wb, 'template_นำเข้าตารางสอน.xlsx')
+}
+
+async function handleImportExcel(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  event.target.value = ''
+
+  let wb
+  try {
+    const buf = await file.arrayBuffer()
+    wb = XLSX.read(buf, { type: 'array' })
+  } catch {
+    ElMessage.error('ไม่สามารถอ่านไฟล์ Excel ได้')
+    return
+  }
+
+  const ws = wb.Sheets[wb.SheetNames[0]]
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+  if (raw.length < 2) { ElMessage.error('ไฟล์ไม่มีข้อมูล'); return }
+
+  // header row index (skip if looks like a header)
+  const dataRows = raw.filter((r, i) => i > 0 && r.some(c => c !== ''))
+
+  // existing slots for dup-check
+  const existingKeys = new Set(
+    rt.timetableSlots.value.map(s => `${s.class_id}_${s.day}_${s.period}`)
+  )
+
+  // build assign lookup: `classId_subjectId_teacherId` → assign_id
+  const assignLookup = {}
+  assignments.value.forEach(a => {
+    assignLookup[`${a.class_id}_${a.subject_code}_${a.teacher_id}`] = a.assign_id || a.id
+  })
+
+  const rows = dataRows.map((r, idx) => {
+    const [classRaw, dayRaw, periodRaw, subjectIdRaw, subjectNameRaw, teacherIdRaw, teacherNameRaw, roomRaw] = r
+
+    const class_id = String(classRaw || '').trim()
+    const day_of_week = parseDay(dayRaw)
+    const period_number = parseInt(periodRaw)
+    const subject_id = String(subjectIdRaw || '').trim()
+    const subject_name = String(subjectNameRaw || '').trim()
+    const teacher_id = String(teacherIdRaw || '').trim()
+    const teacher_name = String(teacherNameRaw || '').trim()
+    const room_id = String(roomRaw || '').trim() || null
+
+    const assign_id = assignLookup[`${class_id}_${subject_id}_${teacher_id}`] || null
+    const key = `${class_id}_${day_of_week}_${period_number}`
+
+    let _error = null
+    let _warn = null
+
+    if (!class_id) _error = 'ไม่มีรหัสห้อง'
+    else if (!day_of_week) _error = `วันไม่ถูกต้อง: "${dayRaw}"`
+    else if (!period_number || isNaN(period_number) || period_number < 1) _error = `คาบไม่ถูกต้อง: "${periodRaw}"`
+    else if (!subject_id && !subject_name) _error = 'ไม่มีรหัสหรือชื่อวิชา'
+    else if (existingKeys.has(key)) _warn = `ซ้อนทับ slot ที่มีอยู่ (จะถูกแทนที่)`
+
+    if (!_error && !assign_id) _warn = (_warn ? _warn + ' | ' : '') + 'ไม่พบภาระงานที่ตรงกัน'
+
+    return { class_id, day_of_week, period_number, subject_id, subject_name, teacher_id, teacher_name, room_id, assign_id, _error, _warn, _row: idx + 2 }
+  })
+
+  if (!rows.length) { ElMessage.error('ไม่พบแถวข้อมูล'); return }
+
+  excelImportDlg.rows = rows
+  excelImportDlg.visible = true
+}
+
+async function confirmExcelImport() {
+  const valid = excelImportDlg.rows.filter(r => !r._error)
+  if (!valid.length) return
+
+  excelImportDlg.saving = true
+  try {
+    const schoolId = authStore.schoolId
+    const t = term()
+    const uid = authStore.profile?.uid || ''
+    const now = new Date().toISOString()
+
+    const rows = valid.map(r => ({
+      school_id: schoolId,
+      term_id: t,
+      class_id: r.class_id,
+      day_of_week: r.day_of_week,
+      period_number: r.period_number,
+      subject_id: r.subject_id || null,
+      subject_name: r.subject_name || null,
+      teacher_id: r.teacher_id || null,
+      teacher_name: r.teacher_name || null,
+      room_id: r.room_id || null,
+      assign_id: r.assign_id || null,
+      slot_type: 'subject',
+      updated_by: uid,
+      updated_at: now,
+    }))
+
+    const CHUNK = 200
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const { error } = await supabase.from('timetable_slots')
+        .upsert(rows.slice(i, i + CHUNK), { onConflict: 'school_id,term_id,class_id,day_of_week,period_number' })
+      if (error) throw error
+    }
+
+    await rt.reload()
+    await loadAssignmentsWithProgress()
+    excelImportDlg.visible = false
+    ElMessage.success(`นำเข้าตารางสอน ${rows.length} แถวเรียบร้อย`)
+  } catch (e) {
+    ElMessage.error('นำเข้าล้มเหลว: ' + e.message)
+  } finally {
+    excelImportDlg.saving = false
+  }
+}
+
 async function handleClearAll() {
   if (!authStore.isAdmin) { ElMessage.error('เฉพาะ SchoolAdmin เท่านั้นที่สามารถล้างตารางได้'); return }
   try {
@@ -2666,6 +2880,7 @@ async function handleAIMode() {
     rt.timetableSlots.value.forEach(s => { gridObj[s.id] = s })
     await runAISchedule(scheduleResult.value?.unplacedList || [], gridObj, apiKey)
     ElMessage.success('AI จัดตารางเรียบร้อย')
+    await rt.reload()
     await loadAssignmentsWithProgress()
   } catch (e) {
     ElMessage.error('AI Error: ' + e.message)

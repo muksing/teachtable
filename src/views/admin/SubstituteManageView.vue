@@ -185,7 +185,7 @@ const TeacherOption = defineComponent({
 const schoolStore = useSchoolStore()
 const authStore   = useAuthStore()
 const {
-  getTeachers, getPublishedTimetableSlots,
+  getTeachers, getTimetable,
   assignSubstituteTeacher, unassignSubstituteTeacher,
   subscribeLeaveRequests, getThaiDayFromDate,
 } = useSchoolDb()
@@ -456,7 +456,7 @@ async function loadAll() {
     loading.value = false
   }
   // โหลด timetable ใน background — ไม่บล็อก UI
-  getPublishedTimetableSlots()
+  getTimetable()
     .then(tt => { timetable.value = Array.isArray(tt) ? tt : []; timetableLoaded.value = true })
     .catch(() => { timetableLoaded.value = true })
 }

@@ -118,7 +118,7 @@ function isSchedulerRole(authStore) {
 function isRouteFeatureEnabled(schoolStore, gateName) {
   if (!gateName) return true
   if (gateName === 'behavior_system_enabled') {
-    return schoolStore.schoolInfo?.behavior_system_enabled !== false
+    return schoolStore.isBehaviorSystemEnabled
   }
   if (gateName === 'teaching_log_enabled') {
     return schoolStore.isTeachingLogEnabled !== false

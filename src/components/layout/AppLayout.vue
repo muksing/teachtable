@@ -285,7 +285,7 @@ function itemVisible(item) {
     return false;
   }
   if (item.featureGate) {
-    if (item.featureGate === 'behavior_system_enabled' && schoolStore.schoolInfo?.behavior_system_enabled === false) {
+    if (item.featureGate === 'behavior_system_enabled' && !schoolStore.isBehaviorSystemEnabled) {
       return false;
     }
   }

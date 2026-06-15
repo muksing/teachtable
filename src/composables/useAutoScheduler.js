@@ -175,6 +175,7 @@ export function useAutoScheduler() {
           const rows = chunk.map(slot => ({
             term_id: t,
             class_id: slot.class_id,
+            assign_id: slot.assign_id || null,
             subject_id: slot.subject_id || slot.subject_code || null,
             subject_name: slot.subject_name || null,
             teacher_id: slot.teacher_id || null,
