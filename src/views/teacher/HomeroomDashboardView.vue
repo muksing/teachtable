@@ -444,19 +444,28 @@ const studentStats = computed(() => {
       // โดดเรียน: นับรายคาบ (ไม่ใช่รายวัน)
       skipCount += sc
 
-      // ฐานนิยมของทุกคาบปกติ → สถานะของวัน
-      const allStatuses = [...regularStatuses]
-      if (hmStatus) allStatuses.push(hmStatus)
-      const mode = allStatuses.length ? computeMode(allStatuses) : null
+      const regularMode = regularStatuses.length ? computeMode(regularStatuses) : null
 
-      if (mode === 'ขาดเรียน') {
-        absentDays++
-      } else if (mode === 'ลาป่วย' || mode === 'ลากิจ' || mode === 'ไปราชการ') {
-        leaveDays++
-      } else {
+      // มาสาย = คาบ homeroom ขาด/ลา แต่คาบปกติมาเรียน (นักเรียนมาสายเกินเข้าแถว)
+      const homeroomMissed = hmStatus != null &&
+        (hmStatus === 'ขาดเรียน' || hmStatus === 'ลาป่วย' || hmStatus === 'ลากิจ' || hmStatus === 'ไปราชการ')
+      const regularPresent = regularMode != null &&
+        (regularMode === 'มาเรียน' || regularMode === 'มาสาย')
+
+      if (homeroomMissed && regularPresent) {
+        // pattern มาสาย: ขาด homeroom แต่มาคาบเรียนปกติ
         presentDays++
-        // มาสาย: ตรวจจากคาบ homeroom เท่านั้น
-        if (hmStatus === 'มาสาย') lateDays++
+        lateDays++
+      } else {
+        // ใช้ฐานนิยมของคาบปกติ (หรือ homeroom ถ้าไม่มีคาบปกติ) เพื่อตัดสินวัน
+        const dayMode = regularMode ?? hmStatus
+        if (dayMode === 'ขาดเรียน') {
+          absentDays++
+        } else if (dayMode === 'ลาป่วย' || dayMode === 'ลากิจ' || dayMode === 'ไปราชการ') {
+          leaveDays++
+        } else {
+          presentDays++
+        }
       }
     }
 
@@ -468,16 +477,21 @@ const studentStats = computed(() => {
     let consAbsent = 0
     for (let i = sortedDates.length - 1; i >= 0; i--) {
       const { hmStatus, regularStatuses } = days[sortedDates[i]]
-      const allSt = [...regularStatuses, ...(hmStatus ? [hmStatus] : [])]
-      const m = allSt.length ? computeMode(allSt) : null
-      if (m === 'ขาดเรียน') consAbsent++
+      const regularMode = regularStatuses.length ? computeMode(regularStatuses) : null
+      const dayMode = regularMode ?? hmStatus
+      if (dayMode === 'ขาดเรียน') consAbsent++
       else break
     }
 
     let consLate = 0
     for (let i = sortedDates.length - 1; i >= 0; i--) {
-      const { hmStatus } = days[sortedDates[i]]
-      if (hmStatus === 'มาสาย') consLate++
+      const { hmStatus, regularStatuses } = days[sortedDates[i]]
+      const regularMode = regularStatuses.length ? computeMode(regularStatuses) : null
+      const homeroomMissed = hmStatus != null &&
+        (hmStatus === 'ขาดเรียน' || hmStatus === 'ลาป่วย' || hmStatus === 'ลากิจ' || hmStatus === 'ไปราชการ')
+      const regularPresent = regularMode != null &&
+        (regularMode === 'มาเรียน' || regularMode === 'มาสาย')
+      if (homeroomMissed && regularPresent) consLate++
       else break
     }
 
