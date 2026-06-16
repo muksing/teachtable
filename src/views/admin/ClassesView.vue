@@ -81,10 +81,16 @@
               <div v-if="row.class_name" class="text-xs text-gray-400">{{ row.class_name }}</div>
             </template>
           </el-table-column>
-          <el-table-column label="ครูที่ปรึกษา" min-width="180">
+          <el-table-column label="ครูที่ปรึกษา" min-width="200">
             <template #default="{ row }">
               <div v-if="resolveHomeroomNames(row).length > 0" class="flex flex-wrap gap-1">
-                <el-tag v-for="(name, idx) in resolveHomeroomNames(row)" :key="idx" size="small" type="info">{{ name }}</el-tag>
+                <el-tag
+                  v-for="(name, idx) in resolveHomeroomNames(row)"
+                  :key="idx"
+                  size="small"
+                  :type="idx === 0 ? 'warning' : 'info'"
+                  :title="idx === 0 ? 'ครูหลัก — รับผิดชอบคาบพิเศษ' : ''"
+                >{{ idx === 0 ? '★ ' : '' }}{{ name }}</el-tag>
               </div>
               <span v-else class="text-gray-400 text-sm">ยังไม่ได้กำหนด</span>
             </template>
@@ -138,6 +144,7 @@
                 :value="t.teacher_id"
               />
             </el-select>
+            <div class="text-xs text-amber-600 mt-1">★ ครูที่เลือกเป็นคนแรก = ครูหลัก (รับผิดชอบคาบพิเศษ/ที่ปรึกษา)</div>
           </el-form-item>
           <el-form-item label="ห้องเรียนประจำ">
             <el-select v-model="form.home_room_id" class="w-full" clearable filterable placeholder="เลือกห้อง หรือ ไม่ระบุ">
@@ -291,7 +298,8 @@ function countByLevelGroup(group) {
 
 function onTeacherChange(teacherIds) {
   if (!Array.isArray(teacherIds)) teacherIds = []
-  const selectedTeachers = teachers.value.filter(t => teacherIds.includes(t.teacher_id))
+  // map ตาม teacherIds order เพื่อให้ names[0] ตรงกับ ids[0] เสมอ
+  const selectedTeachers = teacherIds.map(id => teachers.value.find(t => t.teacher_id === id)).filter(Boolean)
   form.homeroom_teacher_names_snapshot = selectedTeachers.map(t => `${t.prefix || ''}${t.name} ${t.surname}`)
   form.homeroom_teacher_name_snapshot = form.homeroom_teacher_names_snapshot.join(', ')
   form.homeroom_teacher_id = teacherIds.length > 0 ? teacherIds[0] : ''

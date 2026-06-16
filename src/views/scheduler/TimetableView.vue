@@ -884,15 +884,21 @@
             </template>
           </el-table-column>
           <el-table-column prop="class_id" label="ห้อง" width="80" align="center" />
-          <el-table-column label="วัน" width="90" align="center">
+          <el-table-column label="วัน" width="70" align="center">
             <template #default="{ row }">{{ getDayLabel(row.day_of_week) }}</template>
           </el-table-column>
-          <el-table-column prop="period_number" label="คาบ" width="55" align="center" />
-          <el-table-column prop="subject_id" label="รหัสวิชา" width="110" />
-          <el-table-column prop="subject_name" label="ชื่อวิชา" min-width="140" show-overflow-tooltip />
-          <el-table-column prop="teacher_name" label="ครู" min-width="120" show-overflow-tooltip />
-          <el-table-column prop="room_id" label="ห้อง/Lab" width="90" />
-          <el-table-column label="หมายเหตุ" min-width="160">
+          <el-table-column prop="period_number" label="คาบ" width="50" align="center" />
+          <el-table-column prop="sub_raw" label="วิชา/กิจกรรม" width="110" show-overflow-tooltip />
+          <el-table-column prop="subject_name" label="ชื่อวิชา" min-width="120" show-overflow-tooltip />
+          <el-table-column prop="teacher_name" label="ครู" min-width="100" show-overflow-tooltip />
+          <el-table-column prop="room_id" label="Lab" width="80" />
+          <el-table-column label="ประเภท" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.slot_type === 'subject'" type="success" size="small">วิชา</el-tag>
+              <el-tag v-else type="info" size="small">ล็อก</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="หมายเหตุ" min-width="150">
             <template #default="{ row }">
               <span v-if="row._error" class="text-red-500 text-xs">{{ row._error }}</span>
               <span v-else-if="row._warn" class="text-yellow-600 text-xs">{{ row._warn }}</span>
@@ -2446,13 +2452,20 @@ async function handlePublish() {
     const publishedBy = authStore.profile?.displayName || authStore.profile?.email || ''
     const publishedAt = new Date().toISOString()
 
-    // 1. ดึง draft slots ทั้งหมด
-    const { data: slots, error: fetchErr } = await supabase
-      .from('timetable_slots')
-      .select('*')
-      .eq('school_id', schoolId)
-      .eq('term_id', termId)
-    if (fetchErr) throw fetchErr
+    // 1. ดึง draft slots ทั้งหมด (paginate เพื่อข้าม 1000-row cap)
+    let slots = []
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data: chunk, error: fetchErr } = await supabase
+        .from('timetable_slots')
+        .select('*')
+        .eq('school_id', schoolId)
+        .eq('term_id', termId)
+        .range(from, from + PAGE - 1)
+      if (fetchErr) throw fetchErr
+      if (chunk?.length) slots = slots.concat(chunk)
+      if (!chunk || chunk.length < PAGE) break
+    }
 
     // 2. ลบ published slots เก่าของ term นี้
     const { error: delErr } = await supabase
@@ -2550,42 +2563,41 @@ async function exportTimetableExcel() {
   }
   const data = allData
 
-  const subjectSlots = (data || []).filter(s =>
-    s.slot_type === 'subject' && s.class_id && !String(s.class_id).startsWith('__')
+  // รวมทุก slot ที่เป็น class จริง (ไม่ใช่ teacher-supervision __xxx)
+  const allClassSlots = (data || []).filter(s =>
+    s.class_id && !String(s.class_id).startsWith('__')
   )
-  if (!subjectSlots.length) { ElMessage.warning('ไม่มีข้อมูลวิชาที่จะส่งออก'); return }
-
-  const dayLabels = { 1: 'จันทร์', 2: 'อังคาร', 3: 'พุธ', 4: 'พฤหัสบดี', 5: 'ศุกร์', 6: 'เสาร์', 7: 'อาทิตย์' }
-  const periodTimes = PERIOD_TIMES.value  // { 1: '08:00-08:50', ... }
+  if (!allClassSlots.length) { ElMessage.warning('ไม่มีข้อมูลที่จะส่งออก'); return }
 
   const wb = XLSX.utils.book_new()
 
-  // ── Sheet 1: รายการทั้งหมด ──────────────────────────────────────────────
-  // Format ตรงกับ import: ห้อง | วัน | คาบ | รหัสวิชา | ชื่อวิชา | รหัสครู | ชื่อครู | ห้อง
-  const listHeaders = ['ห้องเรียน', 'วัน', 'คาบ', 'รหัสวิชา', 'รายวิชา', 'รหัสครู', 'ชื่อครู', 'ห้อง/Lab']
-  const listRows = [...subjectSlots]
+  // ── Sheet 1: รายการ (ใช้นำเข้าได้) ────────────────────────────────────
+  const listHeaders = ['hong', 'day', 'kab', 'sub', 'teacher', 'lab']
+  const listRows = [...allClassSlots]
     .sort((a, b) =>
       (a.class_id || '').localeCompare(b.class_id || '') ||
-      a.day_of_week - b.day_of_week || a.period_number - b.period_number
+      Number(a.day_of_week) - Number(b.day_of_week) ||
+      Number(a.period_number) - Number(b.period_number)
     )
     .map(s => [
       s.class_id,
-      dayLabels[s.day_of_week] || s.day_of_week,
+      s.day_of_week,
       s.period_number,
-      s.subject_id || '',
-      s.subject_name || '',
-      s.teacher_id || '',
-      s.teacher_name || '',
-      s.room_id || '',
+      s.subject_id || s.act_name || s.name || s.lock_label || 'lock',
+      s.teacher_id || '-',
+      s.room_id || '-',
     ])
   const ws1 = XLSX.utils.aoa_to_sheet([listHeaders, ...listRows])
-  ws1['!cols'] = [8, 10, 5, 12, 10, 26, 20, 10].map(w => ({ wch: w }))
+  ws1['!cols'] = [10, 6, 6, 16, 12, 12].map(w => ({ wch: w }))
   XLSX.utils.book_append_sheet(wb, ws1, 'ตารางสอน')
+
+  const subjectSlots = allClassSlots.filter(s => s.slot_type === 'subject')
 
   // ── Sheet ต่อๆ ไป: กริดแต่ละห้อง ──────────────────────────────────────
   const classIds = [...new Set(subjectSlots.map(s => s.class_id))].sort((a, b) => a.localeCompare(b))
   const days = DAYS.value  // [{ value:1, label:'จันทร์' }, ...]
   const periods = PERIODS.value  // [1,2,...,9]
+  const periodTimes = PERIOD_TIMES.value  // { 1: '08:00-08:50', ... }
 
   classIds.forEach(cid => {
     const classSlots = subjectSlots.filter(s => s.class_id === cid)
@@ -2715,13 +2727,14 @@ function handleImportCommand(cmd) {
 
 function downloadImportTemplate() {
   const wb = XLSX.utils.book_new()
-  const headers = ['ห้อง', 'วัน (1=จันทร์...5=ศุกร์ หรือชื่อภาษาไทย)', 'คาบ', 'รหัสวิชา', 'ชื่อวิชา', 'รหัสครู', 'ชื่อครู', 'ห้อง/Lab']
+  const headers = ['hong', 'day', 'kab', 'sub', 'teacher', 'lab']
   const example = [
-    ['ม.1/1', 'จันทร์', '1', 'T21101', 'ภาษาไทย', 'T001', 'นายสมชาย ใจดี', ''],
-    ['ม.1/1', '2', '3', 'ENG101', 'ภาษาอังกฤษ', 'T002', 'นางสาวสมหญิง รักดี', 'ห้อง Lab ภาษา'],
+    ['ม.1/1', '1', '1', 'Homeroom', '-', '-'],
+    ['ม.1/1', '1', '2', 'T21101', '309', 'COM1'],
+    ['ม.1/1', '2', '3', 'ENG101', 'T002', ''],
   ]
   const ws = XLSX.utils.aoa_to_sheet([headers, ...example])
-  ws['!cols'] = headers.map((h, i) => ({ wch: [10, 32, 8, 14, 22, 12, 22, 16][i] }))
+  ws['!cols'] = [10, 8, 6, 16, 12, 12].map(w => ({ wch: w }))
   XLSX.utils.book_append_sheet(wb, ws, 'ตารางสอน')
   XLSX.writeFile(wb, 'template_นำเข้าตารางสอน.xlsx')
 }
@@ -2744,7 +2757,6 @@ async function handleImportExcel(event) {
   const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
   if (raw.length < 2) { ElMessage.error('ไฟล์ไม่มีข้อมูล'); return }
 
-  // header row index (skip if looks like a header)
   const dataRows = raw.filter((r, i) => i > 0 && r.some(c => c !== ''))
 
   // existing slots for dup-check
@@ -2752,43 +2764,64 @@ async function handleImportExcel(event) {
     rt.timetableSlots.value.map(s => `${s.class_id}_${s.day}_${s.period}`)
   )
 
-  // build assign lookup: by teacher_id (primary) and teacher_name (fallback for old exports)
-  const assignLookup = {}
-  const assignLookupByName = {}
+  // assignment lookup per class: { class_id: { subject_code: assignment } }
+  const assignLookupByClass = {}
   assignments.value.forEach(a => {
-    assignLookup[`${a.class_id}_${a.subject_code}_${a.teacher_id}`] = a.assign_id || a.id
-    assignLookupByName[`${a.class_id}_${a.subject_code}_${a.teacher_name}`] = a.assign_id || a.id
+    if (!assignLookupByClass[a.class_id]) assignLookupByClass[a.class_id] = {}
+    const key = (a.subject_code || '').trim()
+    if (key) assignLookupByClass[a.class_id][key] = a
+  })
+
+  // teacher name map: { teacher_id: full_name }
+  const teacherNameMap = {}
+  teachers.value.forEach(t => {
+    teacherNameMap[t.teacher_id] = `${t.prefix || ''}${t.name} ${t.surname}`.trim()
   })
 
   const rows = dataRows.map((r, idx) => {
-    const [classRaw, dayRaw, periodRaw, subjectIdRaw, subjectNameRaw, teacherIdRaw, teacherNameRaw, roomRaw] = r
+    // 6-column format: hong | day | kab | sub | teacher | lab
+    const [hongRaw, dayRaw, kabRaw, subRaw, teacherRaw, labRaw] = r
 
-    const class_id = String(classRaw || '').trim()
-    const day_of_week = parseDay(dayRaw)
-    const period_number = parseInt(periodRaw)
-    const subject_id = String(subjectIdRaw || '').trim()
-    const subject_name = String(subjectNameRaw || '').trim()
-    const teacher_id = String(teacherIdRaw || '').trim()
-    const teacher_name = String(teacherNameRaw || '').trim()
-    const room_id = String(roomRaw || '').trim() || null
+    const class_id     = String(hongRaw || '').trim()
+    const day_of_week  = parseDay(dayRaw)
+    const period_number = parseInt(kabRaw)
+    const sub          = String(subRaw || '').trim()
+    const teacher_id   = String(teacherRaw || '').trim().replace(/^-$/, '')
+    const room_id      = String(labRaw || '').trim().replace(/^-$/, '') || null
 
-    const assign_id = assignLookup[`${class_id}_${subject_id}_${teacher_id}`]
-      || assignLookupByName[`${class_id}_${subject_id}_${teacher_name}`]
-      || null
+    const teacher_name = teacherNameMap[teacher_id] || teacher_id || ''
+
+    // if sub found in this class's assignments → subject slot; else → manual_lock
+    const assignment = class_id && sub && sub !== '-'
+      ? (assignLookupByClass[class_id]?.[sub] || null)
+      : null
+
+    const slot_type    = assignment ? 'subject' : 'manual_lock'
+    const subject_id   = assignment ? (assignment.subject_code || sub) : null
+    const subject_name = assignment ? (assignment.subject_name || '') : ''
+    const assign_id    = assignment ? (assignment.assign_id || assignment.id) : null
+    const lock_label   = !assignment && sub && sub !== '-' ? sub : null
+
     const key = `${class_id}_${day_of_week}_${period_number}`
 
     let _error = null
-    let _warn = null
+    let _warn  = null
 
     if (!class_id) _error = 'ไม่มีรหัสห้อง'
     else if (!day_of_week) _error = `วันไม่ถูกต้อง: "${dayRaw}"`
-    else if (!period_number || isNaN(period_number) || period_number < 1) _error = `คาบไม่ถูกต้อง: "${periodRaw}"`
-    else if (!subject_id && !subject_name) _error = 'ไม่มีรหัสหรือชื่อวิชา'
-    else if (existingKeys.has(key)) _warn = `ซ้อนทับ slot ที่มีอยู่ (จะถูกแทนที่)`
+    else if (!period_number || isNaN(period_number) || period_number < 1) _error = `คาบไม่ถูกต้อง: "${kabRaw}"`
+    else if (existingKeys.has(key)) _warn = 'ซ้อนทับ slot ที่มีอยู่ (จะถูกแทนที่)'
 
-    if (!_error && !assign_id) _warn = (_warn ? _warn + ' | ' : '') + 'ไม่พบภาระงานที่ตรงกัน'
+    if (!_error && slot_type === 'subject' && !assign_id)
+      _warn = (_warn ? _warn + ' | ' : '') + 'ไม่พบภาระงานที่ตรงกัน'
 
-    return { class_id, day_of_week, period_number, subject_id, subject_name, teacher_id, teacher_name, room_id, assign_id, _error, _warn, _row: idx + 2 }
+    return {
+      class_id, day_of_week, period_number,
+      sub_raw: sub, subject_id, subject_name,
+      teacher_id, teacher_name, room_id,
+      assign_id, slot_type, lock_label,
+      _error, _warn, _row: idx + 2
+    }
   })
 
   if (!rows.length) { ElMessage.error('ไม่พบแถวข้อมูล'); return }
@@ -2820,7 +2853,8 @@ async function confirmExcelImport() {
       teacher_name: r.teacher_name || null,
       room_id: r.room_id || null,
       assign_id: r.assign_id || null,
-      slot_type: 'subject',
+      slot_type: r.slot_type || 'subject',
+      lock_label: r.lock_label || null,
       updated_by: uid,
       updated_at: now,
     }))

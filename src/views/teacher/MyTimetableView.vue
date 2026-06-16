@@ -111,7 +111,7 @@ const slots = ref([])
 const captureRef = ref(null)
 const currentTerm = ref('')
 
-const isLocked = computed(() => schoolStore.isTimetableLocked)
+const isLocked = computed(() => !!schoolStore.settingsObj?.timetable_published_at)
 
 const ALL_DAYS = [
   { label: 'จันทร์', short: 'จ.', value: 1 },
@@ -248,8 +248,8 @@ async function loadMyTimetable() {
   }
 }
 
-// โหลดใหม่อัตโนมัติเมื่อ admin ล็อคตาราง
-watch(isLocked, val => { if (val) loadMyTimetable() })
+// โหลดใหม่อัตโนมัติเมื่อ admin publish ตาราง
+watch(() => schoolStore.settingsObj?.timetable_published_at, val => { if (val) loadMyTimetable() })
 
 async function saveAsImage() {
   if (!captureRef.value) return

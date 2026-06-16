@@ -27,7 +27,7 @@
               />
             </el-select>
           </div>
-          <div v-if="filterClassId">
+          <div v-show="filterClassId">
             <div class="text-xs text-gray-500 mb-1 font-medium">📚 วิชา</div>
             <el-select
               v-model="filterSubjectId"
@@ -139,13 +139,13 @@
             border
             stripe
             :header-cell-style="{ background:'#0891b2', color:'white', fontWeight:'700', fontSize:'14px' }"
-            :default-sort="{ prop:'student_no', order:'ascending' }"
+            :default-sort="{ prop:'seat_number', order:'ascending' }"
           >
-            <el-table-column type="index" label="ที่" width="55" align="center" />
+            <el-table-column prop="seat_number" label="เลขที่" width="65" align="center" sortable />
             <el-table-column prop="student_id" label="รหัสนักเรียน" width="110" align="center" />
-            <el-table-column label="ชื่อ-นามสกุล" min-width="190">
+            <el-table-column label="ชื่อ-นามสกุล" min-width="200">
               <template #default="{ row }">
-                <span class="font-semibold">{{ row.name }} {{ row.surname }}</span>
+                <span class="font-semibold">{{ studentNameFull(row) }}</span>
               </template>
             </el-table-column>
         <el-table-column label="มา" width="85" align="center" sortable prop="present">
@@ -279,7 +279,7 @@
                   :key="stu.student_id"
                   :class="idx % 2 === 0 ? 'pp5-tr-even' : 'pp5-tr-odd'"
                 >
-                  <td class="pp5-td pp5-td-center">{{ stu.student_no || '-' }}</td>
+                  <td class="pp5-td pp5-td-center">{{ stu.seat_number || '-' }}</td>
                   <td class="pp5-td pp5-td-center pp5-td-id">{{ stu.student_id }}</td>
                   <td class="pp5-td pp5-td-name">{{ studentNameFull(stu) }}</td>
                   <!-- Period cells -->
@@ -347,7 +347,7 @@ import { useSchoolDb } from '@/composables/useSchoolDb'
 
 const authStore   = useAuthStore()
 const schoolStore = useSchoolStore()
-const { getClasses, getStudents, getTeachingAssignments, getTeachActualsRangeByClass } = useSchoolDb()
+const { getClasses, getStudents, getTeachingAssignments, getTeachActualsRangeByClass, getSchoolSettings } = useSchoolDb()
 
 // ─── Role ────────────────────────────────────────────────────────
 const isTeacherOnly = computed(() =>
@@ -365,6 +365,7 @@ const activeTab = ref('summary')
 // ─── Filter state ────────────────────────────────────────────────
 const classes         = ref([])
 const assignments     = ref([])
+const homeroomPeriods = ref([])   // จาก teaching_log_settings.homeroom_special_periods
 const filterClassId   = ref('')
 const filterSubjectId = ref('')
 const startDate       = ref('')
@@ -387,6 +388,12 @@ const availableClasses = computed(() => {
       .filter(a => a.teacher_id === teacherId || a.teacher_id_snapshot === teacherId)
       .map(a => a.class_id)
   )
+  // รวมห้องที่ครูเป็นครูที่ปรึกษา (homeroom teacher)
+  for (const cls of classes.value) {
+    const ids = Array.isArray(cls.homeroom_teacher_ids) ? cls.homeroom_teacher_ids
+      : (cls.homeroom_teacher_id ? [cls.homeroom_teacher_id] : [])
+    if (ids.includes(teacherId)) myClassIds.add(cls.class_id)
+  }
   return classes.value.filter(c => myClassIds.has(c.class_id))
 })
 
@@ -401,10 +408,23 @@ const availableSubjects = computed(() => {
     : assignments.value.filter(a => a.class_id === filterClassId.value)
 
   const seen = new Set()
-  return myAssign
-    .filter(a => { if (seen.has(a.subject_code)) return false; seen.add(a.subject_code); return true })
+  const regularSubjects = myAssign
+    .filter(a => {
+      if (!a.subject_code) return false  // กรอง null/empty subject ออก
+      if (seen.has(a.subject_code)) return false
+      seen.add(a.subject_code)
+      return true
+    })
     .map(a => ({ id: a.subject_code, label: `${a.subject_code} ${a.subject_name || ''}`.trim() }))
     .sort((a, b) => a.id.localeCompare(b.id))
+
+  // วิชาพิเศษครูที่ปรึกษา จาก admin settings
+  const hpSubjects = homeroomPeriods.value.map(hp => ({
+    id: `__homeroom__${hp.period}`,
+    label: `คาบ${hp.period}: ${hp.name} (ครูที่ปรึกษา)`,
+  }))
+
+  return [...regularSubjects, ...hpSubjects]
 })
 
 const filterClassLabel = computed(() => {
@@ -485,8 +505,7 @@ const pp5StudentSummaries = computed(() => {
           if (cat === 'present') present++
           else if (cat === 'absent') absent++
           else if (cat === 'leave') leave++
-          else if (cat === 'official') { let official = 0; official++; } // สำหรับใช้ภายใน
-          // เนื่องจากโครงสร้างเก็บ present, absent, leave, official
+          // official ไม่หักจากการมา — ไม่นับแยก
       }
     }
     const pct = total > 0 ? (present / total) * 100 : 100
@@ -501,9 +520,10 @@ const pp5StudentSummaries = computed(() => {
 // ─── Load ─────────────────────────────────────────────────────────
 onMounted(async () => {
   try {
-    const [cls, asgn] = await Promise.all([getClasses(), getTeachingAssignments()])
-    classes.value     = cls
-    assignments.value = asgn
+    const [cls, asgn, settings] = await Promise.all([getClasses(), getTeachingAssignments(), getSchoolSettings()])
+    classes.value       = cls
+    assignments.value   = asgn
+    homeroomPeriods.value = settings?.teaching_log_settings?.homeroom_special_periods || []
     const now = new Date()
     const y   = now.getFullYear()
     const m   = String(now.getMonth() + 1).padStart(2, '0')
@@ -531,9 +551,14 @@ async function loadReport() {
     let actuals = await getTeachActualsRangeByClass(startDate.value, endDate.value, filterClassId.value)
 
     if (filterSubjectId.value) {
-      actuals = actuals.filter(a =>
-        a.subject_plan_id === filterSubjectId.value || a.subject_actual_id === filterSubjectId.value
-      )
+      if (filterSubjectId.value.startsWith('__homeroom__')) {
+        const period = Number(filterSubjectId.value.replace('__homeroom__', ''))
+        actuals = actuals.filter(a => a.slot_type === 'homeroom' && a.period_number === period)
+      } else {
+        actuals = actuals.filter(a =>
+          a.subject_plan_id === filterSubjectId.value || a.subject_actual_id === filterSubjectId.value
+        )
+      }
     }
     if (isTeacherOnly.value && teacherId) {
       actuals = actuals.filter(a =>
@@ -544,7 +569,7 @@ async function loadReport() {
     allStudents.value = students.map(s => ({
       ...s,
       student_name: s.student_name || `${s.prefix||''}${s.name||''} ${s.surname||''}`.trim(),
-    })).sort((a, b) => (Number(a.student_no) || 9999) - (Number(b.student_no) || 9999))
+    })).sort((a, b) => (Number(a.seat_number) || 9999) - (Number(b.seat_number) || 9999))
     allActuals.value = actuals
 
     const statusMap = {}
@@ -574,7 +599,7 @@ async function loadReport() {
       const c   = statusMap[s.student_id] || { present:0, late:0, absent:0, sick:0, leave:0, official:0, total:0 }
       const pct = c.total > 0 ? (c.present / c.total) * 100 : 0
       return { ...s, ...c, pct }
-    }).sort((a, b) => (Number(a.student_no) || 9999) - (Number(b.student_no) || 9999))
+    }).sort((a, b) => (Number(a.seat_number) || 9999) - (Number(b.seat_number) || 9999))
 
     if (reportRows.value.length === 0) {
       ElMessage.warning('ไม่พบข้อมูลในช่วงวันที่เลือก')
@@ -615,10 +640,10 @@ function formatDateThai(dateStr) {
 
 // ─── Excel: summary ───────────────────────────────────────────────
 function exportExcelSummary() {
-  const hdrs = ['ที่', 'รหัสนักเรียน', 'ชื่อ-นามสกุล', 'มา', 'ขาด', 'ลา', 'ไปราชการ', 'คาบทั้งหมด', '% มาเรียน']
-  const rows = reportRows.value.map((r, i) => [
-    i + 1, r.student_id,
-    `${r.name || ''} ${r.surname || ''}`.trim(),
+  const hdrs = ['เลขที่', 'รหัสนักเรียน', 'ชื่อ-นามสกุล', 'มา', 'ขาด', 'ลา', 'ไปราชการ', 'คาบทั้งหมด', '% มาเรียน']
+  const rows = reportRows.value.map((r) => [
+    r.seat_number || '-', r.student_id,
+    studentNameFull(r),
     r.present, r.absent, r.leave, r.official, r.total, r.pct.toFixed(1)
   ])
   const ws = XLSX.utils.aoa_to_sheet([hdrs, ...rows])
@@ -638,10 +663,10 @@ function exportExcelPp5() {
   // Row 2: Thai Buddhist date (blank for fixed + sum cols)
   const row2 = ['', '', '', ...cols.map(ta => formatDateBuddhist(ta.date)), '', '', '', '', '', '']
 
-  const dataRows = allStudents.value.map((stu, i) => {
+  const dataRows = allStudents.value.map((stu) => {
     const sum = pp5StudentSummaries.value[stu.student_id] || {}
     return [
-      stu.student_no || '-',
+      stu.seat_number || '-',
       stu.student_id,
       studentNameFull(stu),
       ...cols.map(ta => {

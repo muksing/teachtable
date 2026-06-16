@@ -340,11 +340,14 @@ export function useSchoolDb() {
       max_students: cls.max_students ? Number(cls.max_students) : 40,
     }
     // Only set homeroom fields when explicitly provided (avoid overwriting with empty on import)
-    if (cls.homeroom_teacher_id !== undefined) {
-      payload.homeroom_teacher_id = cls.homeroom_teacher_id || null
-      payload.homeroom_teacher_ids = Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length
+    if (cls.homeroom_teacher_id !== undefined || cls.homeroom_teacher_ids !== undefined) {
+      // Normalize array — always derive from whichever source has data
+      const ids = Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length
         ? cls.homeroom_teacher_ids
         : (cls.homeroom_teacher_id ? [cls.homeroom_teacher_id] : [])
+      payload.homeroom_teacher_ids = ids
+      // homeroom_teacher_id คือครูคนแรกเสมอ
+      payload.homeroom_teacher_id = ids[0] || null
       payload.homeroom_teacher_names_snapshot = Array.isArray(cls.homeroom_teacher_names_snapshot)
         ? cls.homeroom_teacher_names_snapshot
         : (cls.homeroom_teacher_name_snapshot ? [cls.homeroom_teacher_name_snapshot] : [])
@@ -596,8 +599,9 @@ export function useSchoolDb() {
   // TIMETABLE
   // ═════════════════════════════════════════════════════════════════════════
   async function getTimetable() {
+    const table = getSlotTable(schoolStore)
     const { data, error } = await supabase
-      .from('timetable_slots')
+      .from(table)
       .select('*')
       .eq('school_id', authStore.schoolId)
       .eq('term_id', term())
@@ -1017,14 +1021,14 @@ export function useSchoolDb() {
         .eq('date', dateKey),
       supabase
         .from('teachers')
-        .select('teacher_code, prefix, first_name, last_name')
+        .select('teacher_code, prefix, name, surname')
         .eq('school_id', schoolId),
     ])
     if (slotsRes.error) throw slotsRes.error
 
     const teacherNameMap = new Map()
     for (const t of (teachersRes.data || [])) {
-      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim())
+      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim())
     }
 
     const tSlots = slotsRes.data || []
@@ -1063,13 +1067,27 @@ export function useSchoolDb() {
       const [settingsResult, classesRes] = await Promise.all([
         getSchoolSettings(),
         supabase.from('classes')
-          .select('class_name, homeroom_teacher_id')
-          .eq('school_id', schoolId)
-          .eq('homeroom_teacher_id', teacherPlanId),
+          .select('class_name, homeroom_teacher_id, homeroom_teacher_ids, homeroom_teacher_names_snapshot')
+          .eq('school_id', schoolId),
       ])
       const homeroomPeriods = settingsResult.teaching_log_settings?.homeroom_special_periods || []
-      const homeroomClasses = classesRes.data || []
-      const teacherDisplayName = teacherNameMap.get(teacherPlanId) || teacherPlanId
+      // Homeroom period เป็นของครูคนแรกในรายชื่อที่ปรึกษา
+      const homeroomClasses = (classesRes.data || []).filter(c => {
+        const ids = Array.isArray(c.homeroom_teacher_ids) && c.homeroom_teacher_ids.length
+          ? c.homeroom_teacher_ids
+          : (c.homeroom_teacher_id ? [c.homeroom_teacher_id] : [])
+        return ids.length > 0 && ids[0] === teacherPlanId
+      })
+      // ชื่อครู: teacherNameMap → snapshot[0] → teacher code
+      const firstSnapName = homeroomClasses.length
+        ? (() => {
+            const c = homeroomClasses[0]
+            const snap = Array.isArray(c.homeroom_teacher_names_snapshot) ? c.homeroom_teacher_names_snapshot
+              : (c.homeroom_teacher_name_snapshot ? [c.homeroom_teacher_name_snapshot] : [])
+            return snap[0] || ''
+          })()
+        : ''
+      const teacherDisplayName = teacherNameMap.get(teacherPlanId) || firstSnapName || teacherPlanId
       for (const homeroomClass of homeroomClasses) {
         if (!homeroomPeriods.length) break
         const classId = homeroomClass.class_name
@@ -1081,7 +1099,7 @@ export function useSchoolDb() {
           if (results.some(r => r.class_id === classId && r.period === period)) continue
           const existing = actualsMap.get(`${classId}_${period}`)
           const hmInfo = {
-            subject_plan_id: '', subject_name: hp.name || 'เข้าแถว/โฮมรูม',
+            subject_plan_id: '', subject_name: hp.name || '',
             teacher_plan_id: teacherPlanId,
             teacher_plan_name: teacherDisplayName,
             class_id: classId, class_name: classId, slot_type: 'homeroom',
@@ -1130,7 +1148,7 @@ export function useSchoolDb() {
         .order('date'),
       getSchoolSettings(),
       supabase.from('classes')
-        .select('class_name, homeroom_teacher_id')
+        .select('class_name, homeroom_teacher_id, homeroom_teacher_ids, homeroom_teacher_names_snapshot')
         .eq('school_id', schoolId),
       supabase.from('teachers')
         .select('teacher_code, prefix, name, surname')
@@ -1140,7 +1158,9 @@ export function useSchoolDb() {
     if (actualsRes.error) throw actualsRes.error
 
     const homeroomPeriods      = settingsResult.teaching_log_settings?.homeroom_special_periods || []
-    const classesWithHomeroom  = (classesRes.data || []).filter(c => c.homeroom_teacher_id)
+    const classesWithHomeroom  = (classesRes.data || []).filter(c =>
+      (Array.isArray(c.homeroom_teacher_ids) ? c.homeroom_teacher_ids : [c.homeroom_teacher_id].filter(Boolean)).length > 0
+    )
     const teacherNameMap = new Map()
     for (const t of (teachersRes?.data || [])) {
       teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim())
@@ -1206,10 +1226,16 @@ export function useSchoolDb() {
           if (results.some(r => r.date === dateStr && r.class_id === cId && r.period === period)) continue
           const key = `${dateStr}_${cId}_${period}`
           const existing = actualsMap.get(key)
-          const hmTeacherId = cls.homeroom_teacher_id || ''
-          const hmTeacherName = teacherNameMap.get(hmTeacherId) || hmTeacherId
+          const hmTeacherId = (Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length
+            ? cls.homeroom_teacher_ids[0] : cls.homeroom_teacher_id) || ''
+          const hmSnapName = (() => {
+            const snap = Array.isArray(cls.homeroom_teacher_names_snapshot) ? cls.homeroom_teacher_names_snapshot
+              : (cls.homeroom_teacher_name_snapshot ? [cls.homeroom_teacher_name_snapshot] : [])
+            return snap[0] || ''
+          })()
+          const hmTeacherName = teacherNameMap.get(hmTeacherId) || hmSnapName || hmTeacherId
           const hmInfo = {
-            subject_plan_id: '', subject_name: hp.name || hp.subject_name || 'เข้าแถว/โฮมรูม',
+            subject_plan_id: '', subject_name: hp.name || hp.subject_name || '',
             teacher_plan_id: hmTeacherId,
             teacher_plan_name: hmTeacherName,
             class_id: cId, class_name: cId, slot_type: 'homeroom',
@@ -1260,22 +1286,24 @@ export function useSchoolDb() {
 
     let classesQ = supabase
       .from('classes')
-      .select('class_name, homeroom_teacher_id')
+      .select('class_name, homeroom_teacher_id, homeroom_teacher_ids, homeroom_teacher_names_snapshot')
       .eq('school_id', schoolId)
     if (classId) classesQ = classesQ.eq('class_name', classId)
 
     const [slotsRes, actualsRes, settingsResult, classesRes, teachersRes2] = await Promise.all([
       slotsQ, actualsQ, getSchoolSettings(), classesQ,
-      supabase.from('teachers').select('teacher_code, prefix, first_name, last_name').eq('school_id', schoolId),
+      supabase.from('teachers').select('teacher_code, prefix, name, surname').eq('school_id', schoolId),
     ])
     if (slotsRes.error) throw slotsRes.error
     if (actualsRes.error) throw actualsRes.error
 
     const homeroomPeriods     = settingsResult.teaching_log_settings?.homeroom_special_periods || []
-    const classesWithHomeroom = (classesRes.data || []).filter(c => c.homeroom_teacher_id)
+    const classesWithHomeroom = (classesRes.data || []).filter(c =>
+      (Array.isArray(c.homeroom_teacher_ids) ? c.homeroom_teacher_ids : [c.homeroom_teacher_id].filter(Boolean)).length > 0
+    )
     const teacherNameMap2 = new Map()
     for (const t of (teachersRes2?.data || [])) {
-      teacherNameMap2.set(t.teacher_code, `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim())
+      teacherNameMap2.set(t.teacher_code, `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim())
     }
 
     const slotsByDay = {}
@@ -1330,10 +1358,16 @@ export function useSchoolDb() {
           if (results.some(r => r.date === dateStr && r.class_id === cId && r.period === period)) continue
           const key = `${dateStr}_${cId}_${period}`
           const existing = actualsMap.get(key)
-          const hmTeacherId2 = cls.homeroom_teacher_id || ''
-          const hmTeacherName2 = teacherNameMap2.get(hmTeacherId2) || hmTeacherId2
+          const hmTeacherId2 = (Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length
+            ? cls.homeroom_teacher_ids[0] : cls.homeroom_teacher_id) || ''
+          const hmSnapName2 = (() => {
+            const snap = Array.isArray(cls.homeroom_teacher_names_snapshot) ? cls.homeroom_teacher_names_snapshot
+              : (cls.homeroom_teacher_name_snapshot ? [cls.homeroom_teacher_name_snapshot] : [])
+            return snap[0] || ''
+          })()
+          const hmTeacherName2 = teacherNameMap2.get(hmTeacherId2) || hmSnapName2 || hmTeacherId2
           const hmInfo = {
-            subject_plan_id: '', subject_name: hp.name || hp.subject_name || 'เข้าแถว/โฮมรูม',
+            subject_plan_id: '', subject_name: hp.name || hp.subject_name || '',
             teacher_plan_id: hmTeacherId2,
             teacher_plan_name: hmTeacherName2,
             class_id: cId, class_name: cId, slot_type: 'homeroom',
@@ -1392,10 +1426,15 @@ export function useSchoolDb() {
 
     const payloads = []
 
+    // ชุด period ที่ admin กำหนดเป็น homeroom (ไม่สร้าง regular slot ซ้อน)
+    const homeroomPeriodNums = new Set(homeroomPeriods.map(hp => Number(hp.period)).filter(Number.isFinite))
+
     // Normal timetable slots
     for (const slot of slotsForDay) {
       const period = Number(slot?.period ?? slot?.period_number)
       if (!Number.isFinite(period)) continue
+      // ถ้า period นี้เป็น homeroom period — ข้ามไป ให้ homeroom section สร้างแทน
+      if (homeroomPeriodNums.has(period)) continue
       const classId = asText(slot?.class_id)
       if (!classId) continue
 
@@ -1417,9 +1456,12 @@ export function useSchoolDb() {
       })
     }
 
-    // Homeroom special periods
+    // Homeroom special periods — สร้างให้ครูคนแรกในรายชื่อที่ปรึกษาเท่านั้น
     for (const cls of classes) {
-      if (!cls.homeroom_teacher_id) continue
+      const hmFirstTeacher = (Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length)
+        ? cls.homeroom_teacher_ids[0]
+        : cls.homeroom_teacher_id
+      if (!hmFirstTeacher) continue
       for (const hp of homeroomPeriods) {
         const period = Number(hp.period)
         if (!Number.isFinite(period)) continue
@@ -1428,6 +1470,9 @@ export function useSchoolDb() {
         if (!appliesToday) continue
         const classId = asText(cls.class_id)
         if (!classId) continue
+        const hmFirstName = (Array.isArray(cls.homeroom_teacher_names_snapshot) && cls.homeroom_teacher_names_snapshot.length)
+          ? cls.homeroom_teacher_names_snapshot[0]
+          : (cls.homeroom_teacher_name_snapshot ?? hmFirstTeacher)
         payloads.push({
           school_id: authStore.schoolId,
           term_id: termId,
@@ -1439,7 +1484,7 @@ export function useSchoolDb() {
           subject_id: null,
           is_filled: false,
           slot_type: 'homeroom',
-          teacher_plan_name: asText(cls.homeroom_teacher_name_snapshot ?? cls.homeroom_teacher_id),
+          teacher_plan_name: asText(hmFirstName),
           class_name: asText(cls.class_name ?? classId),
         })
       }

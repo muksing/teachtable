@@ -79,13 +79,29 @@
       </div>
 
       <!-- ── Photos card — BELOW form ──────────────────────────────────── -->
-      <div class="tad-photos-card mb-4">
-        <div class="tad-photos-title">📷 ภาพการสอน (เลือกได้สูงสุด 3 ภาพ)</div>
+      <div class="tad-photos-card mb-4" :class="{ 'tad-photos-card--error': photosMissing && saveAttempted }">
+        <div class="tad-photos-title">
+          📷 ภาพการสอน
+          <span class="tad-photos-required-badge">บังคับแนบ 3 ภาพ</span>
+          <span class="tad-photos-count" :class="photosCount === 3 ? 'tad-photos-count--ok' : 'tad-photos-count--warn'">
+            {{ photosCount }}/3
+          </span>
+        </div>
+        <div v-if="photosMissing && saveAttempted" class="tad-photos-error-msg">
+          ⚠️ กรุณาแนบภาพการสอนให้ครบ 3 ภาพก่อนบันทึก
+        </div>
         <div class="tad-photos-grid">
           <div v-for="n in [0,1,2]" :key="n" class="tad-photo-slot">
-            <div class="tad-photo-num">ภาพที่ {{ n + 1 }}</div>
+            <div class="tad-photo-num">
+              ภาพที่ {{ n + 1 }}
+              <span v-if="!(photoBase64s[n] || photoUrls[n])" class="tad-photo-req-dot">*</span>
+            </div>
             <!-- Preview: pending base64 > existing URL -->
-            <div class="tad-photo-preview-box" @click="triggerPhotoPick(n)">
+            <div
+              class="tad-photo-preview-box"
+              :class="{ 'tad-photo-preview-box--missing': !(photoBase64s[n] || photoUrls[n]) && saveAttempted }"
+              @click="triggerPhotoPick(n)"
+            >
               <img
                 v-if="photoBase64s[n] || photoUrls[n]"
                 :src="photoBase64s[n] || fixPhotoUrl(photoUrls[n])"
@@ -475,10 +491,14 @@ const subjectActualTeacherName = computed(() => {
 })
 
 // ─── Photo state (3 photos) ───────────────────────────────────────
-const photoInputRefs = ref([null, null, null])
-const photoBase64s   = ref(['', '', ''])   // local preview / pending upload
-const photoUrls      = ref(['', '', ''])   // saved URLs from Firestore
+const photoInputRefs  = ref([null, null, null])
+const photoBase64s    = ref(['', '', ''])   // local preview / pending upload
+const photoUrls       = ref(['', '', ''])   // saved URLs from Firestore
 const uploadingPhotos = ref(false)
+const saveAttempted   = ref(false)
+
+const photosCount   = computed(() => [0,1,2].filter(i => photoBase64s.value[i] || photoUrls.value[i]).length)
+const photosMissing = computed(() => photosCount.value < 3)
 
 // ─── Per-student records ──────────────────────────────────────────
 const studentRecords     = reactive({})
@@ -887,6 +907,11 @@ function buildStudentRecordsPayload() {
 
 // ─── Save ─────────────────────────────────────────────────────────
 async function saveAll() {
+  saveAttempted.value = true
+  if (photosMissing.value) {
+    ElMessage.warning(`กรุณาแนบภาพการสอนให้ครบ 3 ภาพ (ปัจจุบัน ${photosCount.value}/3 ภาพ)`)
+    return
+  }
   if (!form.value.topic.trim()) {
     ElMessage.warning('กรุณากรอกหัวข้อที่สอนก่อน')
     return
@@ -1279,9 +1304,30 @@ async function saveDoublePeriod() {
   padding: 18px 20px;
   box-shadow: 0 4px 20px rgba(236,72,153,0.10);
   border: 2px solid #fce7f3;
+  transition: border-color 0.2s;
 }
+.tad-photos-card--error { border-color: #ef4444; box-shadow: 0 4px 20px rgba(239,68,68,0.18); }
 .tad-photos-title {
-  font-weight: 700; font-size: 13px; color: #db2777; margin-bottom: 14px;
+  font-weight: 700; font-size: 13px; color: #db2777; margin-bottom: 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.tad-photos-required-badge {
+  background: #ef4444; color: white; font-size: 10px; font-weight: 700;
+  padding: 2px 8px; border-radius: 99px; letter-spacing: 0.04em;
+}
+.tad-photos-count {
+  font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 99px; margin-left: auto;
+}
+.tad-photos-count--ok   { background: #dcfce7; color: #15803d; }
+.tad-photos-count--warn { background: #fff1f2; color: #ef4444; }
+.tad-photos-error-msg {
+  background: #fff1f2; border: 1.5px solid #fecaca; border-radius: 10px;
+  padding: 8px 12px; font-size: 12px; font-weight: 700; color: #dc2626; margin-bottom: 12px;
+}
+.tad-photo-req-dot { color: #ef4444; font-weight: 900; margin-left: 2px; }
+.tad-photo-preview-box--missing {
+  border-color: #ef4444 !important;
+  background: linear-gradient(135deg, #fff1f2, #fce7f3) !important;
 }
 .tad-photos-grid {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;

@@ -482,19 +482,20 @@ const backdatingDays = computed(() =>
 
 function isDateDisabled(date) {
   const today = new Date(); today.setHours(0,0,0,0)
-  if (date > today) return true  // ไม่อนุญาตวันอนาคต
+  if (date > today) return true  // ไม่อนุญาตวันอนาคต (ทุกคน)
+  if (authStore.isAdmin) return false  // admin ย้อนหลังไม่จำกัด
   if (backdatingEnabled.value) {
     const minDate = new Date(today)
     minDate.setDate(minDate.getDate() - backdatingDays.value)
     return date < minDate
   }
-  // ถ้าไม่เปิด backdating — อนุญาตเฉพาะวันนี้
   return date < today
 }
 
 const backdatingInfo = computed(() => {
   const today = new Date().toISOString().split('T')[0]
   if (selectedDate.value !== today) {
+    if (authStore.isAdmin) return { type: 'info', msg: '📅 Admin: บันทึกย้อนหลังได้ทุกวัน' }
     if (backdatingEnabled.value) {
       return { type: 'info', msg: `📅 กรอกย้อนหลังได้ภายใน ${backdatingDays.value} วัน` }
     }
@@ -511,8 +512,8 @@ const mySlots    = ref([])
 const filledCount   = computed(() => mySlots.value.filter(s => s.is_filled).length)
 const unfilledCount = computed(() => mySlots.value.filter(s => !s.is_filled).length)
 
-// ตารางพร้อมใช้ = admin ล็อคแล้ว
-const isTimetableReady = computed(() => schoolStore.isTimetableLocked)
+// ตารางพร้อมใช้ = admin publish แล้ว
+const isTimetableReady = computed(() => !!schoolStore.settingsObj?.timetable_published_at)
 
 const noSlotMessage = computed(() => {
   if (isHoliday.value) return 'วันนี้เป็นวันหยุด'
@@ -633,8 +634,8 @@ onMounted(async () => {
   await ensureRecordsForSelectedDate()
   await loadData()
 })
-watch(() => schoolStore.isTimetableLocked, async (locked) => {
-  if (locked) {
+watch(() => schoolStore.settingsObj?.timetable_published_at, async (val) => {
+  if (val) {
     await ensureRecordsForSelectedDate()
     await loadData()
   }

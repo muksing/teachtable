@@ -73,11 +73,10 @@
             <el-input-number
               v-model="form.backdating_days"
               :min="1"
-              :max="30"
               :step="1"
               style="width:140px"
             />
-            <div class="text-xs text-gray-400 mt-2">วัน (แนะนำ 3-7 วัน)</div>
+            <div class="text-xs text-gray-400 mt-2">วัน (ตั้งได้ไม่จำกัด)</div>
           </div>
         </div>
 
@@ -351,6 +350,38 @@
         </el-table>
       </el-card>
 
+      <!-- ── เกณฑ์เฝ้าระวัง Watch List ── -->
+      <el-card class="section-card mb-4" style="border-left:4px solid #f97316">
+        <template #header>
+          <span class="section-title">⚠️ เกณฑ์เฝ้าระวังนักเรียน (Watch List)</span>
+        </template>
+        <div class="text-sm text-gray-500 mb-4">
+          ระบบจะแสดง Watch List ในหน้า Dashboard ห้องประจำชั้น เมื่อนักเรียนตรงตามเกณฑ์ที่กำหนด
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <div class="text-xs text-gray-500 mb-1 font-semibold">ขาดเรียนติดต่อกัน (วัน)</div>
+            <el-input-number v-model="form.watchlist_settings.absent_streak" :min="1" :max="30" style="width:100%" />
+            <div class="text-xs text-gray-400 mt-1">เฝ้าระวังเมื่อขาด ≥ N วันติดกัน</div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 mb-1 font-semibold">มาสายติดต่อกัน (วัน)</div>
+            <el-input-number v-model="form.watchlist_settings.late_streak" :min="1" :max="30" style="width:100%" />
+            <div class="text-xs text-gray-400 mt-1">เฝ้าระวังเมื่อสาย ≥ N วันติดกัน</div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 mb-1 font-semibold">โดดเรียนสะสม (ครั้ง)</div>
+            <el-input-number v-model="form.watchlist_settings.skip_count" :min="1" :max="50" style="width:100%" />
+            <div class="text-xs text-gray-400 mt-1">เฝ้าระวังเมื่อโดด ≥ N คาบ</div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 mb-1 font-semibold">% มาเรียนต่ำกว่า (%)</div>
+            <el-input-number v-model="form.watchlist_settings.attendance_pct" :min="1" :max="100" style="width:100%" />
+            <div class="text-xs text-gray-400 mt-1">เสี่ยง มส. เมื่อ % มาเรียน &lt; N</div>
+          </div>
+        </div>
+      </el-card>
+
       <div class="flex justify-end">
         <el-button
           type="primary"
@@ -408,6 +439,12 @@ const form = reactive({
       email:       { enabled: false },
       telegram:    { enabled: false, bot_token: '', chat_id: '' },
     },
+  },
+  watchlist_settings: {
+    absent_streak: 3,
+    late_streak: 3,
+    skip_count: 5,
+    attendance_pct: 80,
   },
 })
 
@@ -551,6 +588,11 @@ async function loadSettings() {
     form.notification_settings.channels.telegram.enabled = ch.telegram?.enabled === true
     form.notification_settings.channels.telegram.bot_token = ch.telegram?.bot_token || ''
     form.notification_settings.channels.telegram.chat_id = ch.telegram?.chat_id || ''
+    const ws = tl.watchlist_settings || {}
+    form.watchlist_settings.absent_streak = Number(ws.absent_streak ?? 3)
+    form.watchlist_settings.late_streak   = Number(ws.late_streak ?? 3)
+    form.watchlist_settings.skip_count    = Number(ws.skip_count ?? 5)
+    form.watchlist_settings.attendance_pct = Number(ws.attendance_pct ?? 80)
   } catch (e) {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ: ' + e.message)
   } finally {
@@ -594,6 +636,12 @@ async function saveSettings() {
             chat_id: form.notification_settings.channels.telegram.chat_id?.trim() || '',
           },
         },
+      },
+      watchlist_settings: {
+        absent_streak:   Number(form.watchlist_settings.absent_streak ?? 3),
+        late_streak:     Number(form.watchlist_settings.late_streak ?? 3),
+        skip_count:      Number(form.watchlist_settings.skip_count ?? 5),
+        attendance_pct:  Number(form.watchlist_settings.attendance_pct ?? 80),
       },
       updated_at: new Date().toISOString(),
     }

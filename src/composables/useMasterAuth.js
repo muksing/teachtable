@@ -7,6 +7,8 @@ import { USER_ROLES } from '@/supabase/schema'
 import { buildRolePayload, normalizeUserAccessRecord } from '@/utils/userRoles'
 
 let _authReadyResolve = null
+let _schoolChannel = null
+
 export const authReady = new Promise(resolve => {
   _authReadyResolve = resolve
   // Fallback: ถ้า Supabase ไม่ตอบภายใน 8 วินาที ให้ถือว่า auth พร้อมแล้ว (ไม่ login)
@@ -35,10 +37,34 @@ export function useMasterAuth() {
           data.settings?.school_info?.current_term ||   // fallback: nested in school_info
           '2568_1'
         )
+        subscribeSchoolSettings(schoolId)
       }
     } catch {
       // Superadmin may not have a school.
     }
+  }
+
+  function subscribeSchoolSettings(schoolId) {
+    if (!schoolId) return
+    if (_schoolChannel) supabase.removeChannel(_schoolChannel)
+    _schoolChannel = supabase
+      .channel(`school_settings_${schoolId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'schools',
+        filter: `id=eq.${schoolId}`,
+      }, (payload) => {
+        if (payload.new) {
+          schoolStore.setSchool(payload.new)
+          schoolStore.setCurrentTerm(
+            payload.new.current_term ||
+            payload.new.settings?.school_info?.current_term ||
+            '2568_1'
+          )
+        }
+      })
+      .subscribe()
   }
 
   async function repairUserRoleShape(userData) {

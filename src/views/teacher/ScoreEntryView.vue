@@ -108,8 +108,8 @@
                 หน่วย {{ u }}<br />
                 <span class="text-gray-400 font-normal text-xs">/{{ maxScores[u-1] }}</span>
               </th>
-              <th class="sg-th sg-th-score" style="background:#f8fafc">รวม</th>
-              <th class="sg-th sg-th-score" style="background:#f8fafc">%</th>
+              <th class="sg-th sg-th-score">รวม</th>
+              <th class="sg-th sg-th-score">%</th>
             </tr>
           </thead>
           <tbody>

@@ -105,11 +105,8 @@ import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
-import { useTimetableSource } from '@/composables/useTimetableSource'
-
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
-const { slotTable } = useTimetableSource()
 const { getClasses, getTeachers, getSubjects, getSchoolSettings } = useSchoolDb()
 
 const loading = ref(false)
@@ -154,7 +151,7 @@ async function loadData() {
     const [actualsRes, slotsRes] = await Promise.all([
       actualsQ,
       supabase
-        .from(slotTable.value)
+        .from('timetable_slots')
         .select('class_id, period_number, day_of_week, teacher_id, teacher_name, subject_id, subject_name')
         .eq('school_id', schoolId)
         .eq('term_id', termId),
@@ -179,29 +176,39 @@ async function loadData() {
     for (const t of (teachersRes.data || [])) {
       teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim())
     }
-    // lookup homeroom teacher ของแต่ละห้อง: class_name → homeroom_teacher_id
+    // lookup homeroom teacher คนแรก ของแต่ละห้อง: class_name → { id, snapName }
     const classHomeroomMap = new Map()
     for (const c of classesList.value) {
-      if (c.homeroom_teacher_id) classHomeroomMap.set(c.class_name || c.class_id, c.homeroom_teacher_id)
+      const ids = Array.isArray(c.homeroom_teacher_ids) && c.homeroom_teacher_ids.length
+        ? c.homeroom_teacher_ids
+        : (c.homeroom_teacher_id ? [c.homeroom_teacher_id] : [])
+      const names = Array.isArray(c.homeroom_teacher_names_snapshot) ? c.homeroom_teacher_names_snapshot
+        : (c.homeroom_teacher_name_snapshot ? [c.homeroom_teacher_name_snapshot] : [])
+      if (ids.length) {
+        classHomeroomMap.set(c.class_id, { id: ids[0], snapName: names[0] || '' })
+      }
     }
 
     allData.value = (actualsRes.data || [])
       .map(row => {
-        const isHomeroom = row.slot_type === 'homeroom'
+        // ถือว่าเป็น homeroom ถ้า slot_type='homeroom' หรือ period นั้น admin กำหนดเป็น homeroom และห้องนี้มีครูที่ปรึกษา
+        const hm = classHomeroomMap.get(row.class_id) || { id: '', snapName: '' }
+        const isConfiguredHomeroom = homeroomPeriods.some(hp => Number(hp.period) === row.period_number) && (!!hm.id || !!hm.snapName)
+        const isHomeroom = row.slot_type === 'homeroom' || isConfiguredHomeroom
+
         const dayName = THAI_DAYS_ARR_LOCAL[new Date((row.date || '') + 'T00:00:00').getDay()]
         const dayNum = THAI_DAY_TO_NUM[dayName]
         const slot = isHomeroom ? null : slotMap.get(`${row.class_id}_${row.period_number}_${dayNum}`)
 
-        let teacherName = teacherNameMap.get(slot?.teacher_id) || slot?.teacher_name || row.planned_teacher_id || ''
-        let subjectName = slot?.subject_name || row.subject_id || ''
+        let teacherName = teacherNameMap.get(slot?.teacher_id) || slot?.teacher_name || ''
+        let subjectName = slot?.subject_name || ''
 
         if (isHomeroom) {
-          // ดึงชื่อครูที่ปรึกษาจาก classes
-          const hmTeacherId = classHomeroomMap.get(row.class_id) || ''
-          teacherName = teacherNameMap.get(hmTeacherId) || hmTeacherId
-          // ดึงชื่อวิชาจาก settings โดย match period_number
+          // ดึงชื่อครูที่ปรึกษาจาก classes — fallback ไปใช้ snapshot ถ้า teacherNameMap ไม่มี
+          teacherName = teacherNameMap.get(hm.id) || hm.snapName || hm.id
+          // ชื่อวิชา/กิจกรรม อ่านจาก admin settings เท่านั้น ไม่ hardcode
           const hp = homeroomPeriods.find(p => Number(p.period) === row.period_number)
-          subjectName = hp?.name || 'เข้าแถว/โฮมรูม'
+          subjectName = hp?.name || ''
         }
 
         return {

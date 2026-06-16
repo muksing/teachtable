@@ -51,7 +51,7 @@ const routes = [
   // Scheduler routes
   { path: '/planning/assignments', name: 'Assignments', component: () => import('@/views/scheduler/AssignmentsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_scheduler', 'scheduler'] } },
   { path: '/planning/timetable', name: 'Timetable', component: () => import('@/views/scheduler/TimetableView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_scheduler', 'scheduler'] } },
-  { path: '/planning/print', name: 'PrintTimetable', component: () => import('@/views/scheduler/PrintTimetableView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_scheduler', 'scheduler'] } },
+  { path: '/planning/print', name: 'PrintTimetable', component: () => import('@/views/scheduler/PrintTimetableView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_scheduler', 'scheduler', 'school_teacher', 'teacher'] } },
   { path: '/planning/activity-booking', name: 'ActivityBooking', component: () => import('@/views/scheduler/ActivityBookingView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_scheduler', 'scheduler'] } },
   { path: '/planning/package-renewal', name: 'PackageRenewal', component: () => import('@/views/scheduler/PackageRenewalView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/teacher/my-timetable', name: 'MyTimetable', component: () => import('@/views/teacher/MyTimetableView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_scheduler', 'scheduler', 'school_teacher', 'teacher'] } },
@@ -79,6 +79,7 @@ const routes = [
 
   { path: '/teacher/teach-actual/:id', name: 'TeachActualDetail', component: () => import('@/views/teacher/TeachActualDetailView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'], featureGate: 'teaching_log_enabled' } },
   { path: '/teacher/missed-records', name: 'MissedTeachActual', component: () => import('@/views/teacher/MissedTeachActualView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'], featureGate: 'teaching_log_enabled' } },
+  { path: '/teacher/homeroom-dashboard', name: 'HomeroomDashboard', component: () => import('@/views/teacher/HomeroomDashboardView.vue'), meta: { requireAuth: true, roles: ['school_teacher', 'teacher'] } },
 
   // คะแนนเก็บ
   { path: '/teacher/score-entry', name: 'ScoreEntry', component: () => import('@/views/teacher/ScoreEntryView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'] } },
@@ -92,6 +93,9 @@ const router = createRouter({
   history: createWebHistory(),
   routes
 })
+
+// cache homeroom class: { teacherId, className } | null (ยังไม่ตรวจ)
+let _homeroomCache = null
 
 const EXPIRED_ALLOWLIST = ['/dashboard', '/planning/print', '/teacher/my-timetable', '/profile', '/admin/school-settings', '/admin/renewal']
 
@@ -143,6 +147,33 @@ router.beforeEach(async (to, from, next) => {
   }
   if (authStore.isSuperAdmin && to.path === '/dashboard') {
     return next('/superadmin/dashboard')
+  }
+
+  // ครูที่ปรึกษา → ไปหน้า homeroom dashboard อัตโนมัติเมื่อเข้า /dashboard
+  if (
+    to.path === '/dashboard' &&
+    authStore.hasAnyRole(['school_teacher', 'teacher']) &&
+    !authStore.hasAnyRole(['school_admin', 'admin', 'superadmin'])
+  ) {
+    const teacherId = authStore.profile?.teacher_id
+    if (teacherId) {
+      if (!_homeroomCache || _homeroomCache.teacherId !== teacherId) {
+        try {
+          const { supabase: sb } = await import('@/supabase/client')
+          const { data } = await sb
+            .from('classes')
+            .select('class_name')
+            .eq('school_id', authStore.schoolId)
+            .filter('homeroom_teacher_ids', 'cs', `{"${teacherId}"}`)
+            .limit(1)
+            .maybeSingle()
+          _homeroomCache = { teacherId, className: data?.class_name || null }
+        } catch {
+          _homeroomCache = { teacherId, className: null }
+        }
+      }
+      if (_homeroomCache.className) return next('/teacher/homeroom-dashboard')
+    }
   }
   if (to.meta.roles && !authStore.hasAnyRole(to.meta.roles)) {
     return next('/dashboard')

@@ -199,7 +199,7 @@ const allGroups = computed(() => {
         { to:'/planning/activity-booking',icon:'🎯',bg:'#ffedd5', label:'กิจกรรม/ครูคุม',   sub:'คาบกิจกรรม ครูประจำ', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'] },
         { to:'/reports/assignments',     icon:'📊', bg:'#fce7f3', label:'รายงานภาระงาน',    sub:'สรุปชั่วโมง ครู', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'] },
         { to:'/planning/timetable',      icon:'📅', bg:'#dbeafe', label:'จัดตารางสอน',      sub:'ลาก-วาง ตรวจสอบ', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'] },
-        { to:'/planning/print',          icon:'🖨️', bg:'#e0e7ff', label:'พิมพ์ตารางสอน',    sub:'PDF Excel รายห้อง/ครู', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'] },
+        { to:'/planning/print',          icon:'🖨️', bg:'#e0e7ff', label:'พิมพ์ตารางสอน',    sub:'PDF Excel รายห้อง/ครู', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/teacher/my-timetable',    icon:'👤', bg:'#ecfeff', label:'ตารางสอนของฉัน',   sub:'อ่านจากตารางที่เผยแพร่', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
       ],
     },
@@ -232,6 +232,7 @@ const allGroups = computed(() => {
         { to:'/admin/substitute-manage', icon:'🔄', bg:'#ede9fe', label:'จัดสอนแทน', sub:'มอบหมายครูสอนแทน (หัวหน้ากลุ่มสาระ/ผู้ดูแล)', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, 'sub_coordinator', 'subject_head'] },
         { to:'/teacher/missed-records', icon:'⚠️', bg:'#fef3c7', label:'รายวิชาที่ลืมบันทึก', sub:'คาบค้างบันทึกในช่วงย้อนหลัง', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/teacher/daily-attendance', icon:'📋', bg:'#f0fdf4', label:'เช็คชื่อรายวัน / สรุปส่ง ผปค.', sub:'ครูประจำชั้น · บันทึกรายวัน · แจ้งผู้ปกครอง', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
+        { to:'/teacher/homeroom-dashboard', icon:'🏫', bg:'#e0f2fe', label:'Dashboard ห้องประจำชั้น', sub:'สรุปการมาเรียน · เฝ้าระวัง · คัดกรองอัตโนมัติ', roles:[AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/teacher/behavior-entry', icon:'📝', bg:'#fdf4ff', label:'บันทึกพฤติกรรม', sub:'เลือกนักเรียน · แนบรูปภาพประกอบ', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'], featureGate: 'behavior_system_enabled' },
         { to:'/teacher/score-entry', icon:'🔢', bg:'#f0fdf4', label:'บันทึกคะแนนเก็บ', sub:'กรอกคะแนนรายหน่วย · Paste จาก Excel', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         ...(schoolStore.isClubModuleEnabled ? [

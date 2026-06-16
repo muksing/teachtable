@@ -26,8 +26,8 @@
       <!-- Preview banner when admin views while still editing -->
       <div v-if="!isLocked && authStore.isAdmin" class="publish-source-banner mb-5"
         style="border-color:#f59e0b;background:#fffbeb;">
-        <div class="publish-source-title" style="color:#92400e;">⚠️ โหมด Preview — ตารางยังไม่ล็อค</div>
-        <div class="publish-source-text" style="color:#78350f;">Admin ดู Preview ได้ แต่ครูยังมองไม่เห็น — ล็อคตารางเมื่อจัดเสร็จแล้ว</div>
+        <div class="publish-source-title" style="color:#92400e;">⚠️ โหมด Preview — ตารางยังไม่ Publish</div>
+        <div class="publish-source-text" style="color:#78350f;">Admin ดู Preview ได้ แต่ครูยังมองไม่เห็น — กด Publish เมื่อจัดตารางเสร็จแล้ว</div>
       </div>
 
       <div v-if="!subjectSlotCount && !loading" class="publish-source-banner publish-source-warn mb-5">
@@ -275,7 +275,7 @@ const { buildSignatureHTML, getModuleSignatures } = useSignature()
 const { getRooms, getTeachers, getClasses } = useSchoolDb()
 const { slotTable } = useTimetableSource()
 const term = computed(() => schoolStore.currentTerm || '2568_1')
-const isLocked = computed(() => schoolStore.isTimetableLocked)
+const isLocked = computed(() => !!schoolStore.settingsObj?.timetable_published_at)
 const { DAYS, PERIODS, PERIOD_TIMES } = useTimetable()
 
 const loading         = ref(false)
@@ -388,8 +388,8 @@ function clearAll(type) {
 onMounted(loadData)
 // reload เมื่อ auth พร้อม (schoolId กลายเป็น non-null หลัง session restore)
 watch(() => authStore.schoolId, (id) => { if (id && !slots.value.length) loadData() })
-// reload เมื่อ admin ล็อคตาราง (เหมือน MyTimetableView)
-watch(isLocked, (locked) => { if (locked) loadData() })
+// reload เมื่อ admin publish ตาราง
+watch(() => schoolStore.settingsObj?.timetable_published_at, val => { if (val) loadData() })
 
 async function loadData() {
   const schoolId = authStore.schoolId
@@ -399,17 +399,23 @@ async function loadData() {
     const t = term.value
     console.log('[PrintTimetable] loadData start — schoolId:', schoolId, 'term:', t)
 
-    // โหลดพร้อมกัน: ห้องเรียน, ครู, timetable_slots
-    const [classData, teacherData, { data: slotData, error: slotErr }] = await Promise.all([
-      getClasses(),
-      getTeachers(),
-      supabase.from(slotTable.value)
+    // โหลดพร้อมกัน: ห้องเรียน, ครู + paginate slots (ข้าม 1000-row cap)
+    const [classData, teacherData] = await Promise.all([getClasses(), getTeachers()])
+
+    let slotData = []
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data: chunk, error: slotErr } = await supabase
+        .from(slotTable.value)
         .select('*')
         .eq('school_id', schoolId)
         .eq('term_id', t)
-        .not('class_id', 'is', null),  // ดึงทุก slot_type (subject + activity + manual_lock)
-    ])
-    if (slotErr) throw slotErr
+        .not('class_id', 'is', null)
+        .range(from, from + PAGE - 1)
+      if (slotErr) throw slotErr
+      if (chunk?.length) slotData = slotData.concat(chunk)
+      if (!chunk || chunk.length < PAGE) break
+    }
 
     classes.value = classData.sort((a, b) => (a.class_id || '').localeCompare(b.class_id || '', 'th'))
     teachers.value = teacherData.sort((a, b) => (a.teacher_id || '').localeCompare(b.teacher_id || ''))
