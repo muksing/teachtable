@@ -224,6 +224,7 @@ const allGroups = computed(() => {
           { to:'/admin/behavior-settings', icon:'📚', bg:'#fef3c7', label:'ตั้งค่าพฤติกรรมการเรียน', sub:'การเรียนและพฤติกรรมทั่วไป', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
           { to:'/admin/teaching-log-settings', icon:'🧾', bg:'#e0f2fe', label:'ตั้งค่าบันทึกเข้าสอน', sub:'Google Drive วันหยุด บันทึกล่วงหน้า', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
           { to:'/admin/teach-actuals', icon:'🗑️', bg:'#fee2e2', label:'จัดการบันทึกเข้าสอน', sub:'ตรวจสอบ ลบข้อมูล', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
+          { to:'/admin/import-teach-actuals', icon:'📥', bg:'#e0f2fe', label:'นำเข้าข้อมูล (จากระบบเดิม)', sub:'อัพโหลด Excel 2 Sheet → import', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
           { to:'/admin/notification-settings', icon:'📩', bg:'#ede9fe', label:'ตั้งค่าจดหมายแจ้งผู้ปกครอง', sub:'เกณฑ์กลุ่มเสี่ยง ข้อความ นัดหมาย', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
         ] : []),
         { type:'section', label:'ทำรายการบันทึกการสอน', icon:'📝', badgeStyle:'background:linear-gradient(90deg,#059669,#10b981);' },

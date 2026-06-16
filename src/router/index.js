@@ -47,6 +47,7 @@ const routes = [
   { path: '/admin/rooms', name: 'Rooms', component: () => import('@/views/admin/RoomsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_scheduler', 'scheduler'] } },
   { path: '/admin/signatures', name: 'SignatureSettings', component: () => import('@/views/admin/SignatureSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/teach-actuals', name: 'AdminTeachActuals', component: () => import('@/views/admin/AdminTeachActualsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
+  { path: '/admin/import-teach-actuals', name: 'ImportTeachActuals', component: () => import('@/views/admin/ImportTeachActualsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
 
   // Scheduler routes
   { path: '/planning/assignments', name: 'Assignments', component: () => import('@/views/scheduler/AssignmentsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_scheduler', 'scheduler'] } },
