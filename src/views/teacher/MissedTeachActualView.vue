@@ -308,10 +308,9 @@ const isFilled = (r) => r.is_filled === true
 // ── Teacher view data ─────────────────────────────────────────────────────
 const unfilled = computed(() => {
   const myId = myTeacherId.value
-  return enrichedData.value.filter(r => {
-    if (isFilled(r)) return false
-    return r.teacher_plan_id === myId
-  })
+  return enrichedData.value.filter(r =>
+    r.id && !isFilled(r) && r.teacher_plan_id === myId
+  )
 })
 
 const groups = computed(() => {
@@ -336,7 +335,7 @@ const groups = computed(() => {
 
 // ── Admin view data ───────────────────────────────────────────────────────
 const adminUnfilled = computed(() =>
-  enrichedData.value.filter(r => !isFilled(r))
+  enrichedData.value.filter(r => r.id && !isFilled(r))
 )
 
 const teacherOptions = computed(() => {
