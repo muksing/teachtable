@@ -64,15 +64,45 @@
         </div>
 
         <el-form label-position="top" size="small" class="mt-4 tad-form">
-          <el-form-item label="หัวข้อที่สอน *">
-            <el-input v-model="form.topic" placeholder="กรอกหัวข้อที่สอนในคาบนี้" class="tad-input" />
+          <el-form-item>
+            <template #label>
+              <div class="tad-label-row">
+                <span>หัวข้อที่สอน *</span>
+                <button
+                  type="button"
+                  class="tad-mic-btn"
+                  :class="{ 'tad-mic-btn--active': micField === 'topic' }"
+                  @click="toggleMic('topic')"
+                  title="พูดเพื่อพิมพ์"
+                >{{ micField === 'topic' ? '🔴 กำลังฟัง...' : '🎙️ พูด' }}</button>
+              </div>
+            </template>
+            <el-input
+              v-model="form.topic"
+              type="textarea"
+              :rows="3"
+              placeholder="กรอกหัวข้อ / เนื้อหาที่สอนในคาบนี้"
+              class="tad-input"
+            />
           </el-form-item>
           <el-form-item label="ประเภทกิจกรรม">
             <el-select v-model="form.activity_type" class="w-full tad-select">
               <el-option v-for="t in ACTIVITY_TYPES" :key="t" :label="t" :value="t" />
             </el-select>
           </el-form-item>
-          <el-form-item label="หมายเหตุ">
+          <el-form-item>
+            <template #label>
+              <div class="tad-label-row">
+                <span>หมายเหตุ</span>
+                <button
+                  type="button"
+                  class="tad-mic-btn"
+                  :class="{ 'tad-mic-btn--active': micField === 'note' }"
+                  @click="toggleMic('note')"
+                  title="พูดเพื่อพิมพ์"
+                >{{ micField === 'note' ? '🔴 กำลังฟัง...' : '🎙️ พูด' }}</button>
+              </div>
+            </template>
             <el-input v-model="form.note" type="textarea" :rows="2" placeholder="หมายเหตุ (ถ้ามี)" class="tad-input" />
           </el-form-item>
         </el-form>
@@ -246,9 +276,18 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="หมายเหตุ" min-width="120">
+          <el-table-column label="หมายเหตุ" min-width="150">
             <template #default="{ row }">
-              <el-input v-model="getRecord(row.student_id).note" size="small" placeholder="หมายเหตุ" />
+              <div class="tad-stu-note-wrap">
+                <el-input v-model="getRecord(row.student_id).note" size="small" placeholder="หมายเหตุ" />
+                <button
+                  type="button"
+                  class="tad-mic-btn tad-mic-btn--sm"
+                  :class="{ 'tad-mic-btn--active': micField === 'stu_' + row.student_id }"
+                  @click="toggleMicStudent(row.student_id)"
+                  title="พูดเพื่อพิมพ์หมายเหตุ"
+                >{{ micField === 'stu_' + row.student_id ? '🔴' : '🎙️' }}</button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -356,12 +395,20 @@
           </div>
 
           <!-- Note field -->
-          <el-input
-            v-model="getRecord(stu.student_id).note"
-            :placeholder="'หมายเหตุ ' + stu.name"
-            size="small"
-            class="mt-2"
-          />
+          <div class="tad-stu-note-wrap mt-2">
+            <el-input
+              v-model="getRecord(stu.student_id).note"
+              :placeholder="'หมายเหตุ ' + stu.name"
+              size="small"
+            />
+            <button
+              type="button"
+              class="tad-mic-btn tad-mic-btn--sm"
+              :class="{ 'tad-mic-btn--active': micField === 'stu_' + stu.student_id }"
+              @click="toggleMicStudent(stu.student_id)"
+              title="พูดเพื่อพิมพ์หมายเหตุ"
+            >{{ micField === 'stu_' + stu.student_id ? '🔴' : '🎙️' }}</button>
+          </div>
         </div>
       </div>
 
@@ -405,6 +452,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 import { useTimetableSource } from '@/composables/useTimetableSource'
+import { useSpeechInput } from '@/composables/useSpeechInput'
 
 const route       = useRoute()
 const router      = useRouter()
@@ -446,6 +494,36 @@ const form = ref({
   topic: '', subject_actual_id: '', activity_type: 'บรรยาย', note: '',
   img1: '', img2: '', img3: '',
 })
+
+// ── Speech input ───────────────────────────────────────────────────
+const { supported: micSupported, startListening, stopListening } = useSpeechInput()
+const micField = ref('')
+function toggleMic(field) {
+  if (!micSupported) { ElMessage.warning('บราวเซอร์นี้ไม่รองรับการพูด กรุณาใช้ Chrome หรือ Edge'); return }
+  if (micField.value === field) { stopListening(); micField.value = ''; return }
+  micField.value = field
+  startListening(
+    text => {
+      form.value[field] = (form.value[field] ? form.value[field] + ' ' : '') + text
+      micField.value = ''
+    },
+    err => { ElMessage.error(err); micField.value = '' }
+  )
+}
+function toggleMicStudent(studentId) {
+  if (!micSupported) { ElMessage.warning('บราวเซอร์นี้ไม่รองรับการพูด กรุณาใช้ Chrome หรือ Edge'); return }
+  const key = 'stu_' + studentId
+  if (micField.value === key) { stopListening(); micField.value = ''; return }
+  micField.value = key
+  startListening(
+    text => {
+      const rec = getRecord(studentId)
+      rec.note = (rec.note ? rec.note + ' ' : '') + text
+      micField.value = ''
+    },
+    err => { ElMessage.error(err); micField.value = '' }
+  )
+}
 
 // ─── Subjects & timetable slots (substitute teaching) ────────────
 const allSubjects     = ref([])
@@ -760,7 +838,7 @@ async function loadPage() {
       subject_plan_id: taData.subject_id  || q.si  || '',
       subject_name:    taData.subject_id  || q.sn  || '',
       teacher_plan_id:  taData.planned_teacher_id || q.tpi || '',
-      teacher_plan_name: taData.planned_teacher_id || q.tpn || '',
+      teacher_plan_name: q.tpn || '',
       slot_type: taData.slot_type || 'normal',
       // images array → img1/img2/img3
       img1: Array.isArray(taData.images) ? (taData.images[0] || '') : '',
@@ -824,8 +902,8 @@ async function loadPage() {
     }))
 
     // Enrich ta with subject/teacher info from timetable_slots
-    // (teach_actuals stores null for these because DB columns were UUID type)
-    if (!ta.value.subject_plan_id || !ta.value.teacher_plan_id) {
+    const nameIsMissing = !ta.value.teacher_plan_name || ta.value.teacher_plan_name === ta.value.teacher_plan_id
+    if (!ta.value.subject_plan_id || !ta.value.teacher_plan_id || nameIsMissing) {
       const DAYS_ARR = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์']
       const DAY_TO_NUM = { จันทร์:1, อังคาร:2, พุธ:3, พฤหัสบดี:4, ศุกร์:5, เสาร์:6, อาทิตย์:7 }
       const dayNum = DAY_TO_NUM[DAYS_ARR[new Date(taData.date + 'T00:00:00').getDay()]]
@@ -838,8 +916,23 @@ async function loadPage() {
           subject_plan_id:   planSlot.subject_id   || ta.value.subject_plan_id   || '',
           subject_name:      planSlot.subject_name || planSlot.subject_id         || ta.value.subject_name || '',
           teacher_plan_id:   planSlot.teacher_id   || ta.value.teacher_plan_id   || '',
-          teacher_plan_name: planSlot.teacher_name || planSlot.teacher_id         || ta.value.teacher_plan_name || '',
+          teacher_plan_name: planSlot.teacher_name || ta.value.teacher_plan_name || '',
         }
+      }
+    }
+
+    // Fallback: ถ้าชื่อยังว่างหรือเป็นรหัสครู → lookup จาก teachers table
+    const planId = ta.value.teacher_plan_id
+    const stillMissing = !ta.value.teacher_plan_name || ta.value.teacher_plan_name === planId
+    if (planId && stillMissing) {
+      const { data: tPlan } = await supabase
+        .from('teachers')
+        .select('prefix, first_name, last_name')
+        .eq('school_id', authStore.schoolId)
+        .eq('teacher_code', planId)
+        .maybeSingle()
+      if (tPlan?.first_name) {
+        ta.value.teacher_plan_name = [tPlan.prefix, tPlan.first_name, tPlan.last_name].filter(Boolean).join(' ')
       }
     }
 
@@ -1288,9 +1381,21 @@ async function saveDoublePeriod() {
 .tad-subject-name-text { font-size: 20px; font-weight: 800; color: #1e1b4b; line-height: 1.3; }
 .tad-sub-badge { margin-left: auto; align-self: center; font-weight: 700; }
 
-.tad-form :deep(.el-form-item__label) { font-weight: 700; color: #4338ca; font-size: 14px; }
+.tad-form :deep(.el-form-item__label) { font-weight: 700; color: #4338ca; font-size: 14px; width: 100%; }
 .tad-form :deep(.el-input__inner) { font-size: 15px; }
 .tad-form :deep(.el-textarea__inner) { font-size: 15px; }
+.tad-label-row { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+.tad-mic-btn {
+  background: #ede9fe; border: none; border-radius: 8px;
+  padding: 3px 10px; font-size: 13px; font-weight: 600; color: #4338ca;
+  cursor: pointer; white-space: nowrap; transition: background .15s; flex-shrink: 0;
+}
+.tad-mic-btn:hover { background: #ddd6fe; }
+.tad-mic-btn--active { background: #fef2f2; color: #dc2626; animation: mic-pulse .8s infinite; }
+.tad-mic-btn--sm { padding: 3px 8px; font-size: 14px; }
+.tad-stu-note-wrap { display: flex; gap: 6px; align-items: center; }
+.tad-stu-note-wrap :deep(.el-input) { flex: 1; }
+@keyframes mic-pulse { 0%,100% { opacity:1 } 50% { opacity:.5 } }
 .tad-input :deep(.el-input__wrapper) { border-radius: 8px; border: 1.5px solid #c7d2fe !important; }
 .tad-input :deep(.el-input__wrapper):hover { border-color: #6366f1 !important; }
 .tad-input :deep(.el-input__wrapper.is-focus) { border-color: #4f46e5 !important; box-shadow: 0 0 0 2px rgba(99,102,241,0.15) !important; }

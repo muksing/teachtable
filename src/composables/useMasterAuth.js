@@ -1,5 +1,5 @@
 // src/composables/useMasterAuth.js
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
@@ -184,22 +184,74 @@ export function useMasterAuth() {
     }
   }
 
+  // ── Google OAuth ──────────────────────────────────────────────────────
+  const googleLoading = ref(false)
+  const googleError   = ref(null)
+
+  async function loginWithGoogle() {
+    googleLoading.value = true
+    googleError.value   = null
+    try {
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin,
+          queryParams: { prompt: 'select_account' },
+        },
+      })
+      if (oauthError) throw oauthError
+      // browser จะ redirect ไป Google — ไม่มีค่า return
+    } catch (err) {
+      googleError.value = err.message || 'เข้าสู่ระบบด้วย Google ไม่สำเร็จ'
+      googleLoading.value = false
+    }
+  }
+
+  // helper: โหลด profile หลัง session พร้อม (ใช้ร่วมกันระหว่าง INITIAL_SESSION และ SIGNED_IN)
+  async function handleSessionReady(user, router) {
+    try {
+      const normalizedUser = await fetchNormalizedUser(user.id)
+      const userSchoolId   = normalizedUser.schoolId || normalizedUser.school_id
+      const isSuperAdmin   = normalizedUser.roles.includes(USER_ROLES.SUPERADMIN)
+
+      if (!isSuperAdmin && !userSchoolId) {
+        throw new Error('ไม่พบโรงเรียนที่สังกัด กรุณาติดต่อผู้ดูแลระบบ')
+      }
+
+      authStore.setProfile(normalizedUser)
+      authStore.setLoggedIn(true)
+
+      if (!schoolStore.schoolInfo && !isSuperAdmin) {
+        await loadSchoolInfo(userSchoolId)
+      }
+    } catch (err) {
+      // Google OAuth แต่ email ไม่มีใน users table → sign out + แสดง error
+      await supabase.auth.signOut()
+      authStore.clear()
+      schoolStore.clear()
+      error.value = err.message.includes('User not found')
+        ? 'ไม่พบบัญชีนี้ในระบบ — Gmail ต้องตรงกับอีเมลที่ admin ตั้งค่าไว้'
+        : (err.message || 'เกิดข้อผิดพลาด')
+      if (router) router.push('/login')
+    }
+  }
+
   function initAuthListener(router) {
     supabase.auth.onAuthStateChange(async (event, session) => {
       const user = session?.user
 
-      if (user && event === 'INITIAL_SESSION' && !authStore.isLoggedIn) {
-        try {
-          const normalizedUser = await fetchNormalizedUser(user.id)
-          authStore.setProfile(normalizedUser)
-          authStore.setLoggedIn(true)
-
-          if (!schoolStore.schoolInfo && !normalizedUser.roles.includes(USER_ROLES.SUPERADMIN)) {
-            await loadSchoolInfo(normalizedUser.schoolId || normalizedUser.school_id)
-          }
-        } catch (err) {
-          authStore.clear()
-          schoolStore.clear()
+      if (user && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) {
+        if (!authStore.isLoggedIn) {
+          await handleSessionReady(user, router)
+        } else if (event === 'INITIAL_SESSION') {
+          // Profile restored from localStorage — reload school info
+          try {
+            const profile = authStore.profile
+            if (!schoolStore.schoolInfo && profile && !profile.roles?.includes(USER_ROLES.SUPERADMIN)) {
+              const schoolId = profile.schoolId || profile.school_id
+              if (schoolId) await loadSchoolInfo(schoolId)
+            }
+          } catch {}
         }
       } else if (event === 'SIGNED_OUT') {
         authStore.clear()
@@ -278,7 +330,10 @@ export function useMasterAuth() {
   return {
     loading,
     error,
+    googleLoading,
+    googleError,
     login,
+    loginWithGoogle,
     superAdminLogin,
     schoolAdminLogin,
     logout,

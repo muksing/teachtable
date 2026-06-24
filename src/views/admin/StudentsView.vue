@@ -478,16 +478,15 @@
           <el-table-column prop="gender" label="เพศ" width="70" align="center" />
           <el-table-column prop="parent_name" label="ผู้ปกครอง" width="130" />
           <el-table-column prop="total_behavior_score" label="คะแนน" width="70" align="center" />
-          <el-table-column label="สถานะ" width="90" align="center">
+          <el-table-column prop="gov_id" label="เลขบัตร" width="130" />
+          <el-table-column label="สถานะ" width="140" align="center">
             <template #default="{ row }">
-              <el-tag :type="row._error ? 'danger' : (row._isUpdate ? 'warning' : 'success')" size="small">
-                {{ row._error ? 'ผิดพลาด' : (row._isUpdate ? 'อัปเดต' : 'ใหม่') }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="หมายเหตุ" min-width="160">
-            <template #default="{ row }">
-              <span class="text-xs text-red-500">{{ row._error }}</span>
+              <el-tag v-if="row._error" type="danger" size="small">❌ {{ row._error }}</el-tag>
+              <template v-else-if="row._isUpdate">
+                <el-tag type="warning" size="small">อัปเดต</el-tag>
+                <span class="text-xs text-gray-400 ml-1">(match {{ row._matchedBy }})</span>
+              </template>
+              <el-tag v-else type="success" size="small">✅ ใหม่</el-tag>
             </template>
           </el-table-column>
         </el-table>
@@ -888,7 +887,7 @@ function openDialog(student = null) {
       surname: student.surname || '',
       gender: student.gender || 'ชาย',
       birth_date: student.birth_date || '',
-      national_id: student.national_id || '',
+      national_id: student.gov_id || student.national_id || '',
       behavior_carry_over: student.behavior_carry_over ?? 0,
       total_behavior_score: student.total_behavior_score ?? 0,
       general_behavior_score: student.general_behavior_score ?? 0,
@@ -1120,37 +1119,72 @@ function handleImportFile(e) {
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 })
     if (rows.length < 2) { ElMessage.warning('ไม่พบข้อมูลในไฟล์'); return }
     const classSet = new Set(classes.value.map(c => c.class_id))
+
+    // helper: คืน import value ถ้ามี ไม่งั้นใช้ค่าเดิม
+    const pick = (importVal, existing) => {
+      const v = importVal !== undefined && importVal !== null ? String(importVal).trim() : ''
+      return v !== '' ? v : (existing ?? '')
+    }
+    const pickNum = (importVal, existing) => {
+      const n = Number(importVal)
+      return !isNaN(n) && String(importVal).trim() !== '' ? n : (existing ?? null)
+    }
+    const pickJson = (importVal, existing) => {
+      const v = importVal !== undefined && importVal !== null ? String(importVal).trim() : ''
+      if (!v) return existing || null
+      try { return JSON.parse(v) } catch { return existing || null }
+    }
+
     const parsed = rows.slice(1).filter(r => r.some(c => c)).map(r => {
       const student_id = String(r[1] || '').trim()
-      const existingStudent = students.value.find(s => s.student_id === student_id)
-      const classId = String(r[0] || existingStudent?.class_id || '').trim()
+      const govIdRaw   = String(r[17] || '').trim()   // col 17 = เลขบัตรประชาชน
 
-      const obj = {
-        class_id: classId, class_name_snapshot: classId,
-        student_id: student_id,
-        seat_number: parseInt(r[2]) || existingStudent?.seat_number || null,
-        prefix: String(r[3] || existingStudent?.prefix || '').trim(),
-        name: String(r[4] || existingStudent?.name || '').trim(),
-        surname: String(r[5] || existingStudent?.surname || '').trim(),
-        gender: genderFromPrefix(String(r[3] || existingStudent?.prefix || '').trim()) || String(r[6] || existingStudent?.gender || '').trim(),
-        birth_date: r[7] ? String(r[7]).trim() : (existingStudent?.birth_date || ''),
-        parent_name: String(r[8] || existingStudent?.parent_name || '').trim(),
-        parent_phone: String(r[9] || existingStudent?.parent_phone || '').trim(),
-        total_behavior_score: r[10] !== undefined && r[10] !== '' ? Number(r[10]) : (existingStudent?.total_behavior_score ?? 0),
-        general_behavior_score: r[10] !== undefined && r[10] !== '' ? Number(r[10]) : (existingStudent?.general_behavior_score ?? 0),
-        attendance_behavior_score: existingStudent?.attendance_behavior_score ?? 0,
-        learning_behavior_score: existingStudent?.learning_behavior_score ?? 0,
-        note: String(r[11] || existingStudent?.note || '').trim(),
-        is_active: true,
-        student_status: String(r[12] || existingStudent?.student_status || 'เรียนอยู่').trim(),
-        _isUpdate: !!existingStudent
+      // match ด้วย student_code ก่อน ถ้าไม่เจอให้ลอง gov_id
+      let existingStudent = student_id
+        ? students.value.find(s => s.student_id === student_id)
+        : null
+      if (!existingStudent && govIdRaw) {
+        existingStudent = students.value.find(s => s.gov_id === govIdRaw)
       }
 
+      const classId = pick(r[0], existingStudent?.class_id)
+      const prefixRaw = pick(r[3], existingStudent?.prefix)
+
+      const obj = {
+        // ถ้า import ไม่มี student_id แต่เจอ existing ด้วย gov_id → ใช้ student_id เดิม
+        student_id: student_id || existingStudent?.student_id || '',
+        class_id: classId,
+        class_name_snapshot: classId,
+        seat_number: pickNum(r[2], existingStudent?.seat_number),
+        prefix:      prefixRaw,
+        name:        pick(r[4], existingStudent?.name),
+        surname:     pick(r[5], existingStudent?.surname),
+        gender:      genderFromPrefix(prefixRaw) || pick(r[6], existingStudent?.gender),
+        birth_date:  pick(r[7], existingStudent?.birth_date),
+        parent_name:  pick(r[8], existingStudent?.parent_name),
+        parent_phone: pick(r[9], existingStudent?.parent_phone),
+        general_behavior_score:    pickNum(r[10], existingStudent?.general_behavior_score ?? 0),
+        attendance_behavior_score: pickNum(r[11], existingStudent?.attendance_behavior_score ?? 0),
+        learning_behavior_score:   pickNum(r[12], existingStudent?.learning_behavior_score ?? 0),
+        total_behavior_score:      pickNum(r[13], existingStudent?.total_behavior_score ?? 0),
+        behavior_carry_over:       pickNum(r[14], existingStudent?.behavior_carry_over ?? 0),
+        note:           pick(r[15], existingStudent?.note),
+        student_status: pick(r[16], existingStudent?.student_status) || 'เรียนอยู่',
+        gov_id: govIdRaw || existingStudent?.gov_id || null,
+        photo_url:          pick(r[18], existingStudent?.photo_url),
+        guardian_primary:   pickJson(r[19], existingStudent?.guardian_primary),
+        guardian_secondary: pickJson(r[20], existingStudent?.guardian_secondary),
+        contact:            pickJson(r[21], existingStudent?.contact),
+        is_active: true,
+        _isUpdate: !!existingStudent,
+        _matchedBy: existingStudent
+          ? (student_id && students.value.find(s => s.student_id === student_id) ? 'รหัส' : 'บัตรประชาชน')
+          : null,
+      }
+
+      // คงข้อมูลที่ Excel ไม่ได้ส่งมา (ไฟล์เก่า < 22 คอลัมน์)
       if (existingStudent) {
-        obj.contact = existingStudent.contact || { phone: '', line_id: '', email: '', telegram: '', address: '' }
-        obj.guardian_primary = existingStudent.guardian_primary || { name: '', relationship: 'บิดา/มารดา', phone: '', line_id: '', email: '', telegram: '' }
-        obj.guardian_secondary = existingStudent.guardian_secondary || { name: '', relationship: '', phone: '', line_id: '', email: '', telegram: '' }
-        obj.photo_url = existingStudent.photo_url || ''
+        obj.id = existingStudent.id
       }
 
       let error = ''
@@ -1180,7 +1214,7 @@ async function confirmImport() {
   const rowErrors = []
   try {
     for (const row of validRows) {
-      const { _error, _isUpdate, ...data } = row
+      const { _error, _isUpdate, _matchedBy, ...data } = row
       try {
         await saveStudent(data)
         imported++
@@ -1210,12 +1244,26 @@ async function confirmImport() {
 }
 
 function exportExcel() {
-  const headers = ['ห้อง', 'รหัสนักเรียน', 'เลขที่', 'คำนำหน้า', 'ชื่อ', 'นามสกุล', 'เพศ', 'วันเกิด', 'ผู้ปกครอง', 'เบอร์ผู้ปกครอง', 'คะแนนความประพฤติ', 'หมายเหตุ', 'สถานะ']
+  const headers = [
+    'ห้อง', 'รหัสนักเรียน', 'เลขที่', 'คำนำหน้า', 'ชื่อ', 'นามสกุล', 'เพศ', 'วันเกิด',
+    'ผู้ปกครอง', 'เบอร์ผู้ปกครอง',
+    'คะแนนทั่วไป', 'คะแนนมาเรียน', 'คะแนนเรียนรู้', 'คะแนนรวม', 'สะสมยกมา',
+    'หมายเหตุ', 'สถานะ', 'เลขบัตรประชาชน', 'รูปภาพ URL',
+    'ผู้ปกครองหลัก', 'ผู้ปกครองรอง', 'ติดต่ออื่น',
+  ]
   const rows = filteredStudents.value.map(s => [
     s.class_id, s.student_id, s.seat_number,
-    s.prefix, s.name, s.surname, s.gender,
-    s.birth_date, s.parent_name, s.parent_phone, s.total_behavior_score ?? 0, s.note,
-    s.student_status || 'เรียนอยู่',
+    s.prefix, s.name, s.surname, s.gender, s.birth_date,
+    s.parent_name, s.parent_phone,
+    s.general_behavior_score ?? 0,
+    s.attendance_behavior_score ?? 0,
+    s.learning_behavior_score ?? 0,
+    s.total_behavior_score ?? 0,
+    s.behavior_carry_over ?? 0,
+    s.note, s.student_status || 'เรียนอยู่', s.gov_id || '', s.photo_url || '',
+    s.guardian_primary ? JSON.stringify(s.guardian_primary) : '',
+    s.guardian_secondary ? JSON.stringify(s.guardian_secondary) : '',
+    s.contact ? JSON.stringify(s.contact) : '',
   ])
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
   const wb = XLSX.utils.book_new()
