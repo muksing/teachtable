@@ -170,7 +170,7 @@ async function onLogChange() {
     const classId = log.class_id
     let list = studentCacheByClass.value[classId]
     if (!list) {
-      list = await getStudents(classId)
+      list = await getStudents(classId, { activeOnly: true })
       studentCacheByClass.value = {
         ...studentCacheByClass.value,
         [classId]: list

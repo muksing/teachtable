@@ -97,7 +97,7 @@ export function useSchoolDb() {
   const authStore = useAuthStore()
   const schoolStore = useSchoolStore()
 
-  const term = () => schoolStore.currentTerm || '2568_1'
+  const term = () => schoolStore.displayTerm || schoolStore.currentTerm || '2568_1'
 
   function getAuditFields() {
     return {
@@ -392,7 +392,7 @@ export function useSchoolDb() {
   // ═════════════════════════════════════════════════════════════════════════
   // STUDENTS
   // ═════════════════════════════════════════════════════════════════════════
-  async function getStudents(classId = null) {
+  async function getStudents(classId = null, { activeOnly = false } = {}) {
     let q = supabase
       .from('students')
       .select('*')
@@ -401,6 +401,9 @@ export function useSchoolDb() {
       q = q.eq('class_id', classId)
     } else {
       q = q.order('class_id')
+    }
+    if (activeOnly) {
+      q = q.or('status.is.null,status.eq.เรียนอยู่')
     }
     const { data, error } = await q
     if (error) throw error
@@ -451,22 +454,31 @@ export function useSchoolDb() {
     }
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(student.id || '')
     if (isUuid) {
+      // มี id ตรงๆ (จาก import ที่ match แล้ว หรือจาก edit form)
       const { error } = await supabase.from('students').update(payload).eq('id', student.id)
       if (error) throw error
       return student.id
-    } else {
-      const { data: existing } = await supabase.from('students').select('id')
-        .eq('school_id', authStore.schoolId).eq('student_code', student.student_id).maybeSingle()
-      if (existing?.id) {
-        const { error } = await supabase.from('students').update(payload).eq('id', existing.id)
-        if (error) throw error
-        return existing.id
-      } else {
-        const { data, error } = await supabase.from('students').insert([payload]).select().single()
-        if (error) throw error
-        return data.id
-      }
     }
+    // ไม่มี id → ค้นหาด้วย student_code ก่อน แล้วค้นด้วย gov_id เป็น fallback
+    let existingId = null
+    if (student.student_id) {
+      const { data } = await supabase.from('students').select('id')
+        .eq('school_id', authStore.schoolId).eq('student_code', student.student_id).maybeSingle()
+      existingId = data?.id || null
+    }
+    if (!existingId && payload.gov_id) {
+      const { data } = await supabase.from('students').select('id')
+        .eq('school_id', authStore.schoolId).eq('gov_id', payload.gov_id).maybeSingle()
+      existingId = data?.id || null
+    }
+    if (existingId) {
+      const { error } = await supabase.from('students').update(payload).eq('id', existingId)
+      if (error) throw error
+      return existingId
+    }
+    const { data, error } = await supabase.from('students').insert([payload]).select().single()
+    if (error) throw error
+    return data.id
   }
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -558,7 +570,9 @@ export function useSchoolDb() {
   }
 
   async function saveTeachingAssignment(assignment) {
-    const termId = await getTermId()
+    // Use term() directly (not getTermId()) — getTermId() may return a UUID from academic_terms,
+    // but teaching_assignments.term_id and reload() both use the plain string e.g. '2568_1'
+    const termId = term()
     const payload = {
       school_id: authStore.schoolId,
       term_id: termId,
@@ -1201,7 +1215,7 @@ export function useSchoolDb() {
           subject_plan_id:   slot.subject_id   || '',
           subject_name:      slot.subject_name  || slot.subject_id || '',
           teacher_plan_id:   slot.teacher_id    || '',
-          teacher_plan_name: slot.teacher_name  || slot.teacher_id || '',
+          teacher_plan_name: teacherNameMap.get(slot.teacher_id) || slot.teacher_name || slot.teacher_id || '',
           class_id:          slot.class_id,
           class_name:        slot.class_id,
         }
@@ -1333,7 +1347,7 @@ export function useSchoolDb() {
           subject_plan_id:   slot.subject_id   || '',
           subject_name:      slot.subject_name  || slot.subject_id || '',
           teacher_plan_id:   slot.teacher_id    || '',
-          teacher_plan_name: slot.teacher_name  || slot.teacher_id || '',
+          teacher_plan_name: teacherNameMap.get(slot.teacher_id) || slot.teacher_name || slot.teacher_id || '',
           class_id:          slot.class_id,
           class_name:        slot.class_id,
         }

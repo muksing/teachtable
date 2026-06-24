@@ -269,7 +269,10 @@ const myTeacherId = computed(() =>
 )
 
 // ── Config ────────────────────────────────────────────────────────────────
-const maxDays = computed(() => Number(schoolStore.schoolInfo?.backdating_days || 14))
+const maxDays = computed(() => {
+  const tl = schoolStore.schoolInfo?.settings?.teaching_log_settings || {}
+  return Number(tl.backdating_days ?? schoolStore.schoolInfo?.backdating_days ?? 14)
+})
 
 const dayOptions = computed(() => {
   const opts = [3, 7, 14, 30].filter(d => d <= maxDays.value)
@@ -339,7 +342,7 @@ const unfilled = computed(() => {
   const myId = myTeacherId.value
   return enrichedData.value.filter(r => {
     if (r.is_filled) return false
-    if (!r.id && !r.teach_actual_id) return false  // ไม่แสดง virtual record (ไม่มีใน DB)
+    // รวม virtual records (ยังไม่มี DB entry) เพราะเป็นคาบที่ครูไม่เคยเปิดเลย
     return r.teacher_plan_id === myId
   })
 })
@@ -366,7 +369,7 @@ const groups = computed(() => {
 
 // ── Admin view data ───────────────────────────────────────────────────────
 const adminUnfilled = computed(() =>
-  enrichedData.value.filter(r => !r.is_filled && (r.id || r.teach_actual_id))
+  enrichedData.value.filter(r => !r.is_filled)
 )
 
 const teacherOptions = computed(() => {

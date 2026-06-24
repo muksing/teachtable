@@ -547,7 +547,7 @@ async function loadReport() {
   loading.value = true
   try {
     const teacherId = authStore.profile?.teacher_id || authStore.profile?.uid
-    const students  = await getStudents(filterClassId.value)
+    const students  = await getStudents(filterClassId.value, { activeOnly: true })
     let actuals = await getTeachActualsRangeByClass(startDate.value, endDate.value, filterClassId.value)
 
     if (filterSubjectId.value) {
@@ -640,10 +640,9 @@ function formatDateThai(dateStr) {
 
 // ─── Excel: summary ───────────────────────────────────────────────
 function exportExcelSummary() {
-  const hdrs = ['เลขที่', 'รหัสนักเรียน', 'ชื่อ-นามสกุล', 'มา', 'ขาด', 'ลา', 'ไปราชการ', 'คาบทั้งหมด', '% มาเรียน']
+  const hdrs = ['เลขที่', 'คำนำหน้า', 'ชื่อ', 'นามสกุล', 'รหัสนักเรียน', 'มา', 'ขาด', 'ลา', 'ไปราชการ', 'คาบทั้งหมด', '% มาเรียน']
   const rows = reportRows.value.map((r) => [
-    r.seat_number || '-', r.student_id,
-    studentNameFull(r),
+    r.seat_number || '-', r.prefix || '', r.name || '', r.surname || '', r.student_id,
     r.present, r.absent, r.leave, r.official, r.total, r.pct.toFixed(1)
   ])
   const ws = XLSX.utils.aoa_to_sheet([hdrs, ...rows])

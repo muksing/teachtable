@@ -654,7 +654,7 @@ function onAddMemberOpen() {
 async function loadStudentsForPick() {
   if (allStudents.value.length) return
   try {
-    const raw = await getStudents()
+    const raw = await getStudents(null, { activeOnly: true })
     allStudents.value = raw.map(s => ({
       ...s,
       student_name: s.student_name || `${s.prefix || ''}${s.name || ''} ${s.surname || ''}`.trim(),
@@ -1180,12 +1180,12 @@ function printClubReport() {
 function exportExcel() {
   const sesArr = sortedSessions.value
   const memArr = sortedMembers.value
-  const hdrs = ['ที่', 'เลขประจำตัว', 'ชื่อ-สกุล', 'ห้อง', 'เลขที่',
+  const hdrs = ['เลขที่', 'คำนำหน้า', 'ชื่อ', 'นามสกุล', 'รหัสนักเรียน', 'ห้อง',
     ...sesArr.map((s, si) => `ครั้งที่ ${si + 1} (${formatDateShort(s.session_date)})`),
     'รวมมา', 'รวมขาด', 'รวมลา', '% มา',
   ]
-  const rows = memArr.map((m, i) => [
-    i + 1, m.student_id, m.student_name, m.class_room, m.student_no || '',
+  const rows = memArr.map((m) => [
+    m.student_no || '', m.prefix || '', m.name || '', m.surname || '', m.student_id, m.class_room,
     ...sesArr.map(s => STATUS_SYMBOL[getStatus(s, m.student_id)] ?? ''),
     memberPresent(m), memberAbsent(m), memberLeave(m),
     sesArr.length ? Math.round(memberPresent(m) / sesArr.length * 100) + '%' : '0%',

@@ -230,7 +230,7 @@ async function loadReport() {
     // โหลดทุกอย่างพร้อมกัน
     const [allClasses, allStudents, allActuals, subjectsRes, slotsRes] = await Promise.all([
       getClasses(),
-      getStudents(),
+      getStudents(null, { activeOnly: true }),
       getTeachActualsRangeByClass(startDate.value, reportDate.value),
       supabase.from('subjects')
         .select('subject_code, name, credits')

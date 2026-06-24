@@ -343,7 +343,7 @@ async function loadReport() {
   expandedStudentId.value = null
   try {
     const [students, allLogs] = await Promise.all([
-      getStudents(filterClassId.value || null),
+      getStudents(filterClassId.value || null, { activeOnly: true }),
       getBehaviorLogs(filterClassId.value ? { classId: filterClassId.value } : {}),
     ])
 
@@ -526,14 +526,14 @@ function exportExcel() {
   if (scoreMax.value != null) filterDesc.push(`คะแนน ≤ ${scoreMax.value}`)
 
   const title = ['รายงานพฤติกรรมนักเรียน', filterDesc.join(' | ') || 'ทุกห้องเรียน', `ภาคเรียน ${currentTerm.value}`]
-  const headers = ['ที่', 'รหัสนักเรียน', 'ชื่อ', 'นามสกุล', 'คะแนนรวม', 'ความประพฤติ', 'การมาเรียน', 'ในห้องเรียน']
+  const headers = ['เลขที่', 'คำนำหน้า', 'ชื่อ', 'นามสกุล', 'รหัสนักเรียน', 'คะแนนรวม', 'ความประพฤติ', 'การมาเรียน', 'ในห้องเรียน']
   const data = filteredRows.value.map((r, i) => [
-    i + 1, r.student_id, r.name || '', r.surname || '',
+    r.seat_number ?? (i + 1), r.prefix || '', r.name || '', r.surname || '', r.student_id,
     r.summary?.total_score ?? 0, r.summary?.general_score ?? 0,
     r.summary?.attendance_score ?? 0, r.summary?.learning_score ?? 0,
   ])
   const ws = XLSX.utils.aoa_to_sheet([title, [], headers, ...data])
-  ws['!cols'] = [{ wch: 5 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 13 }, { wch: 13 }, { wch: 13 }]
+  ws['!cols'] = [{ wch: 6 }, { wch: 10 }, { wch: 16 }, { wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 13 }, { wch: 13 }, { wch: 13 }]
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'พฤติกรรม')
   XLSX.writeFile(wb, `behavior_${filterClassId.value || 'all'}_${currentTerm.value}.xlsx`)

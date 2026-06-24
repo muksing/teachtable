@@ -194,7 +194,7 @@ onMounted(async () => {
   try {
     const [teachers, students, subjects, classes] = await Promise.all([
       getTeachers(),
-      getStudents(),
+      getStudents(null, { activeOnly: true }),
       getSubjects(),
       getClasses()
     ])

@@ -67,7 +67,10 @@
                 <span v-else class="be-check-off" />
               </div>
               <div class="be-stu-info">
-                <div class="be-stu-name">{{ s.student_name }}</div>
+                <div class="be-stu-name">
+                  <span v-if="s.seat_number" class="be-stu-seat">{{ s.seat_number }}</span>
+                  {{ s.student_name }}
+                </div>
                 <div class="be-stu-id">{{ s.student_id }}</div>
               </div>
             </div>
@@ -384,7 +387,7 @@ async function onClassChange() {
   }
   loadingStudents.value = true
   try {
-    const raw = await getStudents(selectedClassId.value)
+    const raw = await getStudents(selectedClassId.value, { activeOnly: true })
     allStudents.value = raw.map(s => ({
       ...s,
       student_name: s.student_name || `${s.prefix||''}${s.name||''} ${s.surname||''}`.trim(),
@@ -552,6 +555,7 @@ onMounted(async () => {
   width: 20px; height: 20px; border-radius: 6px;
   border: 2px solid #cbd5e1; display: block;
 }
+.be-stu-seat { font-size: 10px; font-weight: 900; background: #ede9fe; color: #5b21b6; border-radius: 5px; padding: 0 5px; margin-right: 5px; }
 .be-stu-name { font-size: 13px; font-weight: 600; color: #1e293b; }
 .be-stu-id   { font-size: 11px; color: #94a3b8; }
 
