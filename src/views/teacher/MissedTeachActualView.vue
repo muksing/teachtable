@@ -243,18 +243,15 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
-import { useTimetableSource } from '@/composables/useTimetableSource'
 import { supabase } from '@/supabase/client'
 
 const router      = useRouter()
 const authStore   = useAuthStore()
 const schoolStore = useSchoolStore()
 const { getTeachActualsRange } = useSchoolDb()
-const { slotTable } = useTimetableSource()
 
 const loading      = ref(false)
 const allData      = ref([])
-const slotMap      = ref({})   // key: 'class_id_period' → { teacher_id, teacher_name, subject_id, subject_name }
 const dayRange     = ref(7)
 const filterTeacher = ref('')
 const filterDate    = ref('')
@@ -302,40 +299,9 @@ function relativeLabel(dateKey) {
   return `${daysAgo} วันที่แล้ว`
 }
 
-// ── Slot enrichment ───────────────────────────────────────────────────────
-async function loadSlots() {
-  const termId = schoolStore.currentTerm || '2568_1'
-  const schoolId = authStore.schoolId
-  const { data } = await supabase
-    .from(slotTable.value)
-    .select('class_id, period_number, teacher_id, teacher_name, subject_id, subject_name')
-    .eq('school_id', schoolId)
-    .eq('term_id', termId)
-  if (data) {
-    const map = {}
-    for (const s of data) {
-      const key = `${s.class_id}_${s.period_number}`
-      if (!map[key]) map[key] = s  // keep first match (same class+period, any day)
-    }
-    slotMap.value = map
-  }
-}
-
-// Enrich teach_actuals records with timetable slot data
-const enrichedData = computed(() => {
-  const map = slotMap.value
-  return allData.value.map(r => {
-    const key = `${r.class_id}_${r.period}`
-    const slot = map[key]
-    return {
-      ...r,
-      teacher_plan_id:   slot?.teacher_id   || r.teacher_plan_id   || null,
-      teacher_plan_name: slot?.teacher_name || r.teacher_plan_name || '',
-      subject_name:      slot?.subject_name || r.subject_name      || '',
-      subject_plan_id:   slot?.subject_id   || r.subject_plan_id   || '',
-    }
-  })
-})
+// getTeachActualsRange() คำนึงวันในสัปดาห์ตอน enrich ครบแล้ว
+// ไม่ต้อง enrich ซ้ำที่นี่ — slotMap แบบไม่สนวันจะทับข้อมูลที่ถูกด้วยข้อมูลผิด
+const enrichedData = computed(() => allData.value)
 
 // "บันทึกแล้ว" = มีครูมากรอกจริง ตรวจ 3 สัญญาณ:
 // 1. record_by_name มีค่า → ครูกด save จริง
@@ -594,7 +560,7 @@ ${sections}
 
 onMounted(async () => {
   if (maxDays.value > 0) dayRange.value = Math.min(7, maxDays.value)
-  await Promise.all([loadSlots(), loadData()])
+  await loadData()
 })
 </script>
 
