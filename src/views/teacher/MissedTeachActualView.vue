@@ -299,18 +299,13 @@ function relativeLabel(dateKey) {
   return `${daysAgo} วันที่แล้ว`
 }
 
-// getTeachActualsRange() คำนึงวันในสัปดาห์ตอน enrich ครบแล้ว
-// ไม่ต้อง enrich ซ้ำที่นี่ — slotMap แบบไม่สนวันจะทับข้อมูลที่ถูกด้วยข้อมูลผิด
-const enrichedData = computed(() => allData.value)
-
-const isFilled = (r) => r.is_filled === true
-
 // ── Teacher view data ─────────────────────────────────────────────────────
 const unfilled = computed(() => {
   const myId = myTeacherId.value
-  return enrichedData.value.filter(r =>
-    r.id && !isFilled(r) && r.teacher_plan_id === myId
-  )
+  return allData.value.filter(r => {
+    if (r.is_filled) return false
+    return r.teacher_plan_id === myId || r.subject_actual_teacher_id === myId
+  })
 })
 
 const groups = computed(() => {
@@ -335,7 +330,7 @@ const groups = computed(() => {
 
 // ── Admin view data ───────────────────────────────────────────────────────
 const adminUnfilled = computed(() =>
-  enrichedData.value.filter(r => r.id && !isFilled(r))
+  allData.value.filter(r => !r.is_filled)
 )
 
 const teacherOptions = computed(() => {
@@ -395,9 +390,7 @@ async function loadData() {
     endDate.setDate(endDate.getDate() - 1)
     const startDate = new Date(today)
     startDate.setDate(startDate.getDate() - dayRange.value)
-    // ครูทั่วไป: filter slot ตั้งแต่ query เหมือน TeachingLogView (ไม่วน filter ทีหลัง)
-    const teacherFilter = isAdmin.value ? null : myTeacherId.value
-    allData.value = await getTeachActualsRange(toDateKey(startDate), toDateKey(endDate), teacherFilter)
+    allData.value = await getTeachActualsRange(toDateKey(startDate), toDateKey(endDate))
   } catch (e) {
     console.error('loadData error', e)
     allData.value = []
