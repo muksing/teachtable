@@ -337,9 +337,16 @@ const enrichedData = computed(() => {
   })
 })
 
-// "บันทึกแล้ว" = is_filled=true หรือมีเนื้อหา topic จริง (กัน false-negative จากข้อมูลนำเข้า)
+// "บันทึกแล้ว" = มีครูมากรอกจริง ตรวจ 3 สัญญาณ:
+// 1. record_by_name มีค่า → ครูกด save จริง
+// 2. student_records ไม่ว่าง → มีข้อมูลเช็คชื่อ
+// 3. is_filled = true และ topic ไม่ว่าง (กัน shell record ที่ import มา)
 function isFilled(r) {
-  return r.is_filled === true || (typeof r.topic === 'string' && r.topic.trim() !== '')
+  if (r.record_by_name && r.record_by_name.trim() !== '') return true
+  const sr = r.student_records
+  if (sr && typeof sr === 'object' && Object.keys(sr).length > 0) return true
+  if (r.is_filled === true && r.topic && r.topic.trim() !== '') return true
+  return false
 }
 
 // ── Teacher view data ─────────────────────────────────────────────────────
