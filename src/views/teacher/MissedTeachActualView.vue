@@ -303,13 +303,7 @@ function relativeLabel(dateKey) {
 // ไม่ต้อง enrich ซ้ำที่นี่ — slotMap แบบไม่สนวันจะทับข้อมูลที่ถูกด้วยข้อมูลผิด
 const enrichedData = computed(() => allData.value)
 
-function isFilled(r) {
-  if (r.is_filled === true) return true
-  if (r.record_by_name && r.record_by_name.trim() !== '') return true
-  const sr = r.student_records
-  if (sr && typeof sr === 'object' && Object.keys(sr).length > 0) return true
-  return false
-}
+const isFilled = (r) => r.is_filled === true
 
 // ── Teacher view data ─────────────────────────────────────────────────────
 const unfilled = computed(() => {
