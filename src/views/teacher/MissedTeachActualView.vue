@@ -303,17 +303,7 @@ function relativeLabel(dateKey) {
 // ไม่ต้อง enrich ซ้ำที่นี่ — slotMap แบบไม่สนวันจะทับข้อมูลที่ถูกด้วยข้อมูลผิด
 const enrichedData = computed(() => allData.value)
 
-// "บันทึกแล้ว" = มีครูมากรอกจริง ตรวจ 3 สัญญาณ:
-// 1. record_by_name มีค่า → ครูกด save จริง
-// 2. student_records ไม่ว่าง → มีข้อมูลเช็คชื่อ
-// 3. is_filled = true และ topic ไม่ว่าง (กัน shell record ที่ import มา)
-function isFilled(r) {
-  if (r.record_by_name && r.record_by_name.trim() !== '') return true
-  const sr = r.student_records
-  if (sr && typeof sr === 'object' && Object.keys(sr).length > 0) return true
-  if (r.is_filled === true && r.topic && r.topic.trim() !== '') return true
-  return false
-}
+const isFilled = (r) => r.is_filled === true
 
 // ── Teacher view data ─────────────────────────────────────────────────────
 const unfilled = computed(() => {
