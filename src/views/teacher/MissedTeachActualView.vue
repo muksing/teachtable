@@ -396,7 +396,9 @@ async function loadData() {
     endDate.setDate(endDate.getDate() - 1)
     const startDate = new Date(today)
     startDate.setDate(startDate.getDate() - dayRange.value)
-    allData.value = await getTeachActualsRange(toDateKey(startDate), toDateKey(endDate))
+    // ครูทั่วไป: filter slot ตั้งแต่ query เหมือน TeachingLogView (ไม่วน filter ทีหลัง)
+    const teacherFilter = isAdmin.value ? null : myTeacherId.value
+    allData.value = await getTeachActualsRange(toDateKey(startDate), toDateKey(endDate), teacherFilter)
   } catch (e) {
     console.error('loadData error', e)
     allData.value = []

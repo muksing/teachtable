@@ -1139,19 +1139,22 @@ export function useSchoolDb() {
   }
 
   // ดึงช่วงวันที่ (สำหรับรายงาน) — รวม virtual unfilled จาก timetable_slots ด้วย
-  async function getTeachActualsRange(startDate, endDate) {
+  async function getTeachActualsRange(startDate, endDate, teacherId = null) {
     const startKey = normalizeDateKey(startDate)
     const endKey = normalizeDateKey(endDate)
     const termId = term()
     const schoolId = authStore.schoolId
 
+    let slotsQuery = supabase
+      .from(getSlotTable(schoolStore))
+      .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
+      .eq('school_id', schoolId)
+      .eq('term_id', termId)
+      .not('slot_type', 'eq', 'activity')
+    if (teacherId) slotsQuery = slotsQuery.eq('teacher_id', teacherId)
+
     const [slotsRes, actualsRes, settingsResult, classesRes, teachersRes] = await Promise.all([
-      supabase
-        .from(getSlotTable(schoolStore))
-        .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
-        .eq('school_id', schoolId)
-        .eq('term_id', termId)
-        .not('slot_type', 'eq', 'activity'),
+      slotsQuery,
       supabase
         .from('teach_actuals')
         .select('*')
