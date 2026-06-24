@@ -337,12 +337,16 @@ const enrichedData = computed(() => {
   })
 })
 
+// "บันทึกแล้ว" = is_filled=true หรือมีเนื้อหา topic จริง (กัน false-negative จากข้อมูลนำเข้า)
+function isFilled(r) {
+  return r.is_filled === true || (typeof r.topic === 'string' && r.topic.trim() !== '')
+}
+
 // ── Teacher view data ─────────────────────────────────────────────────────
 const unfilled = computed(() => {
   const myId = myTeacherId.value
   return enrichedData.value.filter(r => {
-    if (r.is_filled) return false
-    // รวม virtual records (ยังไม่มี DB entry) เพราะเป็นคาบที่ครูไม่เคยเปิดเลย
+    if (isFilled(r)) return false
     return r.teacher_plan_id === myId
   })
 })
@@ -369,7 +373,7 @@ const groups = computed(() => {
 
 // ── Admin view data ───────────────────────────────────────────────────────
 const adminUnfilled = computed(() =>
-  enrichedData.value.filter(r => !r.is_filled)
+  enrichedData.value.filter(r => !isFilled(r))
 )
 
 const teacherOptions = computed(() => {
