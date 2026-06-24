@@ -443,7 +443,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, toRaw } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, toRaw } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { supabase } from '@/supabase/client'
@@ -968,7 +968,40 @@ async function loadPage() {
   }
 }
 
-onMounted(loadPage)
+let _studentsChannel = null
+
+async function reloadStudents() {
+  if (!ta.value?.class_id) return
+  const studs = await getStudents(ta.value.class_id)
+  students.value = studs.filter(s => !s.student_status || s.student_status === 'เรียนอยู่')
+}
+
+async function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') await reloadStudents()
+}
+
+onMounted(() => {
+  loadPage().then(() => {
+    // Realtime: รับการเปลี่ยนแปลงรายชื่อนักเรียนจากอุปกรณ์อื่นทันที
+    _studentsChannel = supabase
+      .channel('teach_actual_students_live')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'students',
+        filter: `school_id=eq.${authStore.schoolId}`,
+      }, () => { reloadStudents() })
+      .subscribe()
+
+    // มือถือ: โหลดใหม่เมื่อกลับมาที่หน้าจอ (เช่น กดโฮม แล้วกลับมา)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+  })
+})
+
+onUnmounted(() => {
+  if (_studentsChannel) { supabase.removeChannel(_studentsChannel); _studentsChannel = null }
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
 
 // ─── buildPayload: deep-strip Vue Proxy via JSON round-trip ───────
 function buildStudentRecordsPayload() {

@@ -525,7 +525,7 @@ function fixPhotoUrl(url) {
   return url
 }
 
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as XLSX from 'xlsx'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -854,6 +854,12 @@ async function startBulkUpload() {
 }
 
 // ==================== CRUD ====================
+let _studentChannel = null
+
+async function reloadStudents() {
+  students.value = await getStudents()
+}
+
 onMounted(async () => {
   loading.value = true
   try {
@@ -863,6 +869,21 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+
+  // Realtime: อัปเดตทันทีเมื่อ students table เปลี่ยนจากอุปกรณ์อื่น
+  _studentChannel = supabase
+    .channel('admin_students_live')
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'students',
+      filter: `school_id=eq.${authStore.schoolId}`,
+    }, () => { reloadStudents() })
+    .subscribe()
+})
+
+onUnmounted(() => {
+  if (_studentChannel) { supabase.removeChannel(_studentChannel); _studentChannel = null }
 })
 
 function onClassChange(classId) {
