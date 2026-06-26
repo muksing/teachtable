@@ -1072,10 +1072,18 @@ export function useSchoolDb() {
       actualsMap.set(`${row.class_id}_${row.period_number}`, mapTeachActual(row))
     }
 
-    // Merge timetable slots
-    const results = tSlots.map(slot => {
+    // Merge timetable slots — ข้ามคาบที่ครูคนนี้เป็นผู้ลา (actual_teacher_id = คนอื่น)
+    const usedKeys = new Set()
+    const results = tSlots.flatMap(slot => {
       const key = `${slot.class_id}_${slot.period_number}`
       const existing = actualsMap.get(key)
+      // ถ้ามีการจัดสอนแทนแล้ว และครูคนนี้คือผู้ลา → ไม่แสดงในหน้าบันทึกของผู้ลา
+      if (existing?.is_substitute_mandatory && existing?.actual_teacher_id &&
+          existing.actual_teacher_id !== teacherPlanId) {
+        usedKeys.add(key)
+        return []
+      }
+      usedKeys.add(key)
       const info = {
         subject_plan_id: slot.subject_id || '',
         subject_name: slot.subject_name || slot.subject_id || '',
@@ -1084,8 +1092,8 @@ export function useSchoolDb() {
         preferred_room: slot.room_id || '',
         class_id: slot.class_id,
       }
-      if (existing) return { ...existing, ...info }
-      return {
+      if (existing) return [{ ...existing, ...info }]
+      return [{
         id: null, teach_actual_id: null,
         school_id: schoolId, term_id: timetableTerm,
         class_id: slot.class_id, date: dateKey,
@@ -1093,8 +1101,21 @@ export function useSchoolDb() {
         slot_type: slot.slot_type || 'normal',
         is_filled: false, is_substitute_mandatory: false,
         topic: '', activity_type: 'บรรยาย', ...info,
-      }
+      }]
     })
+
+    // เพิ่มคาบสอนแทนที่รับมอบหมาย (actual_teacher_id = ครูคนนี้ แต่ไม่ใช่ timetable slot ของตัวเอง)
+    for (const [key, actual] of actualsMap) {
+      if (!usedKeys.has(key) && actual.is_substitute_mandatory &&
+          actual.actual_teacher_id === teacherPlanId) {
+        const absentName = teacherNameMap.get(actual.planned_teacher_id) || actual.teacher_plan_name || actual.planned_teacher_id || ''
+        results.push({
+          ...actual,
+          teacher_plan_name: absentName,
+        })
+        usedKeys.add(key)
+      }
+    }
 
     // เพิ่ม homeroom periods ของครูที่ปรึกษา (ไม่อยู่ใน timetable_slots)
     const thaiDay = THAI_DAYS_ARR[new Date(dateKey + 'T00:00:00').getDay()]
