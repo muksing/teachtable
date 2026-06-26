@@ -83,6 +83,21 @@
 
       </nav>
 
+      <!-- ── Term Selector (admin only) ── -->
+      <div v-if="authStore.isAdmin && availableTerms.length > 1" class="sb-term-selector">
+        <div class="sb-term-label">📅 ดูข้อมูลเทอม</div>
+        <div class="sb-term-btns">
+          <button v-for="t in availableTerms" :key="t"
+            class="sb-term-btn"
+            :class="{ active: (schoolStore.viewingTerm || schoolStore.currentTerm) === t,
+                      current: t === schoolStore.currentTerm }"
+            @click="selectViewingTerm(t)">
+            {{ t }}
+            <span v-if="t === schoolStore.currentTerm" class="sb-term-now">ปัจจุบัน</span>
+          </button>
+        </div>
+      </div>
+
       <!-- ── Footer ── -->
       <div class="sb-footer">
         <router-link to="/profile" class="sb-footer-btn" @click="mobileOpen = false">
@@ -110,6 +125,14 @@
         <div class="topbar-avatar">{{ authStore.profile?.displayName?.charAt(0) || '?' }}</div>
       </div>
 
+      <!-- banner เตือนเมื่อดูเทอมย้อนหลัง -->
+      <div v-if="schoolStore.isViewingOldTerm" class="viewing-old-term-banner">
+        <span>📂 กำลังดูข้อมูลเทอม <strong>{{ schoolStore.viewingTerm }}</strong> (ย้อนหลัง — อ่านอย่างเดียว)</span>
+        <button class="back-to-current" @click="schoolStore.clearViewingTerm()">
+          กลับเทอมปัจจุบัน {{ schoolStore.currentTerm }} ✕
+        </button>
+      </div>
+
       <main class="main-content">
         <slot />
       </main>
@@ -119,12 +142,13 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
 import { useMasterAuth } from '@/composables/useMasterAuth'
 import { USER_ROLES as AUTH_ROLES } from '@/supabase/schema'
+import { supabase } from '@/supabase/client'
 
 const authStore   = useAuthStore()
 const schoolStore = useSchoolStore()
@@ -148,6 +172,36 @@ const roleLabels = {
 }
 const roleLabel  = computed(() => authStore.roles.map(r => roleLabels[r] || r).join(' · ') || '')
 const currentTermLabel = computed(() => schoolStore.termLabel)
+
+// ── Term Selector ────────────────────────────────────────────────────
+const availableTerms = ref([])
+
+async function loadAvailableTerms() {
+  if (!authStore.isAdmin || !authStore.schoolId) return
+  try {
+    const { data } = await supabase
+      .from('academic_terms')
+      .select('term_id')
+      .eq('school_id', authStore.schoolId)
+      .order('term_id', { ascending: false })
+    const fromDB = (data || []).map(r => r.term_id)
+    // รวมกับ currentTerm ถ้ายังไม่อยู่ใน list
+    const current = schoolStore.currentTerm
+    const all = current && !fromDB.includes(current) ? [current, ...fromDB] : fromDB
+    availableTerms.value = all
+  } catch { /* ignore */ }
+}
+
+function selectViewingTerm(termId) {
+  if (termId === schoolStore.currentTerm) {
+    schoolStore.clearViewingTerm()
+  } else {
+    schoolStore.setViewingTerm(termId)
+  }
+}
+
+onMounted(loadAvailableTerms)
+watch(() => authStore.schoolId, loadAvailableTerms)
 
 // ── กลุ่มเมนูทั้งหมด ──────────────────────────────────────────────
 const allGroups = computed(() => {
@@ -197,19 +251,9 @@ const allGroups = computed(() => {
         { type:'section', label:'งานตารางสอน', icon:'⚡', badgeStyle:'background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/planning/assignments',    icon:'📋', bg:'#fef9c3', label:'มอบหมายภาระงาน',   sub:'วิชา ครู ห้อง', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'] },
         { to:'/planning/activity-booking',icon:'🎯',bg:'#ffedd5', label:'กิจกรรม/ครูคุม',   sub:'คาบกิจกรรม ครูประจำ', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'] },
-        { to:'/reports/assignments',     icon:'📊', bg:'#fce7f3', label:'รายงานภาระงาน',    sub:'สรุปชั่วโมง ครู', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'] },
         { to:'/planning/timetable',      icon:'📅', bg:'#dbeafe', label:'จัดตารางสอน',      sub:'ลาก-วาง ตรวจสอบ', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'] },
         { to:'/planning/print',          icon:'🖨️', bg:'#e0e7ff', label:'พิมพ์ตารางสอน',    sub:'PDF Excel รายห้อง/ครู', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/teacher/my-timetable',    icon:'👤', bg:'#ecfeff', label:'ตารางสอนของฉัน',   sub:'อ่านจากตารางที่เผยแพร่', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
-      ],
-    },
-    // Reports Group
-    {
-      key: 'report', icon: '📈', label: 'รายงาน',
-      grad: 'linear-gradient(135deg,#14b8a6,#0891b2)',
-      roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'],
-      items: [
-        { to:'/reports/assignments',     icon:'📊', bg:'#fce7f3', label:'รายงานภาระงาน',    sub:'สรุปชั่วโมง ครู', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'] },
       ],
     },
     // Teaching log module (SuperAdmin feature-gated)
@@ -225,6 +269,7 @@ const allGroups = computed(() => {
           { to:'/admin/teaching-log-settings', icon:'🧾', bg:'#e0f2fe', label:'ตั้งค่าบันทึกเข้าสอน', sub:'Google Drive วันหยุด บันทึกล่วงหน้า', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
           { to:'/admin/teach-actuals', icon:'🗑️', bg:'#fee2e2', label:'จัดการบันทึกเข้าสอน', sub:'ตรวจสอบ ลบข้อมูล', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
           { to:'/admin/import-teach-actuals', icon:'📥', bg:'#e0f2fe', label:'นำเข้าข้อมูล (จากระบบเดิม)', sub:'อัพโหลด Excel 2 Sheet → import', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
+          { to:'/admin/generate-teach-actuals', icon:'🔧', bg:'#fef3c7', label:'สร้างคาบที่หาย', sub:'สแกนและสร้าง teach_actuals ที่ยังไม่มีใน DB', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
           { to:'/admin/notification-settings', icon:'📩', bg:'#ede9fe', label:'ตั้งค่าจดหมายแจ้งผู้ปกครอง', sub:'เกณฑ์กลุ่มเสี่ยง ข้อความ นัดหมาย', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
         ] : []),
         { type:'section', label:'ทำรายการบันทึกการสอน', icon:'📝', badgeStyle:'background:linear-gradient(90deg,#059669,#10b981);' },
@@ -245,6 +290,19 @@ const allGroups = computed(() => {
         { to:'/admin/attendance-maeso', icon:'🚨', bg:'#fee2e2', label:'รายงานสรุป มส.', sub:'นักเรียนเวลาเรียนต่ำกว่า 80% · PDF รายห้อง/ทั้งหมด', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/reports/behavior', icon:'📈', bg:'#fae8ff', label:'รายงานพฤติกรรม', sub:'คะแนนสะสมและเหตุการณ์', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'], featureGate: 'behavior_system_enabled' },
         { to:'/reports/parent-letter', icon:'✉️', bg:'#fef9c3', label:'จดหมายแจ้งคะแนนและเวลาเรียน', sub:'พิมพ์ PDF · ส่ง LINE รายคน', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
+      ],
+    }] : []),
+    // Exam module — separate from teaching log
+    ...(schoolStore.isTeachingLogEnabled ? [{
+      key: 'exam', icon: '📋', label: 'ระบบสอบ',
+      grad: 'linear-gradient(135deg,#7c3aed,#a855f7)',
+      roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'],
+      items: [
+        { to:'/admin/exam-overview',   icon:'📊', bg:'#ede9fe', label:'ภาพรวมข้อสอบ',            sub:'ทุกวิชา · ทุกครู · ติดตามปลายภาค', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
+        { to:'/admin/exam-checklist',  icon:'✅', bg:'#dcfce7', label:'ตรวจสอบการออกข้อสอบ',     sub:'ภาระงาน vs ข้อสอบ · ดูรายวิชา · ห้อง', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
+        { to:'/admin/exam-anticheat',  icon:'🛡️', bg:'#fee2e2', label:'ตั้งค่าตรวจจับทุจริต',  sub:'ความไวในการตรวจจับ · อนุโลมกลับเข้า', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
+        { to:'/teacher/exams',   icon:'📋', bg:'#ede9fe', label:'ออกข้อสอบ',  sub:'สร้างข้อสอบ · ออกข้อสอบ · รายวิชา', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
+        { to:'/teacher/proctor', icon:'👁',  bg:'#dbeafe', label:'คุมสอบในตาราง', sub:'คุมสอบตามตาราง · เลือกห้อง · อนุมัติ', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
       ],
     }] : []),
   ];
@@ -558,6 +616,49 @@ async function handleLogout() {
 @media (min-width: 1024px) {
   .mobile-overlay { display: none !important; }
 }
+
+/* ── Term Selector ───────────────────────────────────────────────── */
+.sb-term-selector {
+  padding: 8px 10px 6px; border-top: 1px solid #f1f5f9; flex-shrink: 0;
+}
+.sb-term-label {
+  font-size: 10px; font-weight: 700; color: #94a3b8;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px;
+}
+.sb-term-btns {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
+.sb-term-btn {
+  padding: 3px 10px; border-radius: 99px; font-size: 11px; font-weight: 600;
+  border: 1.5px solid #e2e8f0; background: white; color: #64748b; cursor: pointer;
+  transition: all 0.15s; display: flex; align-items: center; gap: 4px;
+}
+.sb-term-btn:hover { border-color: #6366f1; color: #6366f1; }
+.sb-term-btn.active { background: #6366f1; color: white; border-color: #6366f1; }
+.sb-term-now {
+  font-size: 9px; background: rgba(255,255,255,0.3);
+  border-radius: 99px; padding: 1px 5px;
+}
+.sb-term-btn:not(.active) .sb-term-now {
+  background: #dcfce7; color: #16a34a;
+}
+
+/* ── Viewing Old Term Banner ─────────────────────────────────────── */
+.viewing-old-term-banner {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  padding: 8px 16px; background: #fef9c3; border-bottom: 2px solid #fbbf24;
+  font-size: 13px; color: #78350f; flex-shrink: 0;
+}
+.back-to-current {
+  padding: 4px 12px; border-radius: 99px; border: 1.5px solid #f59e0b;
+  background: white; color: #b45309; font-size: 12px; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+}
+.back-to-current:hover { background: #fef3c7; }
+
+/* topbar sub-label */
+.topbar-title-wrap { flex: 1; display: flex; flex-direction: column; }
+.topbar-sub { font-size: 10px; color: #94a3b8; }
 
 /* main content responsive padding */
 @media (max-width: 640px) {
