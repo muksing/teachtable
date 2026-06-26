@@ -1712,12 +1712,6 @@ export function useSchoolDb() {
       }
     }
 
-    // DEBUG — ลบออกหลัง verify
-    console.log('[generate] date:', dateKey, 'day:', dayName, 'slots total:', timetableSlots?.length,
-      'slotsForDay:', slotsForDay.length, 'payloads:', payloads.length)
-    const m6 = payloads.filter(p => p.class_id?.startsWith('ม.6'))
-    console.log('[generate] ม.6 payloads:', m6.length, m6.map(p => `${p.class_id} p${p.period_number} t:${p.planned_teacher_id}`))
-
     if (payloads.length === 0) return 0
 
     // Strip fields not in schema before upserting
