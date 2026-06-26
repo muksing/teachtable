@@ -45,14 +45,18 @@
           <div class="result-label">รวมทั้งหมดที่ควรมี</div>
         </div>
       </div>
-      <div v-if="scanResult.missing === 0" style="text-align:center;color:#16a34a;font-weight:600;margin-top:12px">
+      <div v-if="scanResult.wrongSubject > 0" class="result-box result-wrong" style="margin-top:12px;padding:10px 16px;border-radius:10px;background:#fef2f2;display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px;font-weight:900;color:#dc2626">{{ scanResult.wrongSubject }}</span>
+        <span style="color:#dc2626;font-size:13px">คาบที่มีใน DB แต่ subject_id ผิด (จะซ่อมอัตโนมัติ)</span>
+      </div>
+      <div v-if="scanResult.missing === 0 && scanResult.wrongSubject === 0" style="text-align:center;color:#16a34a;font-weight:600;margin-top:12px">
         ✅ ครบแล้ว ไม่มีคาบที่หาย
       </div>
     </el-card>
 
     <!-- Progress -->
     <el-card v-if="running" class="progress-card" shadow="never">
-      <div class="progress-label">กำลังสร้าง... {{ progressCount.toLocaleString() }} / {{ scanResult?.missing.toLocaleString() }}</div>
+      <div class="progress-label">กำลังดำเนินการ... {{ progressCount.toLocaleString() }} / {{ ((scanResult?.missing || 0) + (scanResult?.wrongSubject || 0)).toLocaleString() }}</div>
       <el-progress :percentage="progressPct" :stroke-width="14" status="active" />
     </el-card>
 
@@ -66,11 +70,11 @@
         🔍 สแกนตรวจสอบ
       </el-button>
       <el-button
-        v-if="scanResult && scanResult.missing > 0"
+        v-if="scanResult && (scanResult.missing > 0 || scanResult.wrongSubject > 0)"
         :loading="running" :disabled="scanning"
         @click="generate" type="primary" size="large"
       >
-        ⚡ สร้างคาบที่หาย ({{ scanResult.missing.toLocaleString() }} คาบ)
+        ⚡ ซ่อม/สร้าง ({{ (scanResult.missing + scanResult.wrongSubject).toLocaleString() }} รายการ)
       </el-button>
     </div>
 
@@ -116,11 +120,13 @@ const homeroomPeriods = computed(() =>
 const scanning      = ref(false)
 const running       = ref(false)
 const scanResult    = ref(null)
+const fixPayloadsRef = ref([])
 const previewRows   = ref([])
 const progressCount = ref(0)
-const progressPct   = computed(() =>
-  scanResult.value?.missing ? Math.round((progressCount.value / scanResult.value.missing) * 100) : 0
-)
+const progressPct   = computed(() => {
+  const total = (scanResult.value?.missing || 0) + (scanResult.value?.wrongSubject || 0)
+  return total ? Math.round((progressCount.value / total) * 100) : 0
+})
 const doneMsg  = ref('')
 const errorMsg = ref('')
 
@@ -156,15 +162,20 @@ async function buildMissingPayloads() {
       .range(f, t)
   )
 
-  // 2. โหลด existing keys
+  // 2. โหลด existing records พร้อม subject_id และ is_filled เพื่อตรวจ mismatch
   const existing = await paginate((f, t) =>
     supabase.from('teach_actuals')
-      .select('class_id, date, period_number')
+      .select('class_id, date, period_number, subject_id, is_filled')
       .eq('school_id', schoolId).eq('term_id', tid)
       .gte('date', start).lte('date', today)
       .range(f, t)
   )
   const existSet = new Set(existing.map(r => `${r.class_id}|${r.date}|${r.period_number}`))
+  // เก็บ subject_id ของ record ที่ยังไม่บันทึก เพื่อตรวจว่าผิดหรือไม่
+  const unfilledSubjectMap = {}
+  for (const r of existing) {
+    if (!r.is_filled) unfilledSubjectMap[`${r.class_id}|${r.date}|${r.period_number}`] = r.subject_id
+  }
 
   // 3. homeroom period numbers
   const hmPeriods = new Set(homeroomPeriods.value.map(hp => Number(hp.period)).filter(Number.isFinite))
@@ -176,8 +187,9 @@ async function buildMissingPayloads() {
     ;(byDay[d] = byDay[d] || []).push(s)
   }
 
-  // 5. วนทุกวัน
-  const payloads = []
+  // 5. วนทุกวัน — สร้าง payloads (ที่หาย) + fixPayloads (subject_id ผิด)
+  const payloads    = []   // records ที่ไม่มีใน DB เลย
+  const fixPayloads = []   // records ที่มีแต่ subject_id ผิด (is_filled=false)
   let totalExpected = 0
 
   for (let d = new Date(start + 'T00:00:00'); localStr(d) <= today; d.setDate(d.getDate() + 1)) {
@@ -195,7 +207,14 @@ async function buildMissingPayloads() {
       if (hmPeriods.has(period)) continue
       totalExpected++
       const key = `${slot.class_id}|${dateStr}|${period}`
-      if (existSet.has(key)) continue
+      if (existSet.has(key)) {
+        // มีอยู่แล้ว — ตรวจ subject_id ผิดหรือไม่ (เฉพาะที่ยังไม่บันทึก)
+        const dbSubj = unfilledSubjectMap[key]
+        if (dbSubj !== undefined && slot.subject_id && dbSubj !== slot.subject_id) {
+          fixPayloads.push({ schoolId, tid, class_id: slot.class_id, date: dateStr, period_number: period, subject_id: slot.subject_id })
+        }
+        continue
+      }
       payloads.push({
         school_id:          schoolId,
         term_id:            tid,
@@ -211,7 +230,7 @@ async function buildMissingPayloads() {
     }
   }
 
-  return { payloads, totalExpected, existCount: existSet.size }
+  return { payloads, fixPayloads, totalExpected, existCount: existSet.size }
 }
 
 // ─── Scan ──────────────────────────────────────────────────────────
@@ -222,11 +241,13 @@ async function scan() {
   doneMsg.value = ''
   errorMsg.value = ''
   try {
-    const { payloads, totalExpected, existCount } = await buildMissingPayloads()
+    const { payloads, fixPayloads, totalExpected, existCount } = await buildMissingPayloads()
+    fixPayloadsRef.value = fixPayloads
     scanResult.value = {
       total:   totalExpected,
       exists:  existCount,
       missing: payloads.length,
+      wrongSubject: fixPayloads.length,
     }
     previewRows.value = payloads.slice(0, 20).map(p => ({
       date:          p.date,
@@ -249,7 +270,8 @@ async function generate() {
   doneMsg.value = ''
   errorMsg.value = ''
   try {
-    const { payloads } = await buildMissingPayloads()
+    const { payloads, fixPayloads } = await buildMissingPayloads()
+    // สร้างคาบที่หาย
     const CHUNK = 400
     for (let i = 0; i < payloads.length; i += CHUNK) {
       const { error } = await supabase.from('teach_actuals')
@@ -260,9 +282,26 @@ async function generate() {
       if (error) throw error
       progressCount.value = Math.min(i + CHUNK, payloads.length)
     }
-    doneMsg.value = `✅ สร้างสำเร็จ ${payloads.length.toLocaleString()} คาบ`
+
+    // ซ่อม subject_id ที่ผิด (is_filled=false เท่านั้น)
+    for (let i = 0; i < fixPayloads.length; i++) {
+      const f = fixPayloads[i]
+      const { error } = await supabase.from('teach_actuals')
+        .update({ subject_id: f.subject_id })
+        .eq('school_id', f.schoolId)
+        .eq('term_id', f.tid)
+        .eq('class_id', f.class_id)
+        .eq('date', f.date)
+        .eq('period_number', f.period_number)
+        .eq('is_filled', false)
+      if (error) throw error
+      progressCount.value = payloads.length + i + 1
+    }
+
+    doneMsg.value = `✅ สร้าง ${payloads.length} คาบ + ซ่อม subject_id ${fixPayloads.length} คาบ`
     scanResult.value = null
     previewRows.value = []
+    fixPayloadsRef.value = []
   } catch (e) {
     errorMsg.value = e.message
     ElMessage.error(e.message)
