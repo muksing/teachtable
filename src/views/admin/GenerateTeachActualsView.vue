@@ -11,8 +11,17 @@
       </div>
       <div class="info-row">
         <span class="info-label">วันเปิดเรียน</span>
-        <strong>{{ termStart || '—' }}</strong>
-        <el-tag v-if="!termStart" type="danger" size="small" style="margin-left:8px">ไม่พบ — กรุณาตั้งค่าในหน้า SchoolSettings</el-tag>
+        <el-date-picker
+          v-model="manualTermStart"
+          type="date"
+          placeholder="เลือกวันเปิดเรียน"
+          format="DD/MM/YYYY"
+          value-format="YYYY-MM-DD"
+          style="width:160px"
+        />
+        <el-tag v-if="settingsTermStart" type="info" size="small" style="margin-left:8px">
+          จากการตั้งค่า: {{ settingsTermStart }}
+        </el-tag>
       </div>
       <div class="info-row">
         <span class="info-label">วันนี้</span>
@@ -53,7 +62,7 @@
 
     <!-- Actions -->
     <div class="action-row">
-      <el-button :loading="scanning" :disabled="running || !termStart" @click="scan" type="default" size="large">
+      <el-button :loading="scanning" :disabled="running || !termStart" @click="scan" type="primary" plain size="large">
         🔍 สแกนตรวจสอบ
       </el-button>
       <el-button
@@ -96,10 +105,12 @@ const THAI_DAY_NUM   = { จันทร์:1, อังคาร:2, พุธ:3
 
 const today    = new Date().toLocaleDateString('sv-SE')   // YYYY-MM-DD local
 const termId   = computed(() => schoolStore.currentTerm || '2568_1')
-const settings = computed(() => schoolStore.settingsObj || {})
-const termStart = computed(() => settings.value.term_start || '')
+const settingsObj     = computed(() => schoolStore.settingsObj || {})
+const settingsTermStart = computed(() => settingsObj.value.term_start || '')
+const manualTermStart = ref('')
+const termStart = computed(() => manualTermStart.value || settingsTermStart.value)
 const homeroomPeriods = computed(() =>
-  settings.value.teaching_log_settings?.homeroom_special_periods || []
+  settingsObj.value.teaching_log_settings?.homeroom_special_periods || []
 )
 
 const scanning      = ref(false)
@@ -260,7 +271,13 @@ async function generate() {
   }
 }
 
-onMounted(scan)
+onMounted(() => {
+  // ถ้า settings มี term_start ให้ pre-fill แล้ว scan เลย
+  if (settingsTermStart.value) {
+    manualTermStart.value = settingsTermStart.value
+    scan()
+  }
+})
 </script>
 
 <style scoped>
