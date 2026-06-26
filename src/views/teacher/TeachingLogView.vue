@@ -622,11 +622,19 @@ async function ensureRecordsForSelectedDate() {
 
     if (!mySlots.length) return  // ครูไม่มีคาบวันนี้
 
-    const existingKeys = new Set(allExisting.map(r => `${r.class_id}_${r.period_number || r.period}`))
-    const hasMissing   = mySlots.some(s => !existingKeys.has(`${s.class_id}_${s.period_number || s.period}`))
+    // ตรวจว่าคาบของครูคนนี้มีครบและมีข้อมูลครูถูกต้องไหม
+    // (record ที่มีอยู่แต่ planned_teacher_id = null ถือว่าเสีย → ต้องสร้างใหม่)
+    const existingMap = new Map(allExisting.map(r => [
+      `${r.class_id}_${r.period_number ?? r.period}`,
+      r.teacher_plan_id  // teacher_plan_id = planned_teacher_id หลัง mapTeachActual
+    ]))
+    const hasMissing = mySlots.some(s => {
+      const key = `${s.class_id}_${s.period_number ?? s.period}`
+      return !existingMap.has(key) || !existingMap.get(key)
+    })
 
     if (hasMissing) {
-      // คาบของครูขาดอยู่ → สร้างที่ขาด (ignoreDuplicates ทำให้ไม่แตะ record เดิม)
+      // คาบขาดหรือข้อมูลครูเสีย → generate (delete null-teacher records แล้ว insert ใหม่)
       await generateTeachActualsForDate(dateKey, thaiDayName.value, timetable)
     }
   } catch (e) {
