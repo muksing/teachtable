@@ -227,19 +227,12 @@ async function loadReport() {
     const schoolId = authStore.schoolId
     const termId   = schoolStore.currentTerm || '2568_1'
 
-    // โหลดทุกอย่างพร้อมกัน
-    const [allClasses, allStudents, allActuals, subjectsRes, slotsRes] = await Promise.all([
+    // โหลดข้อมูลพื้นฐาน + teach_actuals
+    const [allClasses, allStudents, allActuals, subjectsRes] = await Promise.all([
       getClasses(),
       getStudents(null, { activeOnly: true }),
       getTeachActualsRangeByClass(startDate.value, reportDate.value),
-      supabase.from('subjects')
-        .select('subject_code, name, credits')
-        .eq('school_id', schoolId),
-      supabase.from(slotTable.value)
-        .select('class_id, subject_id, subject_name, teacher_name')
-        .eq('school_id', schoolId)
-        .eq('term_id', termId)
-        .neq('slot_type', 'activity'),
+      supabase.from('subjects').select('subject_code, name, credits').eq('school_id', schoolId),
     ])
 
     // Map credit ต่อ subject_code
@@ -248,9 +241,24 @@ async function loadReport() {
       creditMap[s.subject_code] = { name: s.name || '', credits: s.credits || 0 }
     }
 
+    // โหลด timetable slots แบบ paginated (อาจเกิน 1000 แถว)
+    const allSlots = []
+    const SL_PAGE = 1000
+    for (let from = 0; ; from += SL_PAGE) {
+      const { data: slData, error: slErr } = await supabase
+        .from(slotTable.value)
+        .select('class_id, subject_id, subject_name, teacher_name')
+        .eq('school_id', schoolId).eq('term_id', termId)
+        .neq('slot_type', 'activity')
+        .range(from, from + SL_PAGE - 1)
+      if (slErr) throw slErr
+      allSlots.push(...(slData || []))
+      if ((slData || []).length < SL_PAGE) break
+    }
+
     // Build subject list per class from timetable_slots (dedup by subject_id)
     const classSubjectsMap = {}
-    for (const slot of slotsRes.data || []) {
+    for (const slot of allSlots) {
       if (!slot.subject_id) continue
       const cid = slot.class_id
       if (!classSubjectsMap[cid]) classSubjectsMap[cid] = {}
@@ -314,16 +322,19 @@ async function loadReport() {
         if (!subjId) continue
 
         if (!ta.is_filled) {
+          // ยังไม่บันทึก = ขาดทั้งห้อง
           for (const s of students) {
             const t = tracker[s.student_id]?.[subjId]
             if (!t) continue
             t.total++; t.absent++
           }
         } else {
+          // บันทึกแล้ว — นักเรียนที่ไม่ถูกระบุใน student_records = มาเรียน
           const recs = ta.student_records || {}
-          for (const [sid, rec] of Object.entries(recs)) {
-            const t = tracker[sid]?.[subjId]
+          for (const s of students) {
+            const t = tracker[s.student_id]?.[subjId]
             if (!t) continue
+            const rec = recs[String(s.student_id)] || recs[s.student_id]
             const cat = categorizeStatus(rec?.status || 'มาเรียน')
             t.total++; t[cat]++
           }
