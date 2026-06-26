@@ -1407,11 +1407,11 @@ export function useSchoolDb() {
     const homeroomSettings = settings?.teaching_log_settings?.homeroom_special_periods || []
     const homeroomPeriodNameMap = new Map()
     for (const hp of homeroomSettings) {
-      // ต้องใช้ Number.isFinite เพราะ period=0 เป็น falsy — ห้ามใช้ if(hp.period)
       if (Number.isFinite(Number(hp.period))) {
         homeroomPeriodNameMap.set(Number(hp.period), hp.name || '')
       }
     }
+    console.log('[debug] homeroomPeriodNameMap', [...homeroomPeriodNameMap.entries()])
 
     return rows.map(row => {
       const mapped = mapTeachActual(row)
@@ -1431,7 +1431,9 @@ export function useSchoolDb() {
       let subjectName = subjectNameMap.get(subjectId) || slot?.subject_name || ''
 
       if (isHomeroom) {
-        subjectName = homeroomPeriodNameMap.get(periodNum) || ''
+        const fromMap = homeroomPeriodNameMap.get(periodNum)
+        console.log(`[debug] period=${periodNum} isHomeroom=${isHomeroom} slot_type=${row.slot_type} fromMap=${fromMap}`)
+        subjectName = fromMap || ''
         if (!teacherName) {
           const hm = classHomeroomMap.get(row.class_id)
           if (hm) {
