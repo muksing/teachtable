@@ -35,7 +35,7 @@
           <div>
             <div class="text-xs text-gray-500 mb-1 font-medium">👨‍🏫 ชื่อครู</div>
             <el-select v-model="filterTeacher" placeholder="เลือกครู" clearable filterable style="width:160px">
-              <el-option v-for="t in teachersList" :key="t.teacher_id" :label="`${t.prefix || ''}${t.name} ${t.surname}`" :value="t.teacher_id" />
+              <el-option v-for="t in teachersList" :key="t.teacher_id" :label="`${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`" :value="t.teacher_id" />
             </el-select>
           </div>
           <div>
@@ -148,20 +148,22 @@ async function loadData() {
     else if (filterClass.value) actualsQ = actualsQ.eq('class_id', filterClass.value)
 
     // load timetable_slots คู่กันเพื่อ enrich ชื่อครู + วิชา
+    const slotTable = schoolStore.settingsObj?.timetable_published_at ? 'timetable_slots_published' : 'timetable_slots'
     const [actualsRes, slotsRes] = await Promise.all([
       actualsQ,
       supabase
-        .from('timetable_slots')
+        .from(slotTable)
         .select('class_id, period_number, day_of_week, teacher_id, teacher_name, subject_id, subject_name')
         .eq('school_id', schoolId)
-        .eq('term_id', termId),
+        .eq('term_id', termId)
+        .limit(10000),
     ])
     if (actualsRes.error) throw actualsRes.error
 
     // โหลด teachers + settings (สำหรับ enrich homeroom records)
     const [settingsResult, teachersRes] = await Promise.all([
       getSchoolSettings(),
-      supabase.from('teachers').select('teacher_code, prefix, name, surname').eq('school_id', schoolId),
+      supabase.from('teachers').select('teacher_code, prefix, first_name, last_name').eq('school_id', schoolId),
     ])
     const homeroomPeriods = settingsResult.teaching_log_settings?.homeroom_special_periods || []
 
@@ -174,19 +176,24 @@ async function loadData() {
     }
     const teacherNameMap = new Map()
     for (const t of (teachersRes.data || [])) {
-      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim())
+      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim())
     }
     // lookup homeroom teacher คนแรก ของแต่ละห้อง: class_name → { id, snapName }
+    function firstHomeroomId(c) {
+      if (Array.isArray(c.homeroom_teacher_ids) && c.homeroom_teacher_ids.length) {
+        // ids[0] อาจเป็น "307, 703" ถ้า import เก่า → split แล้วเอาตัวแรก
+        return String(c.homeroom_teacher_ids[0]).split(',')[0].trim()
+      }
+      if (c.homeroom_teacher_id) return String(c.homeroom_teacher_id).split(',')[0].trim()
+      return ''
+    }
     const classHomeroomMap = new Map()
     for (const c of classesList.value) {
-      const ids = Array.isArray(c.homeroom_teacher_ids) && c.homeroom_teacher_ids.length
-        ? c.homeroom_teacher_ids
-        : (c.homeroom_teacher_id ? [c.homeroom_teacher_id] : [])
+      const firstId = firstHomeroomId(c)
+      if (!firstId) continue
       const names = Array.isArray(c.homeroom_teacher_names_snapshot) ? c.homeroom_teacher_names_snapshot
         : (c.homeroom_teacher_name_snapshot ? [c.homeroom_teacher_name_snapshot] : [])
-      if (ids.length) {
-        classHomeroomMap.set(c.class_id, { id: ids[0], snapName: names[0] || '' })
-      }
+      classHomeroomMap.set(c.class_id, { id: firstId, snapName: names[0] || '' })
     }
 
     allData.value = (actualsRes.data || [])
@@ -200,8 +207,9 @@ async function loadData() {
         const dayNum = THAI_DAY_TO_NUM[dayName]
         const slot = isHomeroom ? null : slotMap.get(`${row.class_id}_${row.period_number}_${dayNum}`)
 
-        let teacherName = teacherNameMap.get(slot?.teacher_id) || slot?.teacher_name || ''
-        let subjectName = slot?.subject_name || ''
+        const resolvedTeacherId = slot?.teacher_id || row.planned_teacher_id || ''
+        let teacherName = teacherNameMap.get(resolvedTeacherId) || slot?.teacher_name || row.record_by_name || ''
+        let subjectName = slot?.subject_name || row.subject_id || ''
 
         if (isHomeroom) {
           // ดึงชื่อครูที่ปรึกษาจาก classes — fallback ไปใช้ snapshot ถ้า teacherNameMap ไม่มี
