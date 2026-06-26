@@ -1419,7 +1419,8 @@ export function useSchoolDb() {
       const isHomeroom = row.slot_type === 'homeroom'
         || homeroomPeriodNameMap.has(periodNum)
       const dayNum = THAI_DAY_TO_NUMBER[THAI_DAYS_ARR[new Date(row.date + 'T00:00:00').getDay()]]
-      const slot   = isHomeroom ? null : slotMap.get(`${row.class_id}_${row.period_number}_${dayNum}`)
+      // ดึง slot สำหรับทุกประเภท รวมถึง homeroom เพื่อได้ subject_name จากตารางสอน
+      const slot = slotMap.get(`${row.class_id}_${row.period_number}_${dayNum}`)
 
       let teacherId = String(row.planned_teacher_id || '')
       let teacherName = teacherNameMap.get(teacherId)
@@ -1427,11 +1428,13 @@ export function useSchoolDb() {
         || slot?.teacher_name
         || ''
       let subjectId = row.subject_id || slot?.subject_id || ''
-      let subjectName = slot?.subject_name || subjectNameMap.get(subjectId) || ''
+      let subjectName = subjectNameMap.get(subjectId) || slot?.subject_name || ''
 
       if (isHomeroom) {
-        // homeroom: ชื่อวิชาจาก settings เป็นหลักเสมอ (ไม่เชื่อ slot.subject_name ที่อาจเป็น 'Homeroom')
-        subjectName = homeroomPeriodNameMap.get(periodNum) || subjectName
+        // ลำดับความสำคัญ: ชื่อจาก settings > subject_name จาก timetable slot > ว่าง
+        const settingsName = homeroomPeriodNameMap.get(periodNum)
+        const slotName = slot?.subject_name && slot.subject_name !== 'Homeroom' ? slot.subject_name : ''
+        subjectName = settingsName || slotName || subjectName
         if (!teacherName) {
           const hm = classHomeroomMap.get(row.class_id)
           if (hm) {
