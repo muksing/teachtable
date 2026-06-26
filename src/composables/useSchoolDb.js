@@ -1429,23 +1429,43 @@ export function useSchoolDb() {
     const termId   = term()
     const schoolId = authStore.schoolId
 
-    let slotsQ = supabase
-      .from(getSlotTable(schoolStore))
-      .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
-      .eq('school_id', schoolId)
-      .eq('term_id', termId)
-      .not('slot_type', 'in', '("activity","manual_lock")')
-    if (classId) slotsQ = slotsQ.eq('class_id', classId)
+    const slotTable = getSlotTable(schoolStore)
+    const PAGE = 1000
 
-    let actualsQ = supabase
-      .from('teach_actuals')
-      .select('*')
-      .eq('school_id', schoolId)
-      .eq('term_id', termId)
-      .gte('date', startKey)
-      .lte('date', endKey)
-      .order('date')
-    if (classId) actualsQ = actualsQ.eq('class_id', classId)
+    // paginate timetable slots (Supabase hard cap 1000 rows/request)
+    const fetchSlots = async () => {
+      const rows = []
+      for (let from = 0; ; from += PAGE) {
+        let q = supabase.from(slotTable)
+          .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
+          .eq('school_id', schoolId).eq('term_id', termId)
+          .not('slot_type', 'in', '("activity","manual_lock")')
+          .range(from, from + PAGE - 1)
+        if (classId) q = q.eq('class_id', classId)
+        const { data, error } = await q
+        if (error) throw error
+        rows.push(...(data || []))
+        if ((data || []).length < PAGE) break
+      }
+      return rows
+    }
+
+    // paginate teach_actuals (could span many days across a term)
+    const fetchActuals = async () => {
+      const rows = []
+      for (let from = 0; ; from += PAGE) {
+        let q = supabase.from('teach_actuals').select('*')
+          .eq('school_id', schoolId).eq('term_id', termId)
+          .gte('date', startKey).lte('date', endKey).order('date')
+          .range(from, from + PAGE - 1)
+        if (classId) q = q.eq('class_id', classId)
+        const { data, error } = await q
+        if (error) throw error
+        rows.push(...(data || []))
+        if ((data || []).length < PAGE) break
+      }
+      return rows
+    }
 
     let classesQ = supabase
       .from('classes')
@@ -1453,12 +1473,12 @@ export function useSchoolDb() {
       .eq('school_id', schoolId)
     if (classId) classesQ = classesQ.eq('class_name', classId)
 
-    const [slotsRes, actualsRes, settingsResult, classesRes, teachersRes2] = await Promise.all([
-      slotsQ, actualsQ, getSchoolSettings(), classesQ,
+    const [slotsData, actualsRows, settingsResult, classesRes, teachersRes2] = await Promise.all([
+      fetchSlots(), fetchActuals(), getSchoolSettings(), classesQ,
       supabase.from('teachers').select('teacher_code, prefix, first_name, last_name').eq('school_id', schoolId).limit(500),
     ])
-    if (slotsRes.error) throw slotsRes.error
-    if (actualsRes.error) throw actualsRes.error
+    const slotsRes = { data: slotsData }
+    const actualsRes = { data: actualsRows }
 
     const homeroomPeriods     = settingsResult.teaching_log_settings?.homeroom_special_periods || []
     const classesWithHomeroom = (classesRes.data || []).filter(c =>

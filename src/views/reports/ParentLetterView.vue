@@ -120,14 +120,11 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolStore } from '@/stores/school'
-import { useTimetableSource } from '@/composables/useTimetableSource'
-
 const authStore   = useAuthStore()
 const schoolStore = useSchoolStore()
 const schoolId    = computed(() => authStore.schoolId)
 const termId      = computed(() => schoolStore.currentTerm || '')
 const isAdmin     = computed(() => authStore.hasAnyRole(['school_admin', 'admin', 'superadmin']))
-const { slotTable } = useTimetableSource()
 
 const loading       = ref(false)
 const selectedClass = ref('')
@@ -176,53 +173,120 @@ async function loadData() {
     const classId = selectedClass.value
     const totalMax = scoreSettings.max_scores.slice(0, scoreSettings.num_units).reduce((a, b) => a + b, 0)
 
-    // Load all data in parallel
+    // paginate teach_actuals (Supabase hard cap 1000 rows/request)
+    const fetchTeachActuals = async () => {
+      const PAGE = 1000, rows = []
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from('teach_actuals')
+          .select('student_records, is_filled, subject_id, planned_teacher_id')
+          .eq('school_id', schoolId.value).eq('term_id', termId.value).eq('class_id', classId)
+          .range(from, from + PAGE - 1)
+        if (error) throw error
+        rows.push(...(data || []))
+        if ((data || []).length < PAGE) break
+      }
+      return { data: rows }
+    }
     const [
       { data: stuData },
       { data: scoreData },
       { data: taData },
-      { data: slotData },
+      { data: subjectMasterData },
     ] = await Promise.all([
       supabase.from('students').select('*')
         .eq('school_id', schoolId.value).eq('class_id', classId),
       supabase.from('score_records').select('student_id, subject_code, scores')
         .eq('school_id', schoolId.value).eq('term_id', termId.value).eq('class_id', classId),
-      supabase.from('teach_actuals').select('student_records, is_filled')
-        .eq('school_id', schoolId.value).eq('term_id', termId.value)
-        .eq('class_id', classId).eq('is_filled', true),
-      supabase.from(slotTable.value).select('subject_id, subject_name, teacher_id, teacher_name')
-        .eq('school_id', schoolId.value).eq('term_id', termId.value)
-        .eq('class_id', classId).neq('slot_type', 'activity'),
+      fetchTeachActuals(),
+      supabase.from('subjects').select('subject_code, name').eq('school_id', schoolId.value),
     ])
 
-    // Build deduplicated subject list for this class
+    // ชื่อวิชาจาก subjects table (authoritative)
+    const subjectNameMap = {}
+    for (const s of (subjectMasterData || [])) {
+      if (s.subject_code) subjectNameMap[s.subject_code] = s.name
+    }
+
+    // สร้าง subject list เฉพาะจาก FILLED records เท่านั้น (ป้องกัน code เก่าจาก unfilled)
     const subjectMapObj = {}
-    for (const s of (slotData || [])) {
-      if (!subjectMapObj[s.subject_id]) {
-        subjectMapObj[s.subject_id] = {
-          subject_code: s.subject_id,
-          subject_name: s.subject_name || s.subject_id,
-          teacher_name: s.teacher_name || '',
+    const subjectTeacherMap = {}
+    for (const ta of (taData || [])) {
+      if (!ta.is_filled) continue
+      const subjId = (ta.subject_id || '').trim()
+      if (!subjId) continue
+      if (!subjectMapObj[subjId]) {
+        subjectMapObj[subjId] = {
+          subject_code: subjId,
+          subject_name: subjectNameMap[subjId] || subjId,
+          teacher_name: '',
         }
       }
+      if (ta.planned_teacher_id) subjectTeacherMap[subjId] = ta.planned_teacher_id
     }
-    const classSubjects = Object.values(subjectMapObj)
 
-    const students = (stuData || []).sort((a, b) =>
-      (parseInt(a.seat_number) || 999) - (parseInt(b.seat_number) || 999)
-    )
+    // ดึงชื่อครูจาก teachers table
+    const teacherIds = [...new Set(Object.values(subjectTeacherMap).filter(Boolean))]
+    if (teacherIds.length) {
+      const { data: teacherData } = await supabase.from('teachers')
+        .select('teacher_code, prefix, first_name, last_name')
+        .eq('school_id', schoolId.value).in('teacher_code', teacherIds)
+      const teacherNameLookup = {}
+      for (const t of (teacherData || [])) {
+        teacherNameLookup[t.teacher_code] = `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim()
+      }
+      for (const [subjId, tid] of Object.entries(subjectTeacherMap)) {
+        if (teacherNameLookup[tid]) subjectMapObj[subjId].teacher_name = teacherNameLookup[tid]
+      }
+    }
+
+    const classSubjects = Object.values(subjectMapObj)
+      .sort((a, b) => a.subject_code.localeCompare(b.subject_code, 'th'))
+
+    const students = (stuData || [])
+      .filter(s => !s.student_status || s.student_status === 'เรียนอยู่')
+      .sort((a, b) => (parseInt(a.seat_number) || 999) - (parseInt(b.seat_number) || 999))
     const studentIds = students.map(s => s.student_code)
 
-    // Attendance
+    // นับเวลาเรียน: logic เดียวกับ AttendanceReportView
+    // unfilled = ทุกคนขาด, filled = ใช้ student_records จริง
+    function categorizeStatus(st) {
+      if (!st || st === 'ไม่บันทึก') return 'absent'
+      if (st.includes('ขาด') || ['โดดเรียน', 'หนีเรียน', 'absent'].includes(st)) return 'absent'
+      return 'present'
+    }
+
+    const attendSubj = {}
     const attendCount = {}
-    for (const sid of studentIds) attendCount[sid] = { present: 0, total: 0 }
-    const PRESENT_STATUSES = new Set(['มาเรียน', 'มาสาย', 'ป่วย', 'กิจ', 'ราชการ'])
+    for (const sid of studentIds) { attendSubj[sid] = {}; attendCount[sid] = { present: 0, total: 0 } }
+
     for (const ta of (taData || [])) {
-      const recs = ta.student_records || {}
-      for (const [sid, rec] of Object.entries(recs)) {
-        if (!attendCount[sid]) continue
-        attendCount[sid].total++
-        if (PRESENT_STATUSES.has(rec.status || 'มาเรียน')) attendCount[sid].present++
+      const subjId = (ta.subject_id || '').trim() || null
+      // นับ per-subject เฉพาะ subject ที่อยู่ใน list (filled-based) เท่านั้น
+      const trackSubj = subjId && subjectMapObj[subjId]
+
+      if (!ta.is_filled) {
+        // ครูไม่บันทึก → ทุกคนขาดคาบนี้
+        for (const sid of studentIds) {
+          if (trackSubj) {
+            if (!attendSubj[sid][subjId]) attendSubj[sid][subjId] = { present: 0, total: 0 }
+            attendSubj[sid][subjId].total++
+          }
+          attendCount[sid].total++
+        }
+      } else {
+        const recs = ta.student_records || {}
+        for (const [sid, rec] of Object.entries(recs)) {
+          if (!attendCount[sid]) continue
+          const isPresent = categorizeStatus(rec.status || 'มาเรียน') === 'present'
+          if (trackSubj) {
+            if (!attendSubj[sid][subjId]) attendSubj[sid][subjId] = { present: 0, total: 0 }
+            attendSubj[sid][subjId].total++
+            if (isPresent) attendSubj[sid][subjId].present++
+          }
+          attendCount[sid].total++
+          if (isPresent) attendCount[sid].present++
+        }
       }
     }
 
@@ -236,7 +300,7 @@ async function loadData() {
         if (rec.student_id === sid) scoreRecMap[rec.subject_code] = rec.scores || {}
       }
 
-      // All subjects with scores (default 0 if no record)
+      // All subjects with scores + attendance
       const subjectScores = classSubjects.map(subj => {
         const sc = scoreRecMap[subj.subject_code] || {}
         let sum = 0
@@ -244,13 +308,21 @@ async function loadData() {
           const v = parseFloat(sc[`u${u}`])
           if (!isNaN(v)) sum += v
         }
+        const scorePct  = totalMax ? Math.round(sum / totalMax * 100) : 0
+        const subjAtt   = attendSubj[sid]?.[subj.subject_code] || { present: 0, total: 0 }
+        const attPct    = subjAtt.total > 0 ? Math.round(subjAtt.present / subjAtt.total * 100) : 100
+        const isPassed  = attPct >= targets.min_attendance_pct
         return {
-          subject_code: subj.subject_code,
-          subject_name: subj.subject_name,
-          teacher_name: subj.teacher_name,
-          total: Math.round(sum * 10) / 10,
-          max: totalMax,
-          pct: totalMax ? Math.round(sum / totalMax * 100) : 0,
+          subject_code:    subj.subject_code,
+          subject_name:    subj.subject_name,
+          teacher_name:    subj.teacher_name,
+          total:           Math.round(sum * 10) / 10,
+          max:             totalMax,
+          pct:             scorePct,
+          att_present:     subjAtt.present,
+          att_total:       subjAtt.total,
+          att_pct:         attPct,
+          isPassed,
         }
       })
 
@@ -273,6 +345,8 @@ async function loadData() {
         class_id: classId,
         score_pct: avgScorePct,
         attend_pct: attendPct,
+        attend_present: present,
+        attend_total: total,
         behavior_score: behaviorScore,
         isRisk,
         line_id: stu.guardian_primary?.line_id || '',
@@ -302,28 +376,44 @@ function buildLetterHtml(row) {
        </div>`
     : ''
 
+  const th = (txt, extra='') =>
+    `<th style="border:1px solid #cbd5e1;padding:4px 6px;background:#1e3a8a;color:#fff;text-align:center;white-space:nowrap;font-size:11px;${extra}">${txt}</th>`
+  const td = (txt, extra='') =>
+    `<td style="border:1px solid #cbd5e1;padding:4px 6px;${extra}">${txt}</td>`
+
   const scoresTable = row.subjectScores.length
-    ? `<table style="border-collapse:collapse;width:100%;font-size:12px;margin:8px 0">
+    ? `<table style="border-collapse:collapse;width:100%;font-size:11px;margin:8px 0">
         <thead><tr>
-          <th style="border:1px solid #cbd5e1;padding:4px 8px;background:#1e3a8a;color:#fff;text-align:center;white-space:nowrap;width:36px">ที่</th>
-          <th style="border:1px solid #cbd5e1;padding:4px 8px;background:#1e3a8a;color:#fff;text-align:left;white-space:nowrap">รหัสวิชา</th>
-          <th style="border:1px solid #cbd5e1;padding:4px 8px;background:#1e3a8a;color:#fff;text-align:left">ชื่อวิชา</th>
-          <th style="border:1px solid #cbd5e1;padding:4px 8px;background:#1e3a8a;color:#fff;text-align:left">ครูผู้สอน</th>
-          <th style="border:1px solid #cbd5e1;padding:4px 8px;background:#1e3a8a;color:#fff;text-align:center;white-space:nowrap">คะแนนที่ได้</th>
-          <th style="border:1px solid #cbd5e1;padding:4px 8px;background:#1e3a8a;color:#fff;text-align:center;white-space:nowrap">คะแนนเต็ม</th>
-          <th style="border:1px solid #cbd5e1;padding:4px 8px;background:#1e3a8a;color:#fff;text-align:center;white-space:nowrap">ร้อยละ</th>
+          ${th('ที่','width:28px')}
+          ${th('รหัสวิชา','text-align:left')}
+          ${th('ชื่อวิชา','text-align:left;min-width:100px')}
+          ${th('ครูผู้สอน','text-align:left')}
+          ${th('คะแนน<br>ที่ได้')}
+          ${th('คะแนน<br>เต็ม')}
+          ${th('เวลาเรียน<br>มา/ทั้งหมด')}
+          ${th('ร้อยละ<br>เวลาเรียน')}
+          ${th('ประเมิน')}
         </tr></thead>
-        <tbody>${row.subjectScores.map((s, i) =>
-          `<tr style="background:${i % 2 === 0 ? '#fff' : '#f8fafc'}">
-            <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;color:#6b7280">${i + 1}</td>
-            <td style="border:1px solid #cbd5e1;padding:4px 8px;white-space:nowrap">${s.subject_code}</td>
-            <td style="border:1px solid #cbd5e1;padding:4px 8px">${s.subject_name}</td>
-            <td style="border:1px solid #cbd5e1;padding:4px 8px;white-space:nowrap">${s.teacher_name || '—'}</td>
-            <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;font-weight:700">${s.total}</td>
-            <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center">${s.max}</td>
-            <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;font-weight:700;color:${s.pct < targets.min_score_pct ? '#dc2626' : '#15803d'}">${s.pct}%</td>
+        <tbody>${row.subjectScores.map((s, i) => {
+          const rowBg    = i % 2 === 0 ? '#fff' : '#f8fafc'
+          const failScore = s.pct < targets.min_score_pct
+          const failAtt   = s.att_pct < targets.min_attendance_pct
+          const assessColor = s.isPassed ? '#15803d' : '#dc2626'
+          const assessText  = s.isPassed ? 'ผ่าน' : 'มส.'
+          const attRatio    = s.att_total > 0 ? `${s.att_present}/${s.att_total}` : '—'
+          const attPctTxt   = s.att_total > 0 ? `${s.att_pct}%` : '—'
+          return `<tr style="background:${rowBg}">
+            ${td(i + 1, 'text-align:center;color:#6b7280')}
+            ${td(s.subject_code, 'white-space:nowrap')}
+            ${td(s.subject_name)}
+            ${td(s.teacher_name || '—', 'white-space:nowrap;font-size:10px')}
+            ${td(`<b>${s.total}</b>`, 'text-align:center;color:' + (failScore ? '#dc2626' : '#111'))}
+            ${td(s.max, 'text-align:center;color:#6b7280')}
+            ${td(attRatio, 'text-align:center')}
+            ${td(`<b>${attPctTxt}</b>`, 'text-align:center;color:' + (failAtt ? '#dc2626' : '#15803d') + ';font-weight:700')}
+            ${td(`<b>${assessText}</b>`, 'text-align:center;color:' + assessColor + ';font-weight:800')}
           </tr>`
-        ).join('')}</tbody>
+        }).join('')}</tbody>
        </table>`
     : '<p style="color:#9ca3af;font-style:italic">ยังไม่มีข้อมูลวิชาในตาราง</p>'
 
@@ -332,7 +422,7 @@ function buildLetterHtml(row) {
     : `<div style="font-size:36px;text-align:center">🏫</div>`
 
   return `
-    <div style="page-break-after:always;padding:20px 28px;font-family:'TH Sarabun New',Sarabun,sans-serif;font-size:14px;max-width:680px;margin:0 auto">
+    <div style="page-break-after:always;padding:20px 28px;font-family:'Sarabun','TH Sarabun New',sans-serif;font-size:15px;max-width:700px;margin:0 auto">
       <div style="text-align:center;margin-bottom:16px">
         ${logoHtml}
         <div style="font-size:16px;font-weight:800;color:#1e3a8a">${schoolName.value}</div>
@@ -345,9 +435,8 @@ function buildLetterHtml(row) {
       <div style="background:#f8fafc;border-radius:8px;padding:12px 16px;margin:12px 0">
         <div style="font-weight:700;margin-bottom:8px;color:#1e3a8a">สรุปผลการเรียน</div>
         ${scoresTable}
-        <div style="margin-top:10px;display:flex;gap:16px;flex-wrap:wrap">
-          <div>เวลาเรียน: <b style="color:${row.attend_pct < targets.min_attendance_pct ? '#dc2626' : '#15803d'}">${row.attend_pct}%</b></div>
-          <div>คะแนนความประพฤติ: <b style="color:${row.behavior_score < targets.min_behavior_score ? '#dc2626' : '#15803d'}">${row.behavior_score} คะแนน</b></div>
+        <div style="margin-top:10px;font-size:13px">
+          คะแนนความประพฤติ: <b style="color:${row.behavior_score < targets.min_behavior_score ? '#dc2626' : '#15803d'}">${row.behavior_score} คะแนน</b>
         </div>
         ${riskFactors.length ? `<div style="margin-top:8px;color:#dc2626;font-size:12px"><b>ต่ำกว่าเกณฑ์:</b> ${riskFactors.join(' · ')}</div>` : ''}
       </div>
@@ -371,8 +460,9 @@ function openPrintWindow(htmlBodies) {
   win.document.write(`<!DOCTYPE html>
 <html lang="th"><head><meta charset="UTF-8">
 <title>จดหมายแจ้งผู้ปกครอง</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
-  body { font-family:'TH Sarabun New',Sarabun,sans-serif; margin:0; background:#fff; }
+  body { font-family:'Sarabun','TH Sarabun New',sans-serif; margin:0; background:#fff; }
   @page { margin:1.5cm; }
 </style></head>
 <body>${htmlBodies.join('')}
