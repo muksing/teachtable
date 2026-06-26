@@ -163,7 +163,7 @@ async function loadData() {
     // โหลด teachers + settings (สำหรับ enrich homeroom records)
     const [settingsResult, teachersRes] = await Promise.all([
       getSchoolSettings(),
-      supabase.from('teachers').select('teacher_code, prefix, first_name, last_name').eq('school_id', schoolId),
+      supabase.from('teachers').select('teacher_code, prefix, first_name, last_name').eq('school_id', schoolId).limit(500),
     ])
     const homeroomPeriods = settingsResult.teaching_log_settings?.homeroom_special_periods || []
 

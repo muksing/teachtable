@@ -1448,7 +1448,7 @@ export function useSchoolDb() {
 
     const [slotsRes, actualsRes, settingsResult, classesRes, teachersRes2] = await Promise.all([
       slotsQ, actualsQ, getSchoolSettings(), classesQ,
-      supabase.from('teachers').select('teacher_code, prefix, first_name, last_name').eq('school_id', schoolId),
+      supabase.from('teachers').select('teacher_code, prefix, first_name, last_name').eq('school_id', schoolId).limit(500),
     ])
     if (slotsRes.error) throw slotsRes.error
     if (actualsRes.error) throw actualsRes.error

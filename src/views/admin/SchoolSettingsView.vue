@@ -70,6 +70,36 @@
 
       </el-card>
 
+      <!-- ── กลุ่ม: ข้อมูลโรงเรียน ─────────────────────── -->
+      <div class="section-group-label">🏫 ข้อมูลโรงเรียน</div>
+
+      <!-- Section: ลิงก์พอร์ทัลโรงเรียน -->
+      <el-card class="section-card mb-4">
+        <template #header>
+          <span class="section-title">🔗 ลิงก์พอร์ทัลโรงเรียน</span>
+        </template>
+        <div class="portal-link-section">
+          <div class="portal-link-info">
+            <div class="portal-link-label">รหัสโรงเรียน (School Code)</div>
+            <div class="portal-code-row">
+              <code class="portal-code">{{ schoolCode || 'ยังไม่มีรหัส' }}</code>
+              <el-input v-if="editingCode" v-model="newSchoolCode" size="small" style="width:160px"
+                placeholder="เช่น phetlakorn" @keydown.enter="saveSchoolCode" @keydown.escape="editingCode = false" />
+              <el-button v-if="!editingCode" size="small" plain @click="editingCode = true; newSchoolCode = schoolCode">✏️ แก้ไข</el-button>
+              <el-button v-else type="primary" size="small" :loading="savingCode" @click="saveSchoolCode">บันทึก</el-button>
+              <el-button v-if="editingCode" size="small" @click="editingCode = false">ยกเลิก</el-button>
+            </div>
+          </div>
+          <div style="height:1px;background:#f0f0f0;margin:12px 0"></div>
+          <div class="portal-link-label mb-2">ลิงก์พอร์ทัลสำหรับแจกนักเรียน/ครู</div>
+          <div class="portal-url-row">
+            <code class="portal-url">{{ portalUrl }}</code>
+            <el-button size="small" type="primary" plain @click="copyPortalLink">📋 คัดลอก</el-button>
+          </div>
+          <div class="portal-link-hint">แจกลิงก์นี้ให้นักเรียนและครูเพื่อเข้าสู่พอร์ทัลโรงเรียน</div>
+        </div>
+      </el-card>
+
       <!-- Section 0: โลโก้โรงเรียน -->
       <el-card class="section-card sec-logo mb-4">
         <template #header>
@@ -193,6 +223,9 @@
           </el-form-item>
         </div>
       </el-card>
+
+      <!-- ── กลุ่ม: ระบบจัดตารางสอน ──────────────────── -->
+      <div class="section-group-label">📋 ระบบจัดตารางสอน</div>
 
       <!-- Section 4: ตั้งค่าตารางสอน -->
       <el-card class="section-card sec-schedule mb-4">
@@ -415,6 +448,44 @@ const logoUploading = ref(false)
 
 const schoolId = computed(() => authStore.schoolId)
 
+// ── Portal link ──────────────────────────────────────
+const schoolCode   = ref('')
+const editingCode  = ref(false)
+const newSchoolCode = ref('')
+const savingCode   = ref(false)
+const portalUrl = computed(() => {
+  const base = window.location.origin
+  const slug = schoolCode.value || schoolId.value
+  return `${base}/s/${slug}`
+})
+
+async function loadSchoolCode() {
+  if (!schoolId.value) return
+  const { data } = await supabase.from('schools').select('school_code').eq('id', schoolId.value).single()
+  schoolCode.value = data?.school_code || ''
+}
+
+async function saveSchoolCode() {
+  const code = newSchoolCode.value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')
+  if (!code) { ElMessage.warning('กรุณากรอกรหัสที่ถูกต้อง (a-z, 0-9, -)'); return }
+  savingCode.value = true
+  try {
+    const { error } = await supabase.from('schools').update({ school_code: code }).eq('id', schoolId.value)
+    if (error) throw error
+    schoolCode.value = code
+    editingCode.value = false
+    ElMessage.success('บันทึกรหัสโรงเรียนแล้ว')
+  } catch (e) {
+    ElMessage.error(e.message?.includes('unique') ? 'รหัสนี้ถูกใช้งานแล้ว กรุณาเลือกรหัสอื่น' : e.message)
+  } finally {
+    savingCode.value = false
+  }
+}
+
+function copyPortalLink() {
+  navigator.clipboard.writeText(portalUrl.value).then(() => ElMessage.success('คัดลอกลิงก์แล้ว!'))
+}
+
 const currentPlanFeeLabel = computed(() => {
   const fee = Number(schoolStore.pricingPlan?.monthly_fee || 0)
   return fee > 0 ? `${fee} บาท` : 'ยังไม่กำหนด'
@@ -527,8 +598,8 @@ async function publishTimetableSnapshot() {
     // Load data from Supabase tables
     const [classesRes, teachersRes, slotsRes] = await Promise.all([
       supabase.from('classes').select('*').eq('school_id', sid).eq('term_id', currentTerm).order('class_id'),
-      supabase.from('teachers').select('*').eq('school_id', sid).eq('term_id', currentTerm).order('name'),
-      supabase.from('timetable_slots').select('*').eq('school_id', sid).eq('term_id', currentTerm),
+      supabase.from('teachers').select('*').eq('school_id', sid).eq('term_id', currentTerm).order('first_name'),
+      supabase.from('timetable_slots').select('*').eq('school_id', sid).eq('term_id', currentTerm).limit(10000),
     ])
 
     const classes = classesRes.data || []
@@ -849,6 +920,7 @@ async function loadSettings() {
     ensureEndRow()
 
     timetableLocked.value = settings.timetable_locked === true || info.timetable_locked === true
+
     const p = settings.timetable_publish || {}
     publishMeta.status = p.status || ''
     publishMeta.version = p.version || ''
@@ -951,10 +1023,17 @@ function applyImportData(data) {
   ensureEndRow()
 }
 
-onMounted(loadSettings)
+onMounted(() => { loadSettings(); loadSchoolCode() })
 </script>
 
 <style scoped>
+.portal-link-section { font-family: 'Sarabun', sans-serif; }
+.portal-link-label { font-size: 12px; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+.portal-code-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.portal-code { font-family: monospace; font-size: 16px; font-weight: 700; color: #6366f1; background: #eef2ff; padding: 4px 12px; border-radius: 8px; }
+.portal-url-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.portal-url { font-family: monospace; font-size: 13px; color: #374151; background: #f9fafb; border: 1px solid #e5e7eb; padding: 6px 12px; border-radius: 8px; word-break: break-all; flex: 1; }
+.portal-link-hint { font-size: 12px; color: #9ca3af; margin-top: 8px; }
 .header-card {
   background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
   border-radius: 16px;
@@ -997,6 +1076,20 @@ onMounted(loadSettings)
   box-shadow: none !important;
   border-radius: 10px;
   transition: all 0.2s ease;
+}
+
+/* ── Section group labels ────────────────────────────────────── */
+.section-group-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 800; color: #475569;
+  text-transform: uppercase; letter-spacing: .08em;
+  margin: 20px 0 10px;
+  padding-left: 4px;
+}
+.section-group-label::after {
+  content: ''; flex: 1; height: 2px;
+  background: linear-gradient(90deg, #e2e8f0 0%, transparent 100%);
+  border-radius: 2px;
 }
 
 .sec-logo { border-color: #fde68a; }
