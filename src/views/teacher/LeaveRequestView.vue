@@ -422,7 +422,7 @@ async function cancelRequest(req) {
         : 'ยืนยันยกเลิกคำขอลา?',
       'ยืนยัน', { type:'warning', confirmButtonText:'ยืนยัน', cancelButtonText:'ย้อนกลับ' }
     )
-    await cancelLeaveRequest(req.leave_id)
+    await cancelLeaveRequest(req.id)
     ElMessage.success('ยกเลิกคำขอลาแล้ว')
     await loadRequests()
   } catch {}

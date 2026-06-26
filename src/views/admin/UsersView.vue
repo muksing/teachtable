@@ -121,13 +121,19 @@
                     :model-value="hasExtraRole(row.user, 'subject_head')"
                     size="small"
                     @change="val => toggleExtraRole(row, 'subject_head', val)">
-                    🏫 หัวหน้ากลุ่มสาระ
+                    🏫 จัดสอนแทนกลุ่มสาระ
                   </el-checkbox>
                   <el-checkbox
                     :model-value="hasExtraRole(row.user, 'sub_coordinator')"
                     size="small"
                     @change="val => toggleExtraRole(row, 'sub_coordinator', val)">
-                    🔄 ผู้จัดสอนแทนรวม
+                    🔄 จัดสอนแทนโรงเรียน
+                  </el-checkbox>
+                  <el-checkbox
+                    :model-value="hasExtraRole(row.user, 'school_director')"
+                    size="small"
+                    @change="val => toggleExtraRole(row, 'school_director', val)">
+                    👔 ผู้บริหาร (ดูรายงาน)
                   </el-checkbox>
                 </div>
               </template>
@@ -501,7 +507,7 @@ async function changeRole(row, newRole) {
   try {
     const uid = row.user.id || row.user.uid
     const currentRoles = Array.isArray(row.user.roles) ? row.user.roles : []
-    const extraRoles = currentRoles.filter(r => ['subject_head', 'sub_coordinator'].includes(r))
+    const extraRoles = currentRoles.filter(r => EXTRA_ROLES.includes(r))
     const rolePayload = buildRolePayload([newRole, ...extraRoles])
 
     const { error } = await supabase.from('users').update({
@@ -524,7 +530,7 @@ async function changeRole(row, newRole) {
   }
 }
 
-const EXTRA_ROLES = ['subject_head', 'sub_coordinator']
+const EXTRA_ROLES = ['subject_head', 'sub_coordinator', 'school_director']
 
 function hasExtraRole(user, roleName) {
   return Array.isArray(user?.roles) && user.roles.includes(roleName)
@@ -545,7 +551,7 @@ async function toggleExtraRole(row, roleName, checked) {
     }).eq('id', uid)
     if (error) throw error
     Object.assign(row.user, normalizeUserAccessRecord({ ...row.user, ...rolePayload }))
-    const labels = { subject_head: 'หัวหน้ากลุ่มสาระ', sub_coordinator: 'ผู้จัดสอนแทนรวม' }
+    const labels = { subject_head: 'จัดสอนแทนกลุ่มสาระ', sub_coordinator: 'จัดสอนแทนโรงเรียน', school_director: 'ผู้บริหาร' }
     ElMessage.success((checked ? 'เพิ่ม' : 'ยกเลิก') + 'สิทธิ์ ' + (labels[roleName] || roleName))
   } catch (e) {
     ElMessage.error('อัปเดตสิทธิ์ไม่สำเร็จ: ' + e.message)
