@@ -231,7 +231,6 @@ const allGroups = computed(() => {
       items: [
         { to:'/admin/school-settings',   icon:'🏫', bg:'#ede9fe', label:'ข้อมูลโรงเรียน',    sub:'ชื่อ โลโก้ ปีการศึกษา' },
         { to:'/admin/terms',             icon:'📅', bg:'#e0e7ff', label:'จัดการเทอม',         sub:'ภาคเรียน ช่วงเวลา' },
-        { to:'/admin/users',             icon:'👤', bg:'#dbeafe', label:'จัดการสิทธิ์ผู้ใช้',  sub:'บัญชีครู บุคลากร สิทธิ์' },
         { to:'/admin/signatures',        icon:'✍️', bg:'#fce7f3', label:'ตั้งค่าลายเซ็น',     sub:'ผู้ลงนาม ภาพลายเซ็น' },
         { to:'/admin/renewal',           icon:'💳', bg:'#fce7f3', label:'ต่ออายุการใช้งาน',   sub:'ส่งหลักฐานชำระเงิน' },
       ],
@@ -243,7 +242,7 @@ const allGroups = computed(() => {
       roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'],
       items: [
         { type:'section', label:'ข้อมูลพื้นฐาน', icon:'📚', badgeStyle:'background:linear-gradient(135deg,#0ea5e9,#2563eb);color:#fff;', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
-        { to:'/admin/teachers',         icon:'👨‍🏫', bg:'#dbeafe', label:'จัดการครู',      sub:'ข้อมูล กลุ่มสาระ', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
+        { to:'/admin/teachers',         icon:'👨‍🏫', bg:'#dbeafe', label:'จัดการครู',      sub:'ข้อมูล กลุ่มสาระ บัญชี สิทธิ์', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
         { to:'/admin/students',         icon:'🎓',  bg:'#ede9fe', label:'จัดการนักเรียน',   sub:'ข้อมูล ห้องเรียน', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/admin/classes',          icon:'🏫',  bg:'#dcfce7', label:'จัดการห้องเรียน',  sub:'ระดับชั้น ครูที่ปรึกษา', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
         { to:'/admin/subjects',         icon:'📚',  bg:'#fef3c7', label:'จัดการวิชา',      sub:'รหัส ชั่วโมง หน่วยกิต', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'] },

@@ -108,23 +108,42 @@
             </template>
           </el-table-column>
           <!-- บัญชี/สิทธิ์ -->
-          <el-table-column v-if="!isTeacherOrScheduler" label="บัญชี / สิทธิ์" width="200" align="center">
+          <el-table-column v-if="!isTeacherOrScheduler" label="บัญชี / สิทธิ์" width="230" align="left">
             <template #default="{ row }">
-              <div v-if="userByTeacher[row.teacher_id]" class="flex flex-col items-center gap-1">
-                <el-tag size="small" type="success" effect="dark">✅ มีบัญชี</el-tag>
-                <el-select
-                  v-model="userByTeacher[row.teacher_id].roles"
-                  multiple collapse-tags collapse-tags-tooltip
-                  size="small"
-                  style="width:150px"
-                  @change="val => changeRoles(row.teacher_id, val)"
-                >
-                  <el-option value="school_teacher" label="👨‍🏫 ครู" />
-                  <el-option value="school_scheduler" label="📅 Scheduler" />
-                  <el-option v-if="(userByTeacher[row.teacher_id].roles || []).includes('school_admin')" value="school_admin" label="👑 Admin" />
-                  <el-option value="sub_coordinator" label="🔄 ผู้จัดสอนแทน" />
-                </el-select>
-                <div v-if="row.is_dept_head" class="text-xs mt-0.5" style="color:#7c3aed">🏫 หน.สาระ → subject_head อัตโนมัติ</div>
+              <div v-if="userByTeacher[row.teacher_id]">
+                <el-tag size="small" type="success" effect="dark" style="margin-bottom:6px">✅ มีบัญชี</el-tag>
+                <div class="role-check-group">
+                  <el-checkbox size="small"
+                    :model-value="(userByTeacher[row.teacher_id].roles||[]).includes('school_admin')"
+                    @change="val => toggleRole(row.teacher_id, 'school_admin', val)">
+                    👑 Admin
+                  </el-checkbox>
+                  <el-checkbox size="small"
+                    :model-value="(userByTeacher[row.teacher_id].roles||[]).includes('school_scheduler')"
+                    @change="val => toggleRole(row.teacher_id, 'school_scheduler', val)">
+                    📅 Scheduler
+                  </el-checkbox>
+                  <el-checkbox size="small"
+                    :model-value="(userByTeacher[row.teacher_id].roles||[]).includes('school_teacher')"
+                    @change="val => toggleRole(row.teacher_id, 'school_teacher', val)">
+                    👨‍🏫 ครู
+                  </el-checkbox>
+                  <el-checkbox size="small"
+                    :model-value="(userByTeacher[row.teacher_id].roles||[]).includes('subject_head')"
+                    @change="val => toggleRole(row.teacher_id, 'subject_head', val)">
+                    🏫 จัดสอนแทนสาระ
+                  </el-checkbox>
+                  <el-checkbox size="small"
+                    :model-value="(userByTeacher[row.teacher_id].roles||[]).includes('sub_coordinator')"
+                    @change="val => toggleRole(row.teacher_id, 'sub_coordinator', val)">
+                    🔄 จัดสอนแทนโรงเรียน
+                  </el-checkbox>
+                  <el-checkbox size="small"
+                    :model-value="(userByTeacher[row.teacher_id].roles||[]).includes('school_director')"
+                    @change="val => toggleRole(row.teacher_id, 'school_director', val)">
+                    👔 ผู้บริหาร
+                  </el-checkbox>
+                </div>
               </div>
               <el-tag v-else size="small" type="info" effect="plain">⭕ ยังไม่มีบัญชี</el-tag>
             </template>
@@ -971,21 +990,26 @@ async function changeRoles(teacherId, newRoles) {
   const user = userByTeacher.value[teacherId]
   if (!user?.uid) return
   if (!newRoles.length) { ElMessage.warning('ต้องมีสิทธิ์อย่างน้อย 1 อย่าง'); return }
-  // preserve subject_head if teacher is dept head (auto-managed, not in select options)
-  const teacher = teachers.value.find(t => t.teacher_id === teacherId)
   const finalRoles = [...new Set(newRoles)]
-  if (teacher?.is_dept_head && !finalRoles.includes('subject_head')) finalRoles.push('subject_head')
   try {
-    await supabase.from('users').update({
-      roles: finalRoles,
-      role: finalRoles[0]
-    }).eq('id', user.uid)
-    user.roles = finalRoles
+    const payload = buildRolePayload(finalRoles)
+    await supabase.from('users').update(payload).eq('id', user.uid)
+    Object.assign(user, normalizeUserAccessRecord({ ...user, ...payload }))
     ElMessage.success('อัปเดตสิทธิ์เรียบร้อย')
   } catch (e) {
     ElMessage.error('อัปเดตสิทธิ์ไม่สำเร็จ: ' + e.message)
     await loadAll()
   }
+}
+
+async function toggleRole(teacherId, roleName, checked) {
+  const user = userByTeacher.value[teacherId]
+  if (!user?.uid) return
+  const current = Array.isArray(user.roles) ? [...user.roles] : []
+  const newRoles = checked
+    ? [...new Set([...current, roleName])]
+    : current.filter(r => r !== roleName)
+  await changeRoles(teacherId, newRoles)
 }
 
 // ─── Toggle is_active ──────────────────────────────────────────────────────
@@ -1387,5 +1411,15 @@ function handlePrint() {
 }
 .grid.grid-cols-2 .col-span-2 {
   grid-column: span 2;
+}
+.role-check-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.role-check-group .el-checkbox {
+  margin: 0;
+  font-size: 12px;
+  height: 22px;
 }
 </style>
