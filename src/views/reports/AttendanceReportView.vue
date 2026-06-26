@@ -473,7 +473,7 @@ const periodsForTable = computed(() =>
 )
 
 function pp5CellStatus(studentId, ta) {
-  if (!ta.is_filled) return null
+  if (!ta.is_filled) return 'ขาดเรียน'
   const rec = ta.student_records?.[String(studentId)]
   return rec?.status || 'มาเรียน'
 }
@@ -577,23 +577,20 @@ async function loadReport() {
       statusMap[s.student_id] = { present:0, late:0, absent:0, sick:0, leave:0, official:0, total:0 }
     })
     actuals.forEach(ta => {
-      if (!ta.is_filled) {
-        // ไม่บันทึก → นับเป็นขาดสำหรับทุกคนในห้อง
-        students.forEach(s => {
-          if (!statusMap[s.student_id]) return
-          statusMap[s.student_id].total++
+      const recs = ta.student_records || {}
+      // นับทุกคนในห้องเสมอ (total เท่ากันทุกคน)
+      students.forEach(s => {
+        if (!statusMap[s.student_id]) return
+        statusMap[s.student_id].total++
+        if (!ta.is_filled) {
           statusMap[s.student_id].absent++
-        })
-      } else {
-        const recs = ta.student_records || {}
-        Object.entries(recs).forEach(([sid, rec]) => {
-          if (!statusMap[sid]) return
-          const status = rec.status || 'มาเรียน'
+        } else {
+          const rec = recs[String(s.student_id)] || recs[s.student_id]
+          const status = rec?.status || 'มาเรียน'  // ไม่ถูกบันทึกในคาบนี้ = ถือว่ามา
           const cat = categorizeStatus(status)
-          statusMap[sid].total++
-          statusMap[sid][cat]++
-        })
-      }
+          statusMap[s.student_id][cat]++
+        }
+      })
     })
     reportRows.value = students.map(s => {
       const c   = statusMap[s.student_id] || { present:0, late:0, absent:0, sick:0, leave:0, official:0, total:0 }
@@ -670,7 +667,7 @@ function exportExcelPp5() {
       studentNameFull(stu),
       ...cols.map(ta => {
         const st = pp5CellStatus(stu.student_id, ta)
-        return st || (ta.is_filled ? 'มาเรียน' : '')
+        return st || (ta.is_filled ? 'มาเรียน' : 'ขาด')
       }),
       sum.present ?? 0, sum.absent ?? 0, sum.leave ?? 0, sum.official ?? 0,
       `${(sum.pct ?? 0).toFixed(0)}%`,

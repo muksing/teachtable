@@ -1493,98 +1493,67 @@ export function useSchoolDb() {
       fetchSlots(), fetchActuals(), getSchoolSettings(), classesQ,
       supabase.from('teachers').select('teacher_code, prefix, first_name, last_name').eq('school_id', schoolId).limit(500),
     ])
-    const slotsRes = { data: slotsData }
-    const actualsRes = { data: actualsRows }
+    const homeroomSettings = settingsResult.teaching_log_settings?.homeroom_special_periods || []
+    const homeroomPeriodNameMap = new Map(homeroomSettings.map(hp => [Number(hp.period), hp.name || '']))
 
-    const homeroomPeriods     = settingsResult.teaching_log_settings?.homeroom_special_periods || []
-    const classesWithHomeroom = (classesRes.data || []).filter(c =>
-      (Array.isArray(c.homeroom_teacher_ids) ? c.homeroom_teacher_ids : [c.homeroom_teacher_id].filter(Boolean)).length > 0
-    )
     const teacherNameMap2 = new Map()
     for (const t of (teachersRes2?.data || [])) {
       teacherNameMap2.set(t.teacher_code, `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim())
     }
 
-    const slotsByDay = {}
-    for (const slot of (slotsRes.data || [])) {
-      const day = slot.day_of_week
-      if (!slotsByDay[day]) slotsByDay[day] = []
-      slotsByDay[day].push(slot)
+    // slot lookup: class_id + period_number + day_of_week(as string) → slot
+    const slotMap2 = new Map()
+    for (const slot of slotsData) {
+      slotMap2.set(`${slot.class_id}_${slot.period_number}_${slot.day_of_week}`, slot)
     }
 
-    const actualsMap = new Map()
-    for (const row of (actualsRes.data || [])) {
-      actualsMap.set(`${row.date}_${row.class_id}_${row.period_number}`, mapTeachActual(row))
+    // homeroom teacher lookup from classes table
+    const classHomeroomMap2 = new Map()
+    for (const c of (classesRes.data || [])) {
+      const rawTid = Array.isArray(c.homeroom_teacher_ids) && c.homeroom_teacher_ids.length
+        ? c.homeroom_teacher_ids[0] : c.homeroom_teacher_id
+      const tid = rawTid ? String(rawTid).split(',')[0].trim() : null
+      const snap = Array.isArray(c.homeroom_teacher_names_snapshot) ? c.homeroom_teacher_names_snapshot
+        : (c.homeroom_teacher_name_snapshot ? [c.homeroom_teacher_name_snapshot] : [])
+      if (tid) classHomeroomMap2.set(c.class_name, { tid, snapName: snap[0] || '' })
     }
 
-    const results = []
-    const start = new Date(startKey + 'T00:00:00')
-    const end   = new Date(endKey   + 'T00:00:00')
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const dateStr     = localDateStr(d)
-      const thaiDay     = THAI_DAYS_ARR[d.getDay()]
-      const dayNum      = THAI_DAY_TO_NUMBER[thaiDay]
-      const slotsForDay = slotsByDay[dayNum] || []
-      for (const slot of slotsForDay) {
-        const key      = `${dateStr}_${slot.class_id}_${slot.period_number}`
-        const existing = actualsMap.get(key)
-        const slotInfo = {
-          subject_plan_id:   slot.subject_id   || '',
-          subject_name:      slot.subject_name  || slot.subject_id || '',
-          teacher_plan_id:   slot.teacher_id    || '',
-          teacher_plan_name: teacherNameMap2.get(slot.teacher_id) || slot.teacher_name || slot.teacher_id || '',
-          class_id:          slot.class_id,
-          class_name:        slot.class_id,
-        }
-        if (existing) results.push({ ...existing, ...slotInfo })
-        else results.push({
-          id: null, teach_actual_id: null,
-          date: dateStr, day_of_week: thaiDay,
-          period: slot.period_number, period_number: slot.period_number,
-          is_filled: false, is_substitute_mandatory: false,
-          topic: '', activity_type: 'บรรยาย', record_by_name: '', timestamp: null, student_records: {},
-          ...slotInfo,
-        })
-      }
-      // เพิ่ม homeroom periods
-      for (const cls of classesWithHomeroom) {
-        const cId = cls.class_name
-        for (const hp of homeroomPeriods) {
-          const period = Number(hp.period)
-          if (!Number.isFinite(period)) continue
-          const days = Array.isArray(hp.days) ? hp.days : []
-          if (days.length && !days.includes('all') && !days.includes(thaiDay)) continue
-          if (results.some(r => r.date === dateStr && r.class_id === cId && r.period === period)) continue
-          const key = `${dateStr}_${cId}_${period}`
-          const existing = actualsMap.get(key)
-          const hmTeacherId2 = (Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length
-            ? cls.homeroom_teacher_ids[0] : cls.homeroom_teacher_id) || ''
-          const hmSnapName2 = (() => {
-            const snap = Array.isArray(cls.homeroom_teacher_names_snapshot) ? cls.homeroom_teacher_names_snapshot
-              : (cls.homeroom_teacher_name_snapshot ? [cls.homeroom_teacher_name_snapshot] : [])
-            return snap[0] || ''
-          })()
-          const hmTeacherName2 = teacherNameMap2.get(hmTeacherId2) || hmSnapName2 || hmTeacherId2
-          const hmInfo = {
-            subject_plan_id: '', subject_name: hp.name || hp.subject_name || '',
-            teacher_plan_id: hmTeacherId2,
-            teacher_plan_name: hmTeacherName2,
-            class_id: cId, class_name: cId, slot_type: 'homeroom',
-          }
-          if (existing) results.push({ ...existing, ...hmInfo })
-          else results.push({
-            id: null, teach_actual_id: null,
-            date: dateStr, day_of_week: thaiDay,
-            period, period_number: period,
-            is_filled: false, is_substitute_mandatory: false,
-            topic: '', activity_type: 'บรรยาย', record_by_name: '', timestamp: null, student_records: {},
-            ...hmInfo,
-          })
+    // Only return REAL teach_actuals from DB — enrich with published timetable info
+    return actualsRows.map(row => {
+      const mapped = mapTeachActual(row)
+      const isHomeroom = row.slot_type === 'homeroom' || homeroomPeriodNameMap.has(row.period_number)
+
+      if (isHomeroom) {
+        const hm = classHomeroomMap2.get(row.class_id)
+        const hmTeacherId = hm?.tid || String(row.planned_teacher_id || '')
+        return {
+          ...mapped,
+          teacher_plan_id:   hmTeacherId,
+          teacher_plan_name: teacherNameMap2.get(hmTeacherId) || hm?.snapName || hmTeacherId,
+          subject_name:      homeroomPeriodNameMap.get(row.period_number) || mapped.subject_name || '',
+          class_name:        row.class_id,
+          slot_type:         'homeroom',
         }
       }
-    }
 
-    return results.sort((a, b) => {
+      const dayNum = THAI_DAY_TO_NUMBER[THAI_DAYS_ARR[new Date(row.date + 'T00:00:00').getDay()]]
+      const slot = slotMap2.get(`${row.class_id}_${row.period_number}_${dayNum}`)
+        || slotMap2.get(`${row.class_id}_${row.period_number}_${String(dayNum)}`)
+      const teacherId  = String(row.planned_teacher_id || slot?.teacher_id || '')
+      const teacherName = teacherNameMap2.get(teacherId) || slot?.teacher_name || ''
+      const subjectId  = row.subject_id || slot?.subject_id || ''
+      const subjectName = slot?.subject_name || subjectId || mapped.subject_name || ''
+
+      return {
+        ...mapped,
+        subject_plan_id:   subjectId,
+        subject_name:      subjectName,
+        teacher_plan_id:   teacherId,
+        teacher_plan_name: teacherName,
+        class_id:          row.class_id,
+        class_name:        row.class_id,
+      }
+    }).sort((a, b) => {
       if (a.date !== b.date) return a.date < b.date ? -1 : 1
       if ((a.class_id || '') !== (b.class_id || '')) return (a.class_id || '') < (b.class_id || '') ? -1 : 1
       return (a.period || 0) - (b.period || 0)
