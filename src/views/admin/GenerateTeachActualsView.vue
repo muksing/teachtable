@@ -171,10 +171,10 @@ async function buildMissingPayloads() {
       .range(f, t)
   )
   const existSet = new Set(existing.map(r => `${r.class_id}|${r.date}|${r.period_number}`))
-  // เก็บ subject_id ของ record ที่ยังไม่บันทึก เพื่อตรวจว่าผิดหรือไม่
-  const unfilledSubjectMap = {}
+  // เก็บ subject_id ของทุก record เพื่อตรวจว่าผิดหรือไม่ (ทั้ง filled และ unfilled)
+  const existingSubjectMap = {}
   for (const r of existing) {
-    if (!r.is_filled) unfilledSubjectMap[`${r.class_id}|${r.date}|${r.period_number}`] = r.subject_id
+    existingSubjectMap[`${r.class_id}|${r.date}|${r.period_number}`] = r.subject_id
   }
 
   // 3. homeroom period numbers
@@ -208,8 +208,8 @@ async function buildMissingPayloads() {
       totalExpected++
       const key = `${slot.class_id}|${dateStr}|${period}`
       if (existSet.has(key)) {
-        // มีอยู่แล้ว — ตรวจ subject_id ผิดหรือไม่ (เฉพาะที่ยังไม่บันทึก)
-        const dbSubj = unfilledSubjectMap[key]
+        // มีอยู่แล้ว — ตรวจ subject_id ผิดหรือไม่ (ทั้ง filled และ unfilled)
+        const dbSubj = existingSubjectMap[key]
         if (dbSubj !== undefined && slot.subject_id && dbSubj !== slot.subject_id) {
           fixPayloads.push({ schoolId, tid, class_id: slot.class_id, date: dateStr, period_number: period, subject_id: slot.subject_id })
         }
@@ -293,7 +293,6 @@ async function generate() {
         .eq('class_id', f.class_id)
         .eq('date', f.date)
         .eq('period_number', f.period_number)
-        .eq('is_filled', false)
       if (error) throw error
       progressCount.value = payloads.length + i + 1
     }
