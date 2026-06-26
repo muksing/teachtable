@@ -1652,6 +1652,17 @@ export function useSchoolDb() {
     // Strip fields not in schema before upserting
     const cleanPayloads = payloads.map(({ teacher_plan_name, class_name, ...rest }) => rest)
 
+    // ลบ records ที่เสีย (is_filled=false + planned_teacher_id IS NULL) ก่อน insert
+    // is_filled=true (ครูบันทึกแล้ว) จะไม่ถูกแตะ
+    await supabase
+      .from('teach_actuals')
+      .delete()
+      .eq('school_id', authStore.schoolId)
+      .eq('term_id', termId)
+      .eq('date', dateKey)
+      .eq('is_filled', false)
+      .is('planned_teacher_id', null)
+
     // upsert: เพิ่มเฉพาะที่ยังไม่มี (ignoreDuplicates=true ไม่แตะ record ที่มีอยู่แล้ว)
     const CHUNK = 400
     for (let i = 0; i < cleanPayloads.length; i += CHUNK) {
