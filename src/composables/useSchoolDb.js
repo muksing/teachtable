@@ -1411,7 +1411,6 @@ export function useSchoolDb() {
         homeroomPeriodNameMap.set(Number(hp.period), hp.name || '')
       }
     }
-    console.log('[debug] homeroomPeriodNameMap', [...homeroomPeriodNameMap.entries()])
 
     return rows.map(row => {
       const mapped = mapTeachActual(row)
@@ -1431,9 +1430,7 @@ export function useSchoolDb() {
       let subjectName = subjectNameMap.get(subjectId) || slot?.subject_name || ''
 
       if (isHomeroom) {
-        const fromMap = homeroomPeriodNameMap.get(periodNum)
-        console.log(`[debug] period=${periodNum} isHomeroom=${isHomeroom} slot_type=${row.slot_type} fromMap=${fromMap}`)
-        subjectName = fromMap || ''
+        subjectName = homeroomPeriodNameMap.get(periodNum) || ''
         if (!teacherName) {
           const hm = classHomeroomMap.get(row.class_id)
           if (hm) {
