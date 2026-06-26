@@ -1407,13 +1407,17 @@ export function useSchoolDb() {
     const homeroomSettings = settings?.teaching_log_settings?.homeroom_special_periods || []
     const homeroomPeriodNameMap = new Map()
     for (const hp of homeroomSettings) {
-      if (hp.period) homeroomPeriodNameMap.set(Number(hp.period), hp.name || '')
+      // ต้องใช้ Number.isFinite เพราะ period=0 เป็น falsy — ห้ามใช้ if(hp.period)
+      if (Number.isFinite(Number(hp.period))) {
+        homeroomPeriodNameMap.set(Number(hp.period), hp.name || '')
+      }
     }
 
     return rows.map(row => {
       const mapped = mapTeachActual(row)
+      const periodNum = Number(row.period_number)
       const isHomeroom = row.slot_type === 'homeroom'
-        || homeroomPeriodNameMap.has(row.period_number)
+        || homeroomPeriodNameMap.has(periodNum)
       const dayNum = THAI_DAY_TO_NUMBER[THAI_DAYS_ARR[new Date(row.date + 'T00:00:00').getDay()]]
       const slot   = isHomeroom ? null : slotMap.get(`${row.class_id}_${row.period_number}_${dayNum}`)
 
@@ -1425,16 +1429,16 @@ export function useSchoolDb() {
       let subjectId = row.subject_id || slot?.subject_id || ''
       let subjectName = slot?.subject_name || subjectNameMap.get(subjectId) || ''
 
-      if (isHomeroom && !teacherName) {
-        // fallback จาก classes table
-        const hm = classHomeroomMap.get(row.class_id)
-        if (hm) {
-          teacherId = hm.tid
-          teacherName = teacherNameMap.get(hm.tid) || hm.snapName || hm.tid
+      if (isHomeroom) {
+        // homeroom: ชื่อวิชาจาก settings เป็นหลักเสมอ (ไม่เชื่อ slot.subject_name ที่อาจเป็น 'Homeroom')
+        subjectName = homeroomPeriodNameMap.get(periodNum) || subjectName
+        if (!teacherName) {
+          const hm = classHomeroomMap.get(row.class_id)
+          if (hm) {
+            teacherId   = hm.tid
+            teacherName = teacherNameMap.get(hm.tid) || hm.snapName || hm.tid
+          }
         }
-      }
-      if (isHomeroom && !subjectName) {
-        subjectName = homeroomPeriodNameMap.get(row.period_number) || ''
       }
 
       return {
