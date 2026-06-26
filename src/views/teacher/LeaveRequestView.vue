@@ -165,7 +165,7 @@
                 v-if="canCancel(req)"
                 size="small" type="danger" plain
                 @click="cancelRequest(req)">
-                ยกเลิกคำขอ
+                🗑️ ลบ
               </el-button>
             </div>
           </div>
@@ -353,11 +353,11 @@ const displayedRequests = computed(() => {
   return list
 })
 
-// Can cancel: teacher cancels own pending, admin can cancel any non-cancelled
+// ลบได้: admin ลบได้ทุกรายการ, ครูลบได้เฉพาะของตัวเอง
+// (guard จริงอยู่ใน cancelLeaveRequest — ถ้าบันทึกแล้วจะ throw error)
 function canCancel(req) {
-  if (req.status === 'cancelled') return false
   if (isAdmin.value) return true
-  return req.teacher_id === teacherId.value && req.status !== 'cancelled'
+  return req.teacher_id === teacherId.value
 }
 
 async function onDatesChange(dates) {
@@ -418,14 +418,16 @@ async function cancelRequest(req) {
   try {
     await ElMessageBox.confirm(
       isAdmin.value
-        ? `ยืนยันยกเลิกคำขอลาของ ${req.teacher_name}?`
-        : 'ยืนยันยกเลิกคำขอลา?',
-      'ยืนยัน', { type:'warning', confirmButtonText:'ยืนยัน', cancelButtonText:'ย้อนกลับ' }
+        ? `ลบคำขอลาของ ${req.teacher_name}?`
+        : 'ลบคำขอลานี้? (ไม่สามารถกู้คืนได้)',
+      'ยืนยันลบ', { type:'warning', confirmButtonText:'ลบ', cancelButtonText:'ย้อนกลับ' }
     )
     await cancelLeaveRequest(req.id)
-    ElMessage.success('ยกเลิกคำขอลาแล้ว')
+    ElMessage.success('ลบคำขอลาแล้ว')
     await loadRequests()
-  } catch {}
+  } catch (e) {
+    if (e?.message) ElMessage.error(e.message)
+  }
 }
 
 async function loadRequests() {

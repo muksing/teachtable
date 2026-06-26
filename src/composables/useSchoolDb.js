@@ -1905,10 +1905,30 @@ export function useSchoolDb() {
   }
 
   async function cancelLeaveRequest(leaveId) {
-    const { error } = await supabase
-      .from('leave_requests')
-      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-      .eq('id', leaveId)
+    // ดึง assignments ก่อน เพื่อตรวจว่ามีคาบที่บันทึกแล้วไหม
+    const { data: req, error: fetchErr } = await supabase
+      .from('leave_requests').select('assignments').eq('id', leaveId).single()
+    if (fetchErr) throw fetchErr
+
+    const assignments = Object.values(req.assignments || {})
+    const assignedKeys = assignments
+      .filter(a => a.status === 'assigned' && a.teach_actual_id)
+      .map(a => a.teach_actual_id)
+
+    if (assignedKeys.length) {
+      // ตรวจว่ามี teach_actual ที่ is_filled=true
+      const { data: filled } = await supabase
+        .from('teach_actuals')
+        .select('id')
+        .in('id', assignedKeys)
+        .eq('is_filled', true)
+        .limit(1)
+      if (filled?.length) {
+        throw new Error('ลบไม่ได้ — มีคาบสอนแทนที่บันทึกไปแล้ว')
+      }
+    }
+
+    const { error } = await supabase.from('leave_requests').delete().eq('id', leaveId)
     if (error) throw error
   }
 
