@@ -1431,10 +1431,7 @@ export function useSchoolDb() {
       let subjectName = subjectNameMap.get(subjectId) || slot?.subject_name || ''
 
       if (isHomeroom) {
-        // ลำดับความสำคัญ: ชื่อจาก settings > subject_name จาก timetable slot > ว่าง
-        const settingsName = homeroomPeriodNameMap.get(periodNum)
-        const slotName = slot?.subject_name && slot.subject_name !== 'Homeroom' ? slot.subject_name : ''
-        subjectName = settingsName || slotName || subjectName
+        subjectName = homeroomPeriodNameMap.get(periodNum) || ''
         if (!teacherName) {
           const hm = classHomeroomMap.get(row.class_id)
           if (hm) {
