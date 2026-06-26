@@ -207,7 +207,7 @@ async function loadData() {
       .map(row => {
         // ถือว่าเป็น homeroom ถ้า slot_type='homeroom' หรือ period นั้น admin กำหนดเป็น homeroom และห้องนี้มีครูที่ปรึกษา
         const hm = classHomeroomMap.get(row.class_id) || { id: '', snapName: '' }
-        const isConfiguredHomeroom = homeroomPeriods.some(hp => Number(hp.period) === row.period_number) && (!!hm.id || !!hm.snapName)
+        const isConfiguredHomeroom = homeroomPeriods.some(hp => Number(hp.period) === Number(row.period_number)) && (!!hm.id || !!hm.snapName)
         const isHomeroom = row.slot_type === 'homeroom' || isConfiguredHomeroom
 
         const dayName = THAI_DAYS_ARR_LOCAL[new Date((row.date || '') + 'T00:00:00').getDay()]
@@ -222,8 +222,8 @@ async function loadData() {
           // ดึงชื่อครูที่ปรึกษาจาก classes — fallback ไปใช้ snapshot ถ้า teacherNameMap ไม่มี
           teacherName = teacherNameMap.get(hm.id) || hm.snapName || hm.id
           // ชื่อวิชา/กิจกรรม อ่านจาก admin settings เท่านั้น ไม่ hardcode
-          const hp = homeroomPeriods.find(p => Number(p.period) === row.period_number)
-          subjectName = hp?.name || ''
+          const hp = homeroomPeriods.find(p => Number(p.period) === Number(row.period_number))
+          subjectName = hp?.name || `คาบ ${row.period_number}`
         }
 
         return {
