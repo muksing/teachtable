@@ -614,14 +614,21 @@ export function useSchoolDb() {
   // ═════════════════════════════════════════════════════════════════════════
   async function getTimetable() {
     const table = getSlotTable(schoolStore)
-    const { data, error } = await supabase
-      .from(table)
-      .select('*')
-      .eq('school_id', authStore.schoolId)
-      .eq('term_id', term())
-      .limit(10000)
-    if (error) throw error
-    return (data || []).map(mapTimetableSlot)
+    // ใช้ pagination เพราะ Supabase project มี hard cap 1000 rows ต่อ request
+    const PAGE = 1000
+    let allRows = []
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from(table)
+        .select('*')
+        .eq('school_id', authStore.schoolId)
+        .eq('term_id', term())
+        .range(from, from + PAGE - 1)
+      if (error) throw error
+      allRows.push(...(data || []))
+      if ((data || []).length < PAGE) break
+    }
+    return allRows.map(mapTimetableSlot)
   }
 
   // Get timetable slots from published snapshot in schools.settings

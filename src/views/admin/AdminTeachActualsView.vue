@@ -149,15 +149,22 @@ async function loadData() {
 
     // load timetable_slots คู่กันเพื่อ enrich ชื่อครู + วิชา
     const slotTable = schoolStore.settingsObj?.timetable_published_at ? 'timetable_slots_published' : 'timetable_slots'
-    const [actualsRes, slotsRes] = await Promise.all([
-      actualsQ,
-      supabase
-        .from(slotTable)
-        .select('class_id, period_number, day_of_week, teacher_id, teacher_name, subject_id, subject_name')
-        .eq('school_id', schoolId)
-        .eq('term_id', termId)
-        .limit(10000),
-    ])
+    // paginate slots เพราะ Supabase project มี hard cap 1000 rows ต่อ request
+    const fetchSlots = async () => {
+      const PAGE = 1000, rows = []
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from(slotTable)
+          .select('class_id, period_number, day_of_week, teacher_id, teacher_name, subject_id, subject_name')
+          .eq('school_id', schoolId).eq('term_id', termId)
+          .range(from, from + PAGE - 1)
+        if (error) throw error
+        rows.push(...(data || []))
+        if ((data || []).length < PAGE) break
+      }
+      return { data: rows }
+    }
+    const [actualsRes, slotsRes] = await Promise.all([actualsQ, fetchSlots()])
     if (actualsRes.error) throw actualsRes.error
 
     // โหลด teachers + settings (สำหรับ enrich homeroom records)
