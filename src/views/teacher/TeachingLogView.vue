@@ -49,20 +49,37 @@
           </div>
 
           <!-- Dialog เลือกครู -->
-          <el-dialog v-model="showSubDialog" title="👤 เลือกครูที่สอนแทน" width="360px" align-center>
-            <div v-loading="loadingTeachers" class="max-h-80 overflow-y-auto">
-              <el-empty v-if="!loadingTeachers && teacherList.length === 0"
+          <el-dialog v-model="showSubDialog" title="👤 เลือกครูที่สอนแทน" width="420px" align-center>
+            <!-- ช่องกรอง -->
+            <el-input
+              v-model="subTeacherSearch"
+              placeholder="🔍 พิมพ์ชื่อหรือรหัสครู..."
+              clearable size="small"
+              style="margin-bottom:10px"
+              @input="() => {}"
+            />
+            <div v-loading="loadingTeachers" style="max-height:420px;overflow-y:auto">
+              <el-empty v-if="!loadingTeachers && filteredTeacherList.length === 0"
                 description="ไม่พบข้อมูลครู" :image-size="60" />
               <div
-                v-for="t in teacherList" :key="t.teacher_id"
-                class="px-4 py-3 cursor-pointer hover:bg-orange-50 border-b flex items-center gap-3"
+                v-for="t in filteredTeacherList" :key="t.teacher_id"
+                class="sub-teacher-row"
                 @click="selectSubTeacher(t)"
               >
-                <span class="text-xl">👤</span>
-                <div>
-                  <div class="font-semibold text-sm">{{ t.prefix }}{{ t.name }} {{ t.surname }}</div>
-                  <div class="text-xs text-gray-400">{{ t.teacher_id }}</div>
+                <!-- รูปครู -->
+                <div class="sub-teacher-avatar">
+                  <img v-if="t.photo_url" :src="t.photo_url" class="sub-teacher-img" />
+                  <span v-else class="sub-teacher-initials">
+                    {{ (t.name || '?').charAt(0) }}
+                  </span>
                 </div>
+                <!-- รหัส + ชื่อ -->
+                <div class="sub-teacher-info">
+                  <div class="sub-teacher-name">{{ t.prefix }}{{ t.name }} {{ t.surname }}</div>
+                  <div class="sub-teacher-code">{{ t.teacher_id }}</div>
+                </div>
+                <!-- กลุ่มสาระ -->
+                <div v-if="t.dept" class="sub-teacher-dept">{{ t.dept }}</div>
               </div>
             </div>
           </el-dialog>
@@ -250,8 +267,8 @@
                   :class="attendance[stu.student_id] ? 'att-row-present' : 'att-row-absent'"
                   @click="toggleAttendance(stu.student_id)"
                 >
-                  <span class="att-num">{{ stu.student_id }}</span>
-                  <span class="att-name">{{ stu.name }} {{ stu.surname }}</span>
+                  <span class="att-num">{{ stu.seat_number || stu.student_id }}</span>
+                  <span class="att-name">{{ stu.prefix }}{{ stu.name }} {{ stu.surname }}</span>
                   <span class="att-status-icon">{{ attendance[stu.student_id] ? '✓' : '✗' }}</span>
                 </div>
               </div>
@@ -381,8 +398,22 @@ const subTeacherName  = ref('')
 const showSubDialog   = ref(false)
 const teacherList     = ref([])
 const loadingTeachers = ref(false)
+const subTeacherSearch = ref('')
+
+const filteredTeacherList = computed(() => {
+  const q = subTeacherSearch.value.trim().toLowerCase()
+  const list = teacherList.value
+    .slice()
+    .sort((a, b) => (a.teacher_id || '').localeCompare(b.teacher_id || '', undefined, { numeric: true }))
+  if (!q) return list
+  return list.filter(t => {
+    const fullName = `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.toLowerCase()
+    return fullName.includes(q) || (t.teacher_id || '').toLowerCase().includes(q)
+  })
+})
 
 async function openSubDialog() {
+  subTeacherSearch.value = ''
   showSubDialog.value = true
   if (teacherList.value.length === 0) {
     loadingTeachers.value = true
@@ -473,11 +504,17 @@ const isSchoolDay = computed(() => {
 })
 
 // ─── Backdating control ─────────────────────────────────────────────────
+const teachingLogSettings = computed(() => schoolStore.schoolInfo?.settings?.teaching_log_settings || {})
 const backdatingEnabled = computed(() =>
-  (schoolInfo_.value.backdating_enabled ?? schoolStore.schoolInfo?.backdating_enabled) !== false
+  (teachingLogSettings.value.backdating_enabled
+    ?? schoolInfo_.value.backdating_enabled
+    ?? schoolStore.schoolInfo?.backdating_enabled) !== false
 )
 const backdatingDays = computed(() =>
-  schoolInfo_.value.backdating_days ?? schoolStore.schoolInfo?.backdating_days ?? 3
+  teachingLogSettings.value.backdating_days
+    ?? schoolInfo_.value.backdating_days
+    ?? schoolStore.schoolInfo?.backdating_days
+    ?? 3
 )
 
 function isDateDisabled(date) {
@@ -562,12 +599,36 @@ async function ensureRecordsForSelectedDate() {
 
   generating.value = true
   try {
-    const existing = await getTeachActuals(selectedDate.value)
-    const needsRegen = existing.length === 0 || existing.some(r => !r.teacher_plan_id)
-    if (!needsRegen) return
+    const timetable   = await getTimetable()
+    const dateKey     = selectedDate.value
+    const dayNum      = { อาทิตย์:7, จันทร์:1, อังคาร:2, พุธ:3, พฤหัสบดี:4, ศุกร์:5, เสาร์:6 }[thaiDayName.value]
 
-    const timetable = await getTimetable()
-    await generateTeachActualsForDate(selectedDate.value, thaiDayName.value, timetable)
+    // ดึง records ทั้งหมดของวันนั้นจาก DB
+    const allExisting = await getTeachActuals(dateKey)
+
+    if (allExisting.length === 0) {
+      // ไม่มีเลย = คนแรก → สร้างทั้งหมดจาก published
+      await generateTeachActualsForDate(dateKey, thaiDayName.value, timetable)
+      return
+    }
+
+    // มีบางส่วนแล้ว → ตรวจคาบของครูคนนี้โดยเฉพาะว่าครบไหม
+    const myId = subTeacherId.value || authStore.profile?.teacher_id || authStore.profile?.uid
+    const mySlots = timetable.filter(s => {
+      if (s?.slot_type === 'activity' || s?.slot_type === 'manual_lock') return false
+      const d = typeof s.day_of_week === 'number' ? s.day_of_week : ({ อาทิตย์:7, จันทร์:1, อังคาร:2, พุธ:3, พฤหัสบดี:4, ศุกร์:5, เสาร์:6 }[s.day_of_week] ?? null)
+      return s.teacher_id === myId && d === dayNum
+    })
+
+    if (!mySlots.length) return  // ครูไม่มีคาบวันนี้
+
+    const existingKeys = new Set(allExisting.map(r => `${r.class_id}_${r.period_number || r.period}`))
+    const hasMissing   = mySlots.some(s => !existingKeys.has(`${s.class_id}_${s.period_number || s.period}`))
+
+    if (hasMissing) {
+      // คาบของครูขาดอยู่ → สร้างที่ขาด (ignoreDuplicates ทำให้ไม่แตะ record เดิม)
+      await generateTeachActualsForDate(dateKey, thaiDayName.value, timetable)
+    }
   } catch (e) {
     ElMessage.error('สร้างบันทึกไม่สำเร็จ: ' + e.message)
   } finally {
@@ -707,6 +768,7 @@ async function openDialog(slot) {
         period_number:      periodNum,
         slot_type:          slot.slot_type || 'normal',
         planned_teacher_id: teacherId,
+        subject_id:         slot.subject_plan_id || slot.subject_id || null,
         is_filled:          false,
       }], { onConflict: 'school_id,term_id,class_id,date,period_number' })
       .select('id')
@@ -958,4 +1020,22 @@ function onDialogClose() {
   .tl-page { padding: 12px; }
   .tl-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
 }
+/* ── Teacher picker ─────────────────────────────── */
+.sub-teacher-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 14px; cursor: pointer; border-bottom: 1px solid #f1f5f9;
+  transition: background .12s;
+}
+.sub-teacher-row:hover { background: #fff7ed; }
+.sub-teacher-avatar {
+  width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0; overflow: hidden;
+  background: linear-gradient(135deg,#f59e0b,#ea580c);
+  display: flex; align-items: center; justify-content: center;
+}
+.sub-teacher-img { width: 100%; height: 100%; object-fit: cover; }
+.sub-teacher-initials { color: #fff; font-size: 18px; font-weight: 700; }
+.sub-teacher-info { flex: 1; min-width: 0; }
+.sub-teacher-name { font-size: 13px; font-weight: 600; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub-teacher-code { font-size: 11px; color: #6366f1; font-weight: 700; margin-top: 1px; }
+.sub-teacher-dept { font-size: 10px; color: #94a3b8; white-space: nowrap; }
 </style>

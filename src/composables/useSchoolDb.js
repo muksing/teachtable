@@ -539,7 +539,7 @@ export function useSchoolDb() {
       .select('class_id, subject_id, subject_name, teacher_id, teacher_name')
       .eq('school_id', authStore.schoolId)
       .eq('term_id', termId)
-      .neq('slot_type', 'activity')
+      .not('slot_type', 'in', '("activity","manual_lock")')
     if (error) throw error
     // deduplicate: one row per class+subject+teacher combination
     const seen = new Set()
@@ -619,6 +619,7 @@ export function useSchoolDb() {
       .select('*')
       .eq('school_id', authStore.schoolId)
       .eq('term_id', term())
+      .limit(10000)
     if (error) throw error
     return (data || []).map(mapTimetableSlot)
   }
@@ -1026,7 +1027,7 @@ export function useSchoolDb() {
         .eq('term_id', timetableTerm)
         .eq('teacher_id', teacherPlanId)
         .eq('day_of_week', dayNum)
-        .neq('slot_type', 'activity'),
+        .not('slot_type', 'in', '("activity","manual_lock")'),
       supabase
         .from('teach_actuals')
         .select('*')
@@ -1035,14 +1036,14 @@ export function useSchoolDb() {
         .eq('date', dateKey),
       supabase
         .from('teachers')
-        .select('teacher_code, prefix, name, surname')
+        .select('teacher_code, prefix, first_name, last_name')
         .eq('school_id', schoolId),
     ])
     if (slotsRes.error) throw slotsRes.error
 
     const teacherNameMap = new Map()
     for (const t of (teachersRes.data || [])) {
-      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim())
+      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim())
     }
 
     const tSlots = slotsRes.data || []
@@ -1150,29 +1151,38 @@ export function useSchoolDb() {
       .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
       .eq('school_id', schoolId)
       .eq('term_id', termId)
-      .not('slot_type', 'eq', 'activity')
+      .not('slot_type', 'in', '("activity","manual_lock")')
     if (teacherId) slotsQuery = slotsQuery.eq('teacher_id', teacherId)
 
-    const [slotsRes, actualsRes, settingsResult, classesRes, teachersRes] = await Promise.all([
+    const [slotsRes, settingsResult, classesRes, teachersRes] = await Promise.all([
       slotsQuery,
-      supabase
+      getSchoolSettings(),
+      supabase.from('classes')
+        .select('class_name, homeroom_teacher_id, homeroom_teacher_ids, homeroom_teacher_names_snapshot')
+        .eq('school_id', schoolId),
+      supabase.from('teachers')
+        .select('teacher_code, prefix, first_name, last_name')
+        .eq('school_id', schoolId),
+    ])
+    if (slotsRes.error) throw slotsRes.error
+
+    // paginate teach_actuals to bypass 1000-row default cap
+    let actualsRows = []
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
         .from('teach_actuals')
         .select('*')
         .eq('school_id', schoolId)
         .eq('term_id', termId)
         .gte('date', startKey)
         .lte('date', endKey)
-        .order('date'),
-      getSchoolSettings(),
-      supabase.from('classes')
-        .select('class_name, homeroom_teacher_id, homeroom_teacher_ids, homeroom_teacher_names_snapshot')
-        .eq('school_id', schoolId),
-      supabase.from('teachers')
-        .select('teacher_code, prefix, name, surname')
-        .eq('school_id', schoolId),
-    ])
-    if (slotsRes.error) throw slotsRes.error
-    if (actualsRes.error) throw actualsRes.error
+        .order('date')
+        .range(from, from + PAGE - 1)
+      if (error) throw error
+      actualsRows.push(...(data || []))
+      if ((data || []).length < PAGE) break
+    }
 
     const homeroomPeriods      = settingsResult.teaching_log_settings?.homeroom_special_periods || []
     const classesWithHomeroom  = (classesRes.data || []).filter(c =>
@@ -1180,7 +1190,7 @@ export function useSchoolDb() {
     )
     const teacherNameMap = new Map()
     for (const t of (teachersRes?.data || [])) {
-      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim())
+      teacherNameMap.set(t.teacher_code, `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim())
     }
 
     const slotsByDay = {}
@@ -1191,7 +1201,7 @@ export function useSchoolDb() {
     }
 
     const actualsMap = new Map()
-    for (const row of (actualsRes.data || [])) {
+    for (const row of actualsRows) {
       const mapped = mapTeachActual(row)
       // Use stored record_by_name if present; fall back to planned teacher name
       if (!mapped.record_by_name && mapped.is_filled) {
@@ -1214,11 +1224,12 @@ export function useSchoolDb() {
         if (seenKeys.has(key)) continue
         seenKeys.add(key)
         const existing = actualsMap.get(key)
+        const slotTeacherId = String(slot.teacher_id || '')
         const slotInfo = {
           subject_plan_id:   slot.subject_id   || '',
           subject_name:      slot.subject_name  || slot.subject_id || '',
-          teacher_plan_id:   slot.teacher_id    || '',
-          teacher_plan_name: teacherNameMap.get(slot.teacher_id) || slot.teacher_name || slot.teacher_id || '',
+          teacher_plan_id:   slotTeacherId,
+          teacher_plan_name: teacherNameMap.get(slotTeacherId) || slot.teacher_name || slotTeacherId || '',
           class_id:          slot.class_id,
           class_name:        slot.class_id,
         }
@@ -1277,6 +1288,134 @@ export function useSchoolDb() {
     })
   }
 
+  // ดึงเฉพาะ teach_actuals ที่ is_filled=false ในเทอมปัจจุบัน (ใช้โดยหน้าลืมบันทึก)
+  async function getUnfilledTeachActuals() {
+    const schoolId = authStore.schoolId
+    const termId   = term()
+
+    // แสดงเฉพาะช่วงที่ยังแก้ได้ (backdating window) และก่อนวันนี้
+    const settings     = await getSchoolSettings()
+    const maxDays      = settings?.teaching_log_settings?.backdating_days ?? 14
+    const today        = new Date()
+    const yesterday    = new Date(today); yesterday.setDate(today.getDate() - 1)
+    const startDate    = new Date(today); startDate.setDate(today.getDate() - maxDays)
+    const startKey     = startDate.toISOString().split('T')[0]
+    const endKey       = yesterday.toISOString().split('T')[0]
+
+    const [teachersRes, slotsRes, subjectsRes, classesRes] = await Promise.all([
+      supabase.from('teachers')
+        .select('teacher_code, prefix, first_name, last_name')
+        .eq('school_id', schoolId),
+      supabase.from(getSlotTable(schoolStore))
+        .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
+        .eq('school_id', schoolId)
+        .eq('term_id', termId),
+      supabase.from('subjects')
+        .select('subject_code, name')
+        .eq('school_id', schoolId),
+      supabase.from('classes')
+        .select('class_name, homeroom_teacher_id, homeroom_teacher_ids, homeroom_teacher_names_snapshot')
+        .eq('school_id', schoolId),
+    ])
+
+    // paginate is_filled=false ในช่วง backdating
+    let rows = []
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from('teach_actuals')
+        .select('*')
+        .eq('school_id', schoolId)
+        .eq('term_id', termId)
+        .eq('is_filled', false)
+        .not('slot_type', 'in', '("activity","manual_lock")')
+        .gte('date', startKey)
+        .lte('date', endKey)
+        .order('date', { ascending: false })
+        .range(from, from + PAGE - 1)
+      if (error) throw error
+      rows.push(...(data || []))
+      if ((data || []).length < PAGE) break
+    }
+
+    const teacherNameMap = new Map()
+    for (const t of (teachersRes.data || [])) {
+      const fullName = `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim()
+      teacherNameMap.set(String(t.teacher_code), fullName)
+    }
+
+    // subjects map: subject_code → subject_name (Thai name)
+    const subjectNameMap = new Map()
+    for (const s of (subjectsRes.data || [])) {
+      subjectNameMap.set(String(s.subject_code), s.name || '')
+    }
+
+    // slot map: ใช้ทั้ง class+period+dow lookup และ teacher_id → teacher_name
+    const slotMap = new Map()
+    const slotTeacherMap = new Map()
+    for (const s of (slotsRes.data || [])) {
+      slotMap.set(`${s.class_id}_${s.period_number}_${s.day_of_week}`, s)
+      if (s.teacher_id && s.teacher_name && !slotTeacherMap.has(String(s.teacher_id))) {
+        slotTeacherMap.set(String(s.teacher_id), s.teacher_name)
+      }
+    }
+
+    // homeroom: class_name → { teacher_code, snap_name }
+    const classHomeroomMap = new Map()
+    for (const c of (classesRes.data || [])) {
+      const rawTid = Array.isArray(c.homeroom_teacher_ids) && c.homeroom_teacher_ids.length
+        ? c.homeroom_teacher_ids[0] : c.homeroom_teacher_id
+      // กรณี homeroom_teacher_id เก็บ "307, 703" เป็น string → เอาแค่ตัวแรก
+      const tid = rawTid ? String(rawTid).split(',')[0].trim() : null
+      const snap = Array.isArray(c.homeroom_teacher_names_snapshot) ? c.homeroom_teacher_names_snapshot
+        : (c.homeroom_teacher_name_snapshot ? [c.homeroom_teacher_name_snapshot] : [])
+      if (tid) classHomeroomMap.set(c.class_name, { tid, snapName: snap[0] || '' })
+    }
+
+    // homeroom period → name from settings
+    const homeroomSettings = settings?.teaching_log_settings?.homeroom_special_periods || []
+    const homeroomPeriodNameMap = new Map()
+    for (const hp of homeroomSettings) {
+      if (hp.period) homeroomPeriodNameMap.set(Number(hp.period), hp.name || '')
+    }
+
+    return rows.map(row => {
+      const mapped = mapTeachActual(row)
+      const isHomeroom = row.slot_type === 'homeroom'
+        || homeroomPeriodNameMap.has(row.period_number)
+      const dayNum = THAI_DAY_TO_NUMBER[THAI_DAYS_ARR[new Date(row.date + 'T00:00:00').getDay()]]
+      const slot   = isHomeroom ? null : slotMap.get(`${row.class_id}_${row.period_number}_${dayNum}`)
+
+      let teacherId = String(row.planned_teacher_id || '')
+      let teacherName = teacherNameMap.get(teacherId)
+        || slotTeacherMap.get(teacherId)
+        || slot?.teacher_name
+        || ''
+      let subjectId = row.subject_id || slot?.subject_id || ''
+      let subjectName = slot?.subject_name || subjectNameMap.get(subjectId) || ''
+
+      if (isHomeroom && !teacherName) {
+        // fallback จาก classes table
+        const hm = classHomeroomMap.get(row.class_id)
+        if (hm) {
+          teacherId = hm.tid
+          teacherName = teacherNameMap.get(hm.tid) || hm.snapName || hm.tid
+        }
+      }
+      if (isHomeroom && !subjectName) {
+        subjectName = homeroomPeriodNameMap.get(row.period_number) || ''
+      }
+
+      return {
+        ...mapped,
+        teacher_plan_id:   teacherId,
+        teacher_plan_name: teacherName,
+        subject_name:      subjectName,
+        class_name:        row.class_id,
+      }
+    })
+  }
+
   async function getTeachActualsRangeByClass(startDate, endDate, classId = null) {
     const startKey = normalizeDateKey(startDate)
     const endKey   = normalizeDateKey(endDate)
@@ -1288,7 +1427,7 @@ export function useSchoolDb() {
       .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
       .eq('school_id', schoolId)
       .eq('term_id', termId)
-      .not('slot_type', 'eq', 'activity')
+      .not('slot_type', 'in', '("activity","manual_lock")')
     if (classId) slotsQ = slotsQ.eq('class_id', classId)
 
     let actualsQ = supabase
@@ -1309,7 +1448,7 @@ export function useSchoolDb() {
 
     const [slotsRes, actualsRes, settingsResult, classesRes, teachersRes2] = await Promise.all([
       slotsQ, actualsQ, getSchoolSettings(), classesQ,
-      supabase.from('teachers').select('teacher_code, prefix, name, surname').eq('school_id', schoolId),
+      supabase.from('teachers').select('teacher_code, prefix, first_name, last_name').eq('school_id', schoolId),
     ])
     if (slotsRes.error) throw slotsRes.error
     if (actualsRes.error) throw actualsRes.error
@@ -1320,7 +1459,7 @@ export function useSchoolDb() {
     )
     const teacherNameMap2 = new Map()
     for (const t of (teachersRes2?.data || [])) {
-      teacherNameMap2.set(t.teacher_code, `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim())
+      teacherNameMap2.set(t.teacher_code, `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim())
     }
 
     const slotsByDay = {}
@@ -1350,7 +1489,7 @@ export function useSchoolDb() {
           subject_plan_id:   slot.subject_id   || '',
           subject_name:      slot.subject_name  || slot.subject_id || '',
           teacher_plan_id:   slot.teacher_id    || '',
-          teacher_plan_name: teacherNameMap.get(slot.teacher_id) || slot.teacher_name || slot.teacher_id || '',
+          teacher_plan_name: teacherNameMap2.get(slot.teacher_id) || slot.teacher_name || slot.teacher_id || '',
           class_id:          slot.class_id,
           class_name:        slot.class_id,
         }
@@ -1419,6 +1558,7 @@ export function useSchoolDb() {
     const slotsForDay = (Array.isArray(timetableSlots) ? timetableSlots : [])
       .filter(s => {
         if (s?.type === 'activity' || s?.slot_type === 'activity') return false
+        if (s?.type === 'manual_lock' || s?.slot_type === 'manual_lock') return false
         if (s?.day === dayName || s?.day_of_week === dayName) return true
         return normalizeDayNumber(s?.day ?? s?.day_of_week) === dayNumber
       })
@@ -1461,11 +1601,9 @@ export function useSchoolDb() {
         class_id: classId,
         date: dateKey,
         period_number: period,
-        // planned_teacher_id / actual_teacher_id ใน DB เป็น UUID type
-        // แต่ teacher code เป็น TEXT (เช่น "309") — ข้ามไป null เพื่อหลีกเลี่ยง type error
-        planned_teacher_id: null,
+        planned_teacher_id: asText(slot?.teacher_id ?? slot?.teacher_id_snapshot ?? '') || null,
         actual_teacher_id: null,
-        subject_id: null,
+        subject_id: asText(slot?.subject_id ?? slot?.subject_code ?? '') || null,
         is_filled: false,
         slot_type: slot?.slot_type ?? slot?.type ?? 'normal',
         teacher_plan_name: asText(slot?.teacher_name ?? slot?.teacher_name_snapshot ?? ''),
@@ -1475,9 +1613,11 @@ export function useSchoolDb() {
 
     // Homeroom special periods — สร้างให้ครูคนแรกในรายชื่อที่ปรึกษาเท่านั้น
     for (const cls of classes) {
-      const hmFirstTeacher = (Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length)
+      const rawFirstTeacher = (Array.isArray(cls.homeroom_teacher_ids) && cls.homeroom_teacher_ids.length)
         ? cls.homeroom_teacher_ids[0]
         : cls.homeroom_teacher_id
+      // กรณี homeroom_teacher_id เก็บ "307, 703" เป็น string → เอาแค่ตัวแรก
+      const hmFirstTeacher = rawFirstTeacher ? String(rawFirstTeacher).split(',')[0].trim() : null
       if (!hmFirstTeacher) continue
       for (const hp of homeroomPeriods) {
         const period = Number(hp.period)
@@ -1496,7 +1636,7 @@ export function useSchoolDb() {
           class_id: classId,
           date: dateKey,
           period_number: period,
-          planned_teacher_id: null,
+          planned_teacher_id: asText(hmFirstTeacher) || null,
           actual_teacher_id: null,
           subject_id: null,
           is_filled: false,
@@ -1512,6 +1652,7 @@ export function useSchoolDb() {
     // Strip fields not in schema before upserting
     const cleanPayloads = payloads.map(({ teacher_plan_name, class_name, ...rest }) => rest)
 
+    // upsert: เพิ่มเฉพาะที่ยังไม่มี (ignoreDuplicates=true ไม่แตะ record ที่มีอยู่แล้ว)
     const CHUNK = 400
     for (let i = 0; i < cleanPayloads.length; i += CHUNK) {
       const { error } = await supabase
@@ -1537,11 +1678,9 @@ export function useSchoolDb() {
       class_id: classId,
       date: dateKey,
       period_number: periodNum,
-      // planned_teacher_id / actual_teacher_id / subject_id เป็น UUID ใน DB
-      // teacher/subject ใช้ TEXT code → ส่ง null เพื่อหลีกเลี่ยง type error
       planned_teacher_id: null,
       actual_teacher_id: null,
-      subject_id: null,
+      subject_id: data.subject_id || data.subject_plan_id || null,
       topic: data.topic ?? null,
       activity_type: data.activity_type ?? null,
       images: data.images ?? null,
@@ -1606,6 +1745,7 @@ export function useSchoolDb() {
     const thaiDay = getThaiDayFromDate(dateStr)
     return (timetableSlots || []).filter(s => {
       if (s?.type === 'activity' || s?.slot_type === 'activity') return false
+      if (s?.type === 'manual_lock' || s?.slot_type === 'manual_lock') return false
       const dayMatch =
         s.day === thaiDay ||
         s.day_of_week === thaiDay ||
@@ -1697,6 +1837,7 @@ export function useSchoolDb() {
 
     // Upsert teach_actual
     const taPayload = {
+      school_id: authStore.schoolId,
       term_id: termId,
       class_id,
       date: normalizeDateKey(date),
@@ -1710,7 +1851,7 @@ export function useSchoolDb() {
     }
     const { error: taError } = await supabase
       .from('teach_actuals')
-      .upsert([taPayload], { onConflict: 'term_id,class_id,date,period_number' })
+      .upsert([taPayload], { onConflict: 'school_id,term_id,class_id,date,period_number' })
     if (taError) throw taError
 
     // Update leave_request.assignments using JSONB path update via RPC or read-modify-write
@@ -1740,11 +1881,12 @@ export function useSchoolDb() {
   }
 
   // ยกเลิก assignment
-  async function unassignSubstituteTeacher(leaveId, assignmentKey, taId) {
+  async function unassignSubstituteTeacher(leaveId, assignmentKey, slotData) {
     const termId = term()
+    const { date, class_id, period_no } = slotData || {}
 
-    // Clear teach_actual substitute fields; look up by UUID if given
-    if (taId && taId.includes('-')) {
+    // Clear teach_actual by exact slot coordinates (school+term+class+date+period)
+    if (date && class_id && period_no) {
       await supabase
         .from('teach_actuals')
         .update({
@@ -1753,20 +1895,11 @@ export function useSchoolDb() {
           leave_request_id: null,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', taId)
-    } else if (taId) {
-      // taId is encoded string like "2568-01-01_ม.4_1_3" — try to match by term+date+class+period
-      // best effort: just clear via leave_request_id
-      await supabase
-        .from('teach_actuals')
-        .update({
-          actual_teacher_id: null,
-          is_substitute_mandatory: false,
-          leave_request_id: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('leave_request_id', leaveId)
+        .eq('school_id', authStore.schoolId)
         .eq('term_id', termId)
+        .eq('class_id', class_id)
+        .eq('date', normalizeDateKey(date))
+        .eq('period_number', Number(period_no))
     }
 
     // Update leave_request.assignments
@@ -1946,6 +2079,7 @@ export function useSchoolDb() {
     // Teach actuals
     getTeachActuals,
     getTeachActualsRange,
+    getUnfilledTeachActuals,
     getTeachActualsRangeByClass,
     generateTeachActualsForDate,
     saveTeachActual,
