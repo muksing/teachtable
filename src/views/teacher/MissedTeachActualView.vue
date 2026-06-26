@@ -18,9 +18,7 @@
 
         <!-- Controls row -->
         <div class="mta-controls">
-          <el-select v-model="dayRange" size="small" style="min-width:145px" @change="loadData">
-            <el-option v-for="d in dayOptions" :key="d" :value="d" :label="`${d} วันล่าสุด`" />
-          </el-select>
+          <span class="mta-range-label">ย้อนหลัง {{ maxDays }} วัน</span>
           <el-button size="small" :loading="loading" @click="loadData">🔄 รีเฟรช</el-button>
         </div>
       </div>
@@ -52,7 +50,10 @@
         <div class="mta-teacher-summary">
           <div class="mta-teacher-summary-title-row">
             <div class="mta-teacher-summary-title">📊 สรุปการลืมบันทึก รายครู</div>
-            <el-button size="small" type="warning" @click="printSummary">🖨️ พิมพ์ตารางสรุป</el-button>
+            <div style="display:flex;gap:6px">
+              <el-button size="small" type="warning" @click="printSummary">🖨️ พิมพ์ตารางสรุป</el-button>
+              <el-button size="small" type="danger" @click="printAllTeachers">🖨️ พิมพ์ทุกคน</el-button>
+            </div>
           </div>
           <el-table
             :data="teacherSummary"
@@ -73,6 +74,11 @@
             <el-table-column label="คาบค้าง" width="80" align="center" prop="count">
               <template #default="{ row }">
                 <el-tag type="danger" size="small" effect="dark">{{ row.count }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="รายงาน" width="90" align="center">
+              <template #default="{ row }">
+                <el-button size="small" type="primary" plain @click="printOneTeacher(row)">🖨️ พิมพ์</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -129,7 +135,7 @@
         <div v-else-if="!filteredRows.length" class="mta-empty">
           <div class="mta-empty-icon">🎉</div>
           <div class="mta-empty-title">ไม่พบรายการค้างบันทึก</div>
-          <div class="mta-empty-sub">{{ filterTeacher || filterDate ? 'ไม่มีข้อมูลตามเงื่อนไขที่เลือก' : `ทุกคาบใน ${dayRange} วันที่ผ่านมาบันทึกครบแล้ว` }}</div>
+          <div class="mta-empty-sub">{{ filterTeacher || filterDate ? 'ไม่มีข้อมูลตามเงื่อนไขที่เลือก' : `ทุกคาบใน ${maxDays} วันที่ผ่านมาบันทึกครบแล้ว` }}</div>
         </div>
 
         <!-- Table -->
@@ -190,7 +196,7 @@
         <div v-else-if="!groups.length" class="mta-empty">
           <div class="mta-empty-icon">🎉</div>
           <div class="mta-empty-title">ไม่มีรายวิชาที่ค้างบันทึก</div>
-          <div class="mta-empty-sub">ทุกคาบใน {{ dayRange }} วันที่ผ่านมาบันทึกครบแล้ว</div>
+          <div class="mta-empty-sub">ทุกคาบใน {{ maxDays }} วันที่ผ่านมาบันทึกครบแล้ว</div>
         </div>
 
         <!-- Groups -->
@@ -248,11 +254,10 @@ import { supabase } from '@/supabase/client'
 const router      = useRouter()
 const authStore   = useAuthStore()
 const schoolStore = useSchoolStore()
-const { getTeachActualsRange } = useSchoolDb()
+const { getUnfilledTeachActuals } = useSchoolDb()
 
 const loading      = ref(false)
 const allData      = ref([])
-const dayRange     = ref(7)
 const filterTeacher = ref('')
 const filterDate    = ref('')
 
@@ -265,16 +270,20 @@ const myTeacherId = computed(() =>
   String(authStore.profile?.teacher_id || authStore.profile?.uid || '')
 )
 
+// ── School info ──────────────────────────────────────────────────────────
+const schoolName = computed(() =>
+  schoolStore.settingsObj?.school_info?.school_name_th ||
+  schoolStore.schoolInfo?.name || 'โรงเรียน'
+)
+const schoolLogo = computed(() =>
+  schoolStore.schoolInfo?.settings?.logo_url ||
+  schoolStore.settingsObj?.logo_url || ''
+)
+
 // ── Config ────────────────────────────────────────────────────────────────
 const maxDays = computed(() => {
   const tl = schoolStore.schoolInfo?.settings?.teaching_log_settings || {}
   return Number(tl.backdating_days ?? schoolStore.schoolInfo?.backdating_days ?? 14)
-})
-
-const dayOptions = computed(() => {
-  const opts = [3, 7, 14, 30].filter(d => d <= maxDays.value)
-  if (maxDays.value > 0 && !opts.includes(maxDays.value)) opts.push(maxDays.value)
-  return opts.sort((a, b) => a - b)
 })
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -302,10 +311,9 @@ function relativeLabel(dateKey) {
 // ── Teacher view data ─────────────────────────────────────────────────────
 const unfilled = computed(() => {
   const myId = myTeacherId.value
-  return allData.value.filter(r => {
-    if (r.is_filled) return false
-    return r.teacher_plan_id === myId || r.subject_actual_teacher_id === myId
-  })
+  return allData.value.filter(r =>
+    String(r.teacher_plan_id) === myId || String(r.subject_actual_teacher_id) === myId
+  )
 })
 
 const groups = computed(() => {
@@ -329,9 +337,7 @@ const groups = computed(() => {
 })
 
 // ── Admin view data ───────────────────────────────────────────────────────
-const adminUnfilled = computed(() =>
-  allData.value.filter(r => !r.is_filled)
-)
+const adminUnfilled = computed(() => allData.value)
 
 const teacherOptions = computed(() => {
   const map = {}
@@ -384,13 +390,7 @@ const displayCount = computed(() =>
 async function loadData() {
   loading.value = true
   try {
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const endDate = new Date(today)
-    endDate.setDate(endDate.getDate() - 1)
-    const startDate = new Date(today)
-    startDate.setDate(startDate.getDate() - dayRange.value)
-    allData.value = await getTeachActualsRange(toDateKey(startDate), toDateKey(endDate))
+    allData.value = await getUnfilledTeachActuals()
   } catch (e) {
     console.error('loadData error', e)
     allData.value = []
@@ -413,6 +413,7 @@ async function goToDetail(item) {
         period_number:      item.period_number || item.period,
         slot_type:          item.slot_type || 'regular',
         planned_teacher_id: item.teacher_plan_id || '',
+        subject_id:         item.subject_plan_id || item.subject_id || null,
         is_filled:          false,
       }], { onConflict: 'school_id,term_id,class_id,date,period_number' })
       .select('id')
@@ -436,15 +437,18 @@ async function goToDetail(item) {
 }
 
 function printBaseStyle() {
-  return `@page { margin: 15mm; }
+  return `@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;800&display=swap');
+  @page { margin: 15mm; }
   * { font-family: 'Sarabun','TH Sarabun New','Tahoma',sans-serif; font-size: 14px; }
   body { color: #000; }
   h1 { font-size: 18px; text-align: center; margin: 0 0 4px; }
   h2 { font-size: 15px; text-align: center; margin: 0 0 6px; font-weight: 700; }
   .meta { text-align:center; font-size:12px; color:#555; margin-bottom:20px; }
   table { width:100%; border-collapse:collapse; margin-bottom:20px; }
-  thead th { background:#1e40af; color:white; padding:6px 10px; border:1px solid #ccc; font-weight:700; }
+  thead { display:table-header-group; }
+  thead th { background:#1e40af; color:white; padding:6px 10px; border:1px solid #1e40af; font-weight:700; }
   tbody td { padding:5px 10px; border:1px solid #ddd; }
+  tr { page-break-inside:avoid; }
   .sign-row { display:flex; justify-content:flex-end; margin-top:40px; text-align:center; }
   .sign-box { width:220px; }
   .sign-line { border-top:1px solid #000; margin-top:60px; margin-bottom:4px; }`
@@ -460,9 +464,9 @@ function openPrint(title, html) {
 }
 
 function printSummary() {
-  const schoolName = schoolStore.settingsObj?.school_info?.school_name_th || 'โรงเรียน'
+  const sName = schoolName.value
   const now = new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
-  const rangeLabel = `${dayRange.value} วันล่าสุด`
+  const rangeLabel = `${maxDays.value} วันล่าสุด`
 
   const rows = teacherSummary.value.map((t, i) => `
     <tr>
@@ -476,7 +480,7 @@ function printSummary() {
 <head><meta charset="UTF-8"><title>สรุปการลืมบันทึก</title>
 <style>${printBaseStyle()}</style></head>
 <body>
-<h1>${schoolName}</h1>
+<h1>${sName}</h1>
 <h2>รายงานสรุปการลืมบันทึกเข้าสอน</h2>
 <p class="meta">ช่วงเวลา: ${rangeLabel}&ensp;|&ensp;วันที่พิมพ์: ${now}&ensp;|&ensp;คาบค้างรวม: <strong>${adminUnfilled.value.length}</strong> คาบ จาก <strong>${uniqueTeacherCount.value}</strong> ครู</p>
 <table>
@@ -498,10 +502,40 @@ function printSummary() {
 </body></html>`)
 }
 
+function subjectLabel(r) {
+  return r.subject_name || r.subject_plan_id || r.subject_id || '—'
+}
+
+function buildTeacherSection(id, name, rows) {
+  const ths = 'background:#475569;color:white;padding:5px 8px;border:1px solid #475569;font-weight:700'
+  return `
+    <h3 style="font-size:14px;margin:18px 0 0;padding:6px 10px;background:#f1f5f9;border-left:4px solid #dc2626;page-break-after:avoid">
+      ${id !== '—' ? id + '&ensp;' : ''}${name}&ensp;<span style="color:#dc2626">(${rows.length} คาบ)</span>
+    </h3>
+    <table style="font-size:13px;margin-top:0">
+      <thead><tr>
+        <th style="${ths};width:36px;text-align:center">ลำดับ</th>
+        <th style="${ths}">วันที่</th>
+        <th style="${ths};width:44px;text-align:center">คาบ</th>
+        <th style="${ths};width:70px;text-align:center">ห้อง</th>
+        <th style="${ths};width:90px">รหัสวิชา</th>
+        <th style="${ths}">ชื่อวิชา</th>
+      </tr></thead>
+      <tbody>${rows.map((r, i) => `<tr>
+        <td style="text-align:center;color:#6b7280">${i + 1}</td>
+        <td>${thaiDateLabel(r.date)}</td>
+        <td style="text-align:center">${r.period ?? ''}</td>
+        <td style="text-align:center">${r.class_id || ''}</td>
+        <td style="color:#7c3aed;font-weight:700">${r.subject_plan_id || r.subject_id || '—'}</td>
+        <td>${subjectLabel(r)}</td>
+      </tr>`).join('')}</tbody>
+    </table>`
+}
+
 function printDetail() {
-  const schoolName = schoolStore.settingsObj?.school_info?.school_name_th || 'โรงเรียน'
+  const sName = schoolName.value
   const now = new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
-  const rangeLabel = `${dayRange.value} วันล่าสุด`
+  const rangeLabel = `${maxDays.value} วันล่าสุด`
   const filterLabel = filterTeacher.value
     ? (teacherOptions.value.find(t => t.id === filterTeacher.value)?.name || filterTeacher.value)
     : 'ครูทุกคน'
@@ -512,38 +546,102 @@ function printDetail() {
     if (!detailByTeacher[id]) detailByTeacher[id] = { name: r.teacher_plan_name || id, rows: [] }
     detailByTeacher[id].rows.push(r)
   }
-  const sections = Object.entries(detailByTeacher).map(([id, { name, rows }]) => `
-    <h3 style="font-size:14px;margin:18px 0 6px;padding:6px 10px;background:#f1f5f9;border-left:4px solid #dc2626">
-      ${id}&ensp;${name}&ensp;<span style="color:#dc2626">(${rows.length} คาบ)</span>
-    </h3>
-    <table style="font-size:13px">
-      <thead><tr>
-        <th style="background:#475569">วันที่</th>
-        <th style="background:#475569;width:50px">คาบ</th>
-        <th style="background:#475569;width:80px">ห้อง</th>
-        <th style="background:#475569">วิชา</th>
-      </tr></thead>
-      <tbody>${rows.map(r => `<tr>
-        <td>${thaiDateLabel(r.date)}</td>
-        <td style="text-align:center">${r.period || ''}</td>
-        <td style="text-align:center">${r.class_id || ''}</td>
-        <td>${r.subject_name || ''}</td>
-      </tr>`).join('')}</tbody>
-    </table>`).join('')
+  const sections = Object.entries(detailByTeacher)
+    .map(([id, { name, rows }]) => buildTeacherSection(id, name, rows)).join('')
 
   openPrint('รายละเอียดการลืมบันทึก', `<!DOCTYPE html><html lang="th">
 <head><meta charset="UTF-8"><title>รายละเอียดการลืมบันทึก</title>
 <style>${printBaseStyle()}</style></head>
 <body>
-<h1>${schoolName}</h1>
+<h1>${sName}</h1>
 <h2>รายละเอียดการลืมบันทึกเข้าสอน (จำแนกตามครู)</h2>
 <p class="meta">ช่วงเวลา: ${rangeLabel}&ensp;|&ensp;กรอง: ${filterLabel}&ensp;|&ensp;วันที่พิมพ์: ${now}&ensp;|&ensp;รวม <strong>${filteredRows.value.length}</strong> คาบ</p>
 ${sections}
 </body></html>`)
 }
 
+function sortedTeacherRows(teacherId) {
+  return adminUnfilled.value
+    .filter(r => (r.teacher_plan_id || '—') === teacherId)
+    .slice()
+    .sort((a, b) => a.date !== b.date ? a.date.localeCompare(b.date) : (a.period || 0) - (b.period || 0))
+}
+
+function buildOneTeacherPage(schoolName, logoUrl, t, rows, rangeLabel, now) {
+  const teacherLabel = `${t.id !== '—' ? t.id + ' ' : ''}${t.name}`
+  const TH = (txt, extra = '') =>
+    `<th style="background:#1e40af;color:white;padding:6px 10px;border:1px solid #1e40af;font-weight:700;${extra}">${txt}</th>`
+  const dataRows = rows.map((r, i) => `<tr>
+    <td style="text-align:center;color:#6b7280;border:1px solid #ddd;padding:4px 8px">${i + 1}</td>
+    <td style="border:1px solid #ddd;padding:4px 8px">${thaiDateLabel(r.date)}</td>
+    <td style="text-align:center;border:1px solid #ddd;padding:4px 8px">${r.period ?? ''}</td>
+    <td style="text-align:center;border:1px solid #ddd;padding:4px 8px">${r.class_id || ''}</td>
+    <td style="color:#7c3aed;font-weight:700;border:1px solid #ddd;padding:4px 8px">${r.subject_plan_id || r.subject_id || '—'}</td>
+    <td style="border:1px solid #ddd;padding:4px 8px">${r.subject_name || '—'}</td>
+  </tr>`).join('')
+  const logoHtml = logoUrl
+    ? `<img src="${logoUrl}" style="height:56px;object-fit:contain;display:block;margin:0 auto 4px" />`
+    : '<div style="font-size:40px;text-align:center">🏫</div>'
+  return `<div style="page-break-after:always">
+<table style="width:100%;border-collapse:collapse;font-size:13px">
+  <thead>
+    <tr>
+      <td colspan="6" style="border:none;text-align:center;padding:4px 0 10px">
+        ${logoHtml}
+        <div style="font-size:17px;font-weight:900">${schoolName}</div>
+        <div style="font-size:14px;font-weight:700;margin:3px 0">รายงานการลืมบันทึกเข้าสอน</div>
+        <div style="font-size:11px;color:#555">ครูผู้สอน: <b>${teacherLabel}</b>&ensp;|&ensp;ช่วง: ${rangeLabel}&ensp;|&ensp;วันที่พิมพ์: ${now}&ensp;|&ensp;รวม ${rows.length} คาบ</div>
+      </td>
+    </tr>
+    <tr>
+      ${TH('ลำดับ', 'width:36px;text-align:center')}
+      ${TH('วันที่', 'text-align:left')}
+      ${TH('คาบ', 'width:44px;text-align:center')}
+      ${TH('ห้อง', 'width:64px;text-align:center')}
+      ${TH('รหัสวิชา', 'width:90px;text-align:left')}
+      ${TH('ชื่อวิชา', 'text-align:left')}
+    </tr>
+  </thead>
+  <tbody>${dataRows || '<tr><td colspan="6" style="text-align:center;color:#999;padding:12px">ไม่มีรายการ</td></tr>'}</tbody>
+</table>
+<div class="sign-row">
+  <div class="sign-box">
+    <div class="sign-line"></div>
+    <div>(........................................)</div>
+    <div style="font-size:12px;color:#555">ลายมือชื่อครู</div>
+  </div>
+</div>
+</div>`
+}
+
+function printOneTeacher(t) {
+  const sName = schoolName.value
+  const sLogo = schoolLogo.value
+  const now = new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
+  const rangeLabel = `${maxDays.value} วันล่าสุด`
+  const rows = sortedTeacherRows(t.id)
+  const page = buildOneTeacherPage(sName, sLogo, t, rows, rangeLabel, now)
+  openPrint('รายงานลืมบันทึก ' + t.name, `<!DOCTYPE html><html lang="th">
+<head><meta charset="UTF-8"><title>รายงานลืมบันทึก</title>
+<style>${printBaseStyle()}</style></head>
+<body>${page}</body></html>`)
+}
+
+function printAllTeachers() {
+  const sName = schoolName.value
+  const sLogo = schoolLogo.value
+  const now = new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
+  const rangeLabel = `${maxDays.value} วันล่าสุด`
+  const pages = teacherSummary.value
+    .map(t => buildOneTeacherPage(sName, sLogo, t, sortedTeacherRows(t.id), rangeLabel, now))
+    .join('')
+  openPrint('รายงานลืมบันทึก ทุกคน', `<!DOCTYPE html><html lang="th">
+<head><meta charset="UTF-8"><title>รายงานลืมบันทึก ทุกคน</title>
+<style>${printBaseStyle()}</style></head>
+<body>${pages}</body></html>`)
+}
+
 onMounted(async () => {
-  if (maxDays.value > 0) dayRange.value = Math.min(7, maxDays.value)
   await loadData()
 })
 </script>
@@ -577,6 +675,7 @@ onMounted(async () => {
 .mta-sub   { font-size: 13px; color: rgba(255,255,255,0.85); margin: 0; }
 .mta-badge { font-weight: 800 !important; font-size: 13px !important; }
 .mta-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mta-range-label { font-size: 13px; color: rgba(255,255,255,0.85); font-weight: 600; }
 
 /* ── Admin: Summary stats ── */
 .mta-stats {
