@@ -825,10 +825,15 @@ export function useSchoolDb() {
 
     q = q.order('created_at', { ascending: false })
 
-    const { data, error } = await q
-    if (error) throw error
-
-    let rows = data || []
+    // paginate (Supabase hard cap 1000 rows/request)
+    const PAGE_BL = 1000
+    let rows = []
+    for (let from = 0; ; from += PAGE_BL) {
+      const { data, error } = await q.range(from, from + PAGE_BL - 1)
+      if (error) throw error
+      rows.push(...(data || []))
+      if ((data || []).length < PAGE_BL) break
+    }
     // filter by class_id in memory (no class_id column in behavior_logs; join via students if needed)
     if (classId) {
       // If classId filtering is needed, get student IDs in that class first
@@ -1153,25 +1158,36 @@ export function useSchoolDb() {
     const termId = term()
     const schoolId = authStore.schoolId
 
-    let slotsQuery = supabase
-      .from(getSlotTable(schoolStore))
-      .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
-      .eq('school_id', schoolId)
-      .eq('term_id', termId)
-      .not('slot_type', 'in', '("activity","manual_lock")')
-    if (teacherId) slotsQuery = slotsQuery.eq('teacher_id', teacherId)
+    const slotTable2 = getSlotTable(schoolStore)
+    const PAGE2 = 1000
+    const fetchSlots2 = async () => {
+      const rows = []
+      for (let from = 0; ; from += PAGE2) {
+        let q = supabase.from(slotTable2)
+          .select('class_id, period_number, subject_id, subject_name, teacher_id, teacher_name, day_of_week')
+          .eq('school_id', schoolId).eq('term_id', termId)
+          .not('slot_type', 'in', '("activity","manual_lock")')
+          .range(from, from + PAGE2 - 1)
+        if (teacherId) q = q.eq('teacher_id', teacherId)
+        const { data, error } = await q
+        if (error) throw error
+        rows.push(...(data || []))
+        if ((data || []).length < PAGE2) break
+      }
+      return rows
+    }
 
-    const [slotsRes, settingsResult, classesRes, teachersRes] = await Promise.all([
-      slotsQuery,
+    const [slotsData2, settingsResult, classesRes, teachersRes] = await Promise.all([
+      fetchSlots2(),
       getSchoolSettings(),
       supabase.from('classes')
         .select('class_name, homeroom_teacher_id, homeroom_teacher_ids, homeroom_teacher_names_snapshot')
         .eq('school_id', schoolId),
       supabase.from('teachers')
         .select('teacher_code, prefix, first_name, last_name')
-        .eq('school_id', schoolId),
+        .eq('school_id', schoolId).limit(500),
     ])
-    if (slotsRes.error) throw slotsRes.error
+    const slotsRes = { data: slotsData2, error: null }
 
     // paginate teach_actuals to bypass 1000-row default cap
     let actualsRows = []
