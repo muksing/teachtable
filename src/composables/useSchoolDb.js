@@ -1526,38 +1526,33 @@ export function useSchoolDb() {
       if (tid) classHomeroomMap2.set(c.class_name, { tid, ids, snapName, snapNames: snap })
     }
 
-    // Only return REAL teach_actuals from DB — enrich with published timetable info
-    return actualsRows.map(row => {
+    // helper: enrich a real DB row with timetable + teacher info
+    const enrichRow = (row) => {
       const mapped = mapTeachActual(row)
       const isHomeroom = row.slot_type === 'homeroom' || homeroomPeriodNameMap.has(row.period_number)
-
       if (isHomeroom) {
         const hm = classHomeroomMap2.get(row.class_id)
         const hmTeacherId = hm?.tid || String(row.planned_teacher_id || '')
-        // แสดงชื่อครูทุกคนที่เป็นครูที่ปรึกษา (กรณีมีสองคน ให้แสดงทั้งคู่)
         const resolvedNames = (hm?.ids || [hmTeacherId]).map((id, i) => {
           const code = String(id).split(',')[0].trim()
           return teacherNameMap2.get(code) || (hm?.snapNames?.[i]) || hm?.snapName || code
         })
-        const hmTeacherName = resolvedNames.filter(Boolean).join(' / ') || hmTeacherId
         return {
           ...mapped,
           teacher_plan_id:   hmTeacherId,
-          teacher_plan_name: hmTeacherName,
+          teacher_plan_name: resolvedNames.filter(Boolean).join(' / ') || hmTeacherId,
           subject_name:      homeroomPeriodNameMap.get(row.period_number) || mapped.subject_name || '',
           class_name:        row.class_id,
           slot_type:         'homeroom',
         }
       }
-
-      const dayNum = THAI_DAY_TO_NUMBER[THAI_DAYS_ARR[new Date(row.date + 'T00:00:00').getDay()]]
-      const slot = slotMap2.get(`${row.class_id}_${row.period_number}_${dayNum}`)
-        || slotMap2.get(`${row.class_id}_${row.period_number}_${String(dayNum)}`)
-      const teacherId  = String(row.planned_teacher_id || slot?.teacher_id || '')
+      const dayNum  = THAI_DAY_TO_NUMBER[THAI_DAYS_ARR[new Date(row.date + 'T00:00:00').getDay()]]
+      const slot    = slotMap2.get(`${row.class_id}_${row.period_number}_${dayNum}`)
+                   || slotMap2.get(`${row.class_id}_${row.period_number}_${String(dayNum)}`)
+      const teacherId   = String(row.planned_teacher_id || slot?.teacher_id || '')
       const teacherName = teacherNameMap2.get(teacherId) || slot?.teacher_name || ''
-      const subjectId  = row.subject_id || slot?.subject_id || ''
+      const subjectId   = row.subject_id || slot?.subject_id || ''
       const subjectName = slot?.subject_name || subjectId || mapped.subject_name || ''
-
       return {
         ...mapped,
         subject_plan_id:   subjectId,
@@ -1567,7 +1562,54 @@ export function useSchoolDb() {
         class_id:          row.class_id,
         class_name:        row.class_id,
       }
-    }).sort((a, b) => {
+    }
+
+    // Index real records — key: class_id|date|period_number
+    const realIndex = new Set(actualsRows.map(r => `${r.class_id}|${r.date}|${r.period_number}`))
+
+    // Generate virtual records for timetable slots missing from DB
+    // Only for school days (Mon=1 … Fri=5) within the date range
+    const virtualRows = []
+    const start = new Date(startKey + 'T00:00:00')
+    const end   = new Date(endKey   + 'T00:00:00')
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dayNum  = THAI_DAY_TO_NUMBER[THAI_DAYS_ARR[d.getDay()]]
+      if (!dayNum || dayNum > 5) continue  // skip Sat=6, Sun=7
+      // ใช้ local date เพื่อหลีกเลี่ยง UTC offset ทำให้วันเลื่อน
+      const yr = d.getFullYear()
+      const mo = String(d.getMonth() + 1).padStart(2, '0')
+      const dy = String(d.getDate()).padStart(2, '0')
+      const dateStr = `${yr}-${mo}-${dy}`
+      for (const slot of slotsData) {
+        const slotDay = Number(slot.day_of_week)
+        if (slotDay !== dayNum) continue
+        if (slot.slot_type === 'homeroom') continue  // homeroom handled separately
+        if (homeroomPeriodNameMap.has(Number(slot.period_number))) continue
+        const key = `${slot.class_id}|${dateStr}|${slot.period_number}`
+        if (realIndex.has(key)) continue  // real record exists — skip
+        const teacherId   = String(slot.teacher_id || '')
+        const teacherName = teacherNameMap2.get(teacherId) || slot.teacher_name || ''
+        virtualRows.push({
+          teach_actual_id:   null,
+          id:                null,
+          class_id:          slot.class_id,
+          class_name:        slot.class_id,
+          date:              dateStr,
+          period:            Number(slot.period_number),
+          period_number:     Number(slot.period_number),
+          subject_plan_id:   slot.subject_id || '',
+          subject_name:      slot.subject_name || slot.subject_id || '',
+          teacher_plan_id:   teacherId,
+          teacher_plan_name: teacherName,
+          slot_type:         slot.slot_type || 'normal',
+          is_filled:         false,
+          student_records:   {},
+          _virtual:          true,
+        })
+      }
+    }
+
+    return [...actualsRows.map(enrichRow), ...virtualRows].sort((a, b) => {
       if (a.date !== b.date) return a.date < b.date ? -1 : 1
       if ((a.class_id || '') !== (b.class_id || '')) return (a.class_id || '') < (b.class_id || '') ? -1 : 1
       return (a.period || 0) - (b.period || 0)
