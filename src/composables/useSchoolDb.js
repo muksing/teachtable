@@ -1109,10 +1109,12 @@ export function useSchoolDb() {
       // Homeroom period เป็นของครูคนแรกในรายชื่อที่ปรึกษา
       const homeroomClasses = (classesRes.data || []).filter(c => {
         const ids = parseJsonbArray(c.homeroom_teacher_ids)
-        const allIds = ids.length
-          ? ids
-          : (c.homeroom_teacher_id ? String(c.homeroom_teacher_id).split(',').map(s => s.trim()) : [])
-        return allIds.some(id => id === teacherPlanId)
+        // คาบโฮมรูมสร้างสำหรับครูคนแรกในรายชื่อเท่านั้น — planned_teacher_id = ids[0]
+        // ครูคนอื่นในรายชื่อ ไม่บันทึกผ่าน path นี้ (ป้องกัน RLS conflict)
+        const firstId = ids.length
+          ? String(ids[0]).split(',')[0].trim()
+          : (c.homeroom_teacher_id ? String(c.homeroom_teacher_id).split(',')[0].trim() : '')
+        return firstId === teacherPlanId
       })
       // ชื่อครู: teacherNameMap → snapshot[0] → teacher code
       const firstSnapName = homeroomClasses.length
