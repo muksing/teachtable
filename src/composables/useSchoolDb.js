@@ -1551,7 +1551,11 @@ export function useSchoolDb() {
                    || slotMap2.get(`${row.class_id}_${row.period_number}_${String(dayNum)}`)
       const teacherId   = String(row.planned_teacher_id || slot?.teacher_id || '')
       const teacherName = teacherNameMap2.get(teacherId) || slot?.teacher_name || ''
-      const subjectId   = row.subject_id || slot?.subject_id || ''
+      // ถ้ายังไม่บันทึก (is_filled=false) ให้ใช้ subject_id จากตารางสอนเป็นหลัก
+      // เพราะข้อมูล migrate จากระบบเดิมอาจมี subject_id ผิด
+      const subjectId   = !row.is_filled
+        ? (slot?.subject_id || row.subject_id || '')
+        : (row.subject_id   || slot?.subject_id || '')
       const subjectName = slot?.subject_name || subjectId || mapped.subject_name || ''
       return {
         ...mapped,
