@@ -9,7 +9,7 @@
           📝 คาบ {{ ta?.period }} · {{ ta?.class_name || ta?.class_id }} · {{ formatDate(ta?.date) }}
           <el-tag v-if="ta?.is_filled" type="success" size="small" style="margin-left:8px;vertical-align:middle">✓ บันทึกแล้ว</el-tag>
         </div>
-        <el-button type="success" size="small" :loading="saving" class="tad-save-btn" @click="saveAll">
+        <el-button type="success" size="small" :loading="saving" class="tad-save-btn" @click="openSaveConfirm">
           💾 บันทึก
         </el-button>
       </div>
@@ -428,12 +428,61 @@
         </template>
       </el-dialog>
 
+      <!-- ── Confirm Save Dialog ─────────────────────────────────────── -->
+      <el-dialog v-model="showSaveConfirm" title="📋 สรุปก่อนบันทึก" width="440px" align-center destroy-on-close>
+        <div class="cs-wrap">
+          <div class="cs-header">
+            <div class="cs-class">{{ ta?.class_name || ta?.class_id }}</div>
+            <div class="cs-meta">คาบ {{ ta?.period }} · {{ ta?.subject_name || ta?.subject_plan_id || '' }}</div>
+            <div class="cs-topic-row">
+              <span class="cs-topic-lbl">หัวข้อ:</span>
+              <span class="cs-topic-val">{{ form.topic }}</span>
+            </div>
+          </div>
+          <div class="cs-stats">
+            <div class="cs-stat cs-s-total">
+              <div class="cs-num">{{ saveSummaryData.total }}</div>
+              <div class="cs-lbl">ทั้งหมด</div>
+            </div>
+            <div class="cs-stat cs-s-present">
+              <div class="cs-num">{{ saveSummaryData.present }}</div>
+              <div class="cs-lbl">มาเรียน</div>
+            </div>
+            <div class="cs-stat cs-s-late">
+              <div class="cs-num">{{ saveSummaryData.late }}</div>
+              <div class="cs-lbl">มาสาย</div>
+            </div>
+            <div class="cs-stat cs-s-skip">
+              <div class="cs-num">{{ saveSummaryData.skip }}</div>
+              <div class="cs-lbl">โดดเรียน</div>
+            </div>
+            <div class="cs-stat cs-s-leave">
+              <div class="cs-num">{{ saveSummaryData.leave }}</div>
+              <div class="cs-lbl">ลา</div>
+            </div>
+          </div>
+        </div>
+        <template #footer>
+          <div class="flex justify-between items-center">
+            <el-button @click="speakSummary" plain style="border-color:#6366f1;color:#6366f1">
+              🔊 อ่านออกเสียง
+            </el-button>
+            <div class="flex gap-2">
+              <el-button @click="showSaveConfirm = false" plain>ยกเลิก</el-button>
+              <el-button type="success" :loading="saving" @click="confirmAndSave">
+                ✅ ยืนยันบันทึก
+              </el-button>
+            </div>
+          </div>
+        </template>
+      </el-dialog>
+
       <!-- Bottom save bar -->
       <div class="tad-bottom-bar">
         <span class="text-sm text-gray-500">
           {{ savedAt ? `💾 บันทึกล่าสุด ${savedAt}` : 'ยังไม่บันทึก' }}
         </span>
-        <el-button type="success" :loading="saving" @click="saveAll" style="min-width:140px" class="tad-save-bottom-btn">
+        <el-button type="success" :loading="saving" @click="openSaveConfirm" style="min-width:140px" class="tad-save-bottom-btn">
           💾 บันทึกทั้งหมด
         </el-button>
       </div>
@@ -1029,6 +1078,64 @@ function buildStudentRecordsPayload() {
     }
   }
   return result
+}
+
+// ─── Confirm before save ──────────────────────────────────────
+const showSaveConfirm = ref(false)
+
+const saveSummaryData = computed(() => ({
+  total:   students.value.length,
+  present: countStatus('มาเรียน'),
+  late:    countStatus('มาสาย'),
+  skip:    countStatus('โดดเรียน'),
+  leave:   countLeave(),
+}))
+
+const saveSummaryText = computed(() => {
+  const d   = saveSummaryData.value
+  const ta_ = ta.value
+  const parts = []
+  if (ta_) {
+    if (ta_.class_name || ta_.class_id) parts.push(`ห้อง${ta_.class_name || ta_.class_id}`)
+    if (ta_.period !== undefined) parts.push(`คาบ${ta_.period}`)
+    if (ta_.subject_name) parts.push(`วิชา${ta_.subject_name}`)
+  }
+  parts.push(`นักเรียนทั้งหมด${d.total}คน`)
+  parts.push(`มาเรียน${d.present}คน`)
+  if (d.late  > 0) parts.push(`มาสาย${d.late}คน`)
+  if (d.skip  > 0) parts.push(`โดดเรียน${d.skip}คน`)
+  if (d.leave > 0) parts.push(`ลา${d.leave}คน`)
+  return parts.join(' ')
+})
+
+function speakSummary() {
+  if (!('speechSynthesis' in window)) {
+    ElMessage.warning('บราวเซอร์นี้ไม่รองรับการอ่านออกเสียง')
+    return
+  }
+  window.speechSynthesis.cancel()
+  const utt = new SpeechSynthesisUtterance(saveSummaryText.value)
+  utt.lang = 'th-TH'
+  utt.rate = 0.88
+  window.speechSynthesis.speak(utt)
+}
+
+function openSaveConfirm() {
+  saveAttempted.value = true
+  if (photosMissing.value) {
+    ElMessage.warning(`กรุณาแนบภาพการสอนให้ครบ 3 ภาพ (ปัจจุบัน ${photosCount.value}/3 ภาพ)`)
+    return
+  }
+  if (!form.value.topic.trim()) {
+    ElMessage.warning('กรุณากรอกหัวข้อที่สอนก่อน')
+    return
+  }
+  showSaveConfirm.value = true
+}
+
+async function confirmAndSave() {
+  showSaveConfirm.value = false
+  await saveAll()
 }
 
 // ─── Save ─────────────────────────────────────────────────────────
@@ -1641,4 +1748,32 @@ async function saveDoublePeriod() {
   .tad-topbar       { flex-direction: column; align-items: stretch; text-align: center; }
   .tad-topbar-title { font-size: 14px; }
 }
+
+/* ── Confirm save modal ───────────────────────────────────────── */
+.cs-wrap { padding: 4px 0 8px; }
+.cs-header {
+  background: linear-gradient(135deg,#eef2ff,#f5f3ff);
+  border-radius: 12px; padding: 14px 18px; margin-bottom: 16px;
+  border: 1.5px solid #c7d2fe;
+}
+.cs-class   { font-size: 20px; font-weight: 800; color: #3730a3; margin-bottom: 2px; }
+.cs-meta    { font-size: 13px; color: #6366f1; font-weight: 600; margin-bottom: 8px; }
+.cs-topic-row { display: flex; gap: 6px; align-items: flex-start; }
+.cs-topic-lbl { font-size: 12px; font-weight: 700; color: #94a3b8; white-space: nowrap; padding-top: 1px; }
+.cs-topic-val { font-size: 13px; color: #1e293b; font-weight: 600; line-height: 1.4; }
+
+.cs-stats {
+  display: flex; gap: 8px; justify-content: space-between;
+}
+.cs-stat {
+  flex: 1; border-radius: 14px; padding: 14px 8px;
+  text-align: center; border: 2px solid transparent;
+}
+.cs-num { font-size: 28px; font-weight: 900; line-height: 1; margin-bottom: 4px; }
+.cs-lbl { font-size: 11px; font-weight: 700; opacity: 0.85; }
+.cs-s-total   { background: linear-gradient(135deg,#1e1b4b,#312e81); color: white; }
+.cs-s-present { background: linear-gradient(135deg,#22c55e,#16a34a); color: white; }
+.cs-s-late    { background: linear-gradient(135deg,#f59e0b,#d97706); color: white; }
+.cs-s-skip    { background: linear-gradient(135deg,#ef4444,#dc2626); color: white; }
+.cs-s-leave   { background: linear-gradient(135deg,#3b82f6,#2563eb); color: white; }
 </style>
