@@ -5,7 +5,7 @@
         <h1 class="title">ตารางสอนของฉัน</h1>
         <p class="subtitle">ตารางสอนสำหรับภาคเรียนปัจจุบัน</p>
         <div class="meta-row">
-          <span v-if="currentTerm" class="meta-chip">ภาคเรียน: {{ currentTerm }}</span>
+          <span v-if="currentTerm" class="meta-chip">{{ schoolStore.termLabel || currentTerm }}</span>
           <span v-if="isLocked" class="meta-chip" style="background:#d1fae5;color:#065f46;">✅ จัดตารางเสร็จแล้ว</span>
         </div>
       </div>

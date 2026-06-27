@@ -10,7 +10,7 @@
               {{ isAdmin ? '📋 จัดการการลาครู' : '📋 ยื่นคำขอลา' }}
             </h1>
             <p class="text-white/80 text-sm mt-1">
-              ภาคเรียน {{ term }}
+              {{ termLabel }}
               <span v-if="isAdmin"> — ดูและจัดการคำขอลาของครูทุกคน</span>
               <span v-else> — ระบบจะจัดครูสอนแทนอัตโนมัติ</span>
             </p>
@@ -232,6 +232,7 @@ const {
 } = useSchoolDb()
 
 const term        = computed(() => schoolStore.currentTerm || '2568_1')
+const termLabel   = computed(() => schoolStore.termLabel || term.value)
 const teacherId   = computed(() => authStore.profile?.teacher_id || authStore.profile?.uid || '')
 const teacherName = computed(() => authStore.profile?.displayName || authStore.profile?.email || '')
 const isAdmin     = computed(() => authStore.hasAnyRole(['school_admin', 'admin', 'superadmin']))

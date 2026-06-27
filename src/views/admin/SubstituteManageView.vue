@@ -8,7 +8,7 @@
           <div>
             <h1 class="text-2xl font-bold text-white">🔄 จัดสอนแทน</h1>
             <p class="text-white/80 text-sm mt-1">
-              ภาคเรียน {{ term }}
+              {{ termLabel }}
               <span v-if="isSubjectHead && !isCoordinator"> — กลุ่มสาระ {{ myDept }}</span>
               <span v-else> — ทุกกลุ่มสาระ</span>
               <span class="ml-2 text-xs opacity-75">● อัปเดตแบบเรียลไทม์</span>
@@ -62,7 +62,7 @@
       </div>
 
       <!-- Request cards -->
-      <el-card v-for="req in dateFilteredRequests" :key="req.leave_id" class="mb-5 shadow-sm">
+      <el-card v-for="req in dateFilteredRequests" :key="req.id" class="mb-5 shadow-sm">
 
         <!-- Request header -->
         <div class="flex justify-between items-center flex-wrap gap-2 mb-3">
@@ -112,7 +112,7 @@
                   </div>
                   <!-- Picker -->
                   <el-select v-else
-                    v-model="picked[req.leave_id + '_' + key]"
+                    v-model="picked[req.id + '_' + key]"
                     placeholder="เลือกครูสอนแทน..."
                     filterable size="small" style="width:100%"
                     :loading="!timetableLoaded">
@@ -141,12 +141,17 @@
                   </el-select>
                 </td>
                 <td class="px-3 py-2 text-center border border-gray-100">
-                  <el-button v-if="a.status !== 'assigned'" type="primary" size="small"
-                    :disabled="!picked[req.leave_id + '_' + key]"
-                    :loading="assigning[req.leave_id + '_' + key]"
-                    @click="doAssign(req, key, a)">จัด</el-button>
+                  <template v-if="a.status !== 'assigned'">
+                    <el-tooltip v-if="a.date !== todayStr" content="จัดสอนแทนได้เฉพาะวันนี้เท่านั้น" placement="top">
+                      <el-button type="primary" size="small" disabled>จัด</el-button>
+                    </el-tooltip>
+                    <el-button v-else type="primary" size="small"
+                      :disabled="!picked[req.id + '_' + key]"
+                      :loading="assigning[req.id + '_' + key]"
+                      @click="doAssign(req, key, a)">จัด</el-button>
+                  </template>
                   <el-button v-else size="small" type="warning" plain
-                    :loading="assigning[req.leave_id + '_' + key]"
+                    :loading="assigning[req.id + '_' + key]"
                     @click="doUnassign(req, key, a)">เปลี่ยน</el-button>
                 </td>
               </tr>
@@ -167,17 +172,21 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import { useSchoolStore } from '@/stores/school'
 import { useAuthStore } from '@/stores/auth'
 import { useSchoolDb } from '@/composables/useSchoolDb'
+import { supabase } from '@/supabase/client'
 
 // ── Rich teacher option ───────────────────────────────────────────
 const TeacherOption = defineComponent({
   props: { t: Object },
   setup(props) {
-    return () => h('div', { style: 'display:flex;align-items:center;gap:8px;padding:1px 0;min-width:0' }, [
-      h('span', { style: 'font-weight:600;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, props.t.fullName),
-      h('span', { style: 'font-size:10px;padding:1px 7px;border-radius:99px;font-weight:700;background:#dcfce7;color:#166534;white-space:nowrap;flex-shrink:0' }, '● ว่าง'),
-      h('span', { style: 'font-size:11px;color:#6b7280;white-space:nowrap;flex-shrink:0' },
-        props.t.periodCountDay > 0 ? `📚 ${props.t.periodCountDay} คาบ` : '📚 ว่างทั้งวัน'),
-    ])
+    return () => {
+      const busy = props.t.busyPeriods || []
+      const busyLabel = busy.length > 0 ? `ไม่ว่าง คาบ ${busy.join(',')}` : 'ว่างทั้งวัน'
+      return h('div', { style: 'display:flex;align-items:center;gap:8px;padding:1px 0;min-width:0' }, [
+        h('span', { style: 'font-weight:600;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, props.t.fullName),
+        h('span', { style: 'font-size:10px;padding:1px 7px;border-radius:99px;font-weight:700;background:#dcfce7;color:#166534;white-space:nowrap;flex-shrink:0' }, '● ว่างคาบนี้'),
+        h('span', { style: 'font-size:11px;color:#6b7280;white-space:nowrap;flex-shrink:0' }, busyLabel),
+      ])
+    }
   },
 })
 
@@ -185,12 +194,13 @@ const TeacherOption = defineComponent({
 const schoolStore = useSchoolStore()
 const authStore   = useAuthStore()
 const {
-  getTeachers, getTimetable,
+  getTeachers,
   assignSubstituteTeacher, unassignSubstituteTeacher,
   subscribeLeaveRequests, getThaiDayFromDate,
 } = useSchoolDb()
 
 const term          = computed(() => schoolStore.currentTerm || '2568_1')
+const termLabel     = computed(() => schoolStore.termLabel || term.value)
 const isAdmin       = computed(() => authStore.isAdmin)
 const isCoordinator = computed(() => authStore.hasAnyRole(['sub_coordinator']))
 const isSubjectHead = computed(() => authStore.hasAnyRole(['subject_head']))
@@ -202,9 +212,14 @@ const timetableLoaded = ref(false)
 const requests        = ref([])
 const teachers        = ref([])
 const timetable       = ref([])
+// Map สำเร็จ: teacher_id → { dayNum(1-7): [periodNums...] } เฉพาะ subject slots
+const teacherScheduleMap = ref({})
 const picked          = reactive({})
 const assigning       = reactive({})
 const selectedDate    = ref(todayStr)
+
+// วันไทย → เลข (ตรงกับ day_of_week ใน DB)
+const THAI_DAY_NUM = { อาทิตย์:7, จันทร์:1, อังคาร:2, พุธ:3, พฤหัสบดี:4, ศุกร์:5, เสาร์:6 }
 
 let unsubscribeSnapshot = null
 
@@ -225,15 +240,8 @@ const teacherMap = computed(() => {
 // จำนวนคาบในวันนั้น รวมคาบสอนแทนที่รับไปแล้ว
 function subPeriodCount(tid, dateStr) {
   if (!tid || !dateStr) return 0
-  const thaiDay = getThaiDayFromDate(dateStr)
-  const timetablePeriods = timetable.value.filter(s => {
-    const sDay = s.day
-    const dayMatch = sDay === thaiDay || String(sDay) === String(
-      ['','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์','อาทิตย์'].indexOf(thaiDay)
-    )
-    return dayMatch && (s.teacher_id === tid || s.teacher_id_snapshot === tid) && s.type !== 'activity'
-  }).map(s => Number(s.period))
-
+  const dayNum = THAI_DAY_NUM[getThaiDayFromDate(dateStr)] || 0
+  const timetablePeriods = teacherScheduleMap.value[tid]?.[dayNum] || []
   const subPeriods = []
   requests.value.forEach(r => {
     Object.values(r.assignments || {}).forEach(a => {
@@ -247,7 +255,9 @@ function subPeriodCount(tid, dateStr) {
 
 // Enrich candidates: รวมคาบสอนแทนที่รับไปแล้วในวันนั้น
 function enrichedCandidates(absentTeacherId, dateStr, periodNo) {
+  // dayNum จากวันที่ (1=จันทร์...7=อาทิตย์) ตรงกับ day_of_week ใน DB
   const thaiDay = getThaiDayFromDate(dateStr)
+  const dayNum  = THAI_DAY_NUM[thaiDay] || 0
 
   // คาบสอนแทนที่ assign แล้วในวันนั้น (จาก requests ปัจจุบัน)
   const subPeriodsMap = {}
@@ -264,14 +274,8 @@ function enrichedCandidates(absentTeacherId, dateStr, periodNo) {
     .filter(t => (t.teacher_id || t.id) !== absentTeacherId)
     .map(t => {
       const tid = t.teacher_id || t.id
-      const daySlots = timetable.value.filter(s => {
-        const sDay = s.day
-        const dayMatch = sDay === thaiDay || String(sDay) === String(
-          ['','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์','อาทิตย์'].indexOf(thaiDay)
-        )
-        return dayMatch && (s.teacher_id === tid || s.teacher_id_snapshot === tid) && s.type !== 'activity'
-      })
-      const timetablePeriods = daySlots.map(s => Number(s.period))
+      // lookup ตรงจาก map ที่ pre-compute ไว้
+      const timetablePeriods = teacherScheduleMap.value[tid]?.[dayNum] || []
       const subPeriods = [...(subPeriodsMap[tid] || [])]
       const allBusy = [...new Set([...timetablePeriods, ...subPeriods])].sort((a,b) => a-b)
       const isFree  = !allBusy.includes(Number(periodNo))
@@ -382,7 +386,7 @@ function setupSnapshot() {
     docs => {
       requests.value = docs
         .filter(r => r.status !== 'cancelled')
-        .sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0))
+        .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
     },
     err => ElMessage.error('ข้อผิดพลาด realtime: ' + err.message)
   )
@@ -392,33 +396,31 @@ onUnmounted(() => { if (unsubscribeSnapshot) unsubscribeSnapshot() })
 
 // ── Actions ───────────────────────────────────────────────────────
 async function doAssign(req, key, slot) {
-  const tid = picked[req.leave_id + '_' + key]
+  const tid = picked[req.id + '_' + key]
   if (!tid) return
   const teacher = teacherMap.value[tid]
   if (!teacher) {
     ElMessage.error('ไม่พบข้อมูลครูที่เลือก กรุณารีเฟรชข้อมูลแล้วลองใหม่')
     return
   }
-  assigning[req.leave_id + '_' + key] = true
+  assigning[req.id + '_' + key] = true
   try {
     const fullName = `${teacher.prefix||''}${teacher.name||''} ${teacher.surname||''}`.trim() || tid
     await assignSubstituteTeacher(
-      req.leave_id, key, slot,
+      req.id, key, slot,
       { teacher_id: tid, teacher_name: fullName },
       { teacher_id: req.teacher_id, teacher_name: req.teacher_name }
     )
-    delete picked[req.leave_id + '_' + key]
+    delete picked[req.id + '_' + key]
     ElMessage.success(`จัด ${fullName} สอนแทนแล้ว`)
-    // Optimistic local update — immediate feedback; onSnapshot will reconcile from Firestore
-    const idx = requests.value.findIndex(r => r.leave_id === req.leave_id)
+    // Optimistic local update
+    const idx = requests.value.findIndex(r => r.id === req.id)
     if (idx !== -1) {
       const updatedAssignments = { ...requests.value[idx].assignments }
       updatedAssignments[key] = {
         ...updatedAssignments[key],
         sub_teacher_id: tid,
         sub_teacher_name: fullName,
-        assigned_by: authStore.profile?.uid || '',
-        assigned_by_name: authStore.profile?.displayName || '',
         status: 'assigned',
       }
       requests.value[idx] = { ...requests.value[idx], assignments: updatedAssignments }
@@ -427,7 +429,7 @@ async function doAssign(req, key, slot) {
     console.error('[doAssign]', e)
     ElMessage.error('บันทึกไม่สำเร็จ: ' + (e?.message || String(e)))
   } finally {
-    assigning[req.leave_id + '_' + key] = false
+    assigning[req.id + '_' + key] = false
   }
 }
 
@@ -435,11 +437,22 @@ async function doUnassign(req, key, slot) {
   try {
     await ElMessageBox.confirm('ยืนยันยกเลิกการมอบหมายนี้?', 'ยืนยัน',
       { type:'warning', confirmButtonText:'ยืนยัน', cancelButtonText:'ย้อนกลับ' })
-    assigning[req.leave_id + '_' + key] = true
-    await unassignSubstituteTeacher(req.leave_id, key, slot.teach_actual_id)
+    assigning[req.id + '_' + key] = true
+    await unassignSubstituteTeacher(req.id, key, slot)
     ElMessage.success('ยกเลิกการมอบหมายแล้ว')
+    const idx = requests.value.findIndex(r => r.id === req.id)
+    if (idx !== -1) {
+      const updatedAssignments = { ...requests.value[idx].assignments }
+      updatedAssignments[key] = {
+        ...updatedAssignments[key],
+        sub_teacher_id: null,
+        sub_teacher_name: null,
+        status: 'unassigned',
+      }
+      requests.value[idx] = { ...requests.value[idx], assignments: updatedAssignments }
+    }
   } catch {} finally {
-    assigning[req.leave_id + '_' + key] = false
+    assigning[req.id + '_' + key] = false
   }
 }
 
@@ -455,9 +468,52 @@ async function loadAll() {
   } finally {
     loading.value = false
   }
-  // โหลด timetable ใน background — ไม่บล็อก UI
-  getTimetable()
-    .then(tt => { timetable.value = Array.isArray(tt) ? tt : []; timetableLoaded.value = true })
+  // โหลด timetable ใน background — ลอง published ก่อน fallback draft
+  function buildScheduleMap(rows) {
+    const map = {}
+    for (const row of (rows || [])) {
+      if (!row.teacher_id) continue
+      const st = row.slot_type
+      if (st === 'activity' || st === 'manual_lock') continue
+      const dayNum = Number(row.day_of_week)
+      const period = Number(row.period_number)
+      if (!dayNum || !period) continue
+      if (!map[row.teacher_id]) map[row.teacher_id] = {}
+      if (!map[row.teacher_id][dayNum]) map[row.teacher_id][dayNum] = new Set()
+      map[row.teacher_id][dayNum].add(period)
+    }
+    const finalMap = {}
+    for (const [tid, days] of Object.entries(map)) {
+      finalMap[tid] = {}
+      for (const [d, pSet] of Object.entries(days)) {
+        finalMap[tid][d] = [...pSet].sort((a, b) => a - b)
+      }
+    }
+    return finalMap
+  }
+
+  const SELECT_COLS = 'teacher_id, day_of_week, period_number, slot_type'
+  const SID = authStore.schoolId
+
+  supabase.from('timetable_slots_published').select(SELECT_COLS)
+    .eq('school_id', SID)
+    .not('slot_type', 'in', '("activity","manual_lock")')
+    .limit(10000)
+    .then(({ data, error }) => {
+      if (!error && data?.length) {
+        teacherScheduleMap.value = buildScheduleMap(data)
+        timetableLoaded.value = true
+      } else {
+        return supabase.from('timetable_slots').select(SELECT_COLS)
+          .eq('school_id', SID)
+          .not('slot_type', 'in', '("activity","manual_lock")')
+          .limit(10000)
+          .then(({ data: d2 }) => {
+            teacherScheduleMap.value = buildScheduleMap(d2)
+            timetableLoaded.value = true
+          })
+      }
+    })
     .catch(() => { timetableLoaded.value = true })
 }
 
