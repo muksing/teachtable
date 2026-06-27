@@ -433,7 +433,7 @@
         <div class="cs-wrap">
           <div class="cs-header">
             <div class="cs-class">{{ ta?.class_name || ta?.class_id }}</div>
-            <div class="cs-meta">คาบ {{ ta?.period }} · {{ ta?.subject_name || ta?.subject_plan_id || '' }}</div>
+            <div class="cs-meta">คาบ {{ ta?.period }} · {{ ttsSubjectName || ta?.subject_plan_id || '' }}</div>
             <div class="cs-topic-row">
               <span class="cs-topic-lbl">หัวข้อ:</span>
               <span class="cs-topic-val">{{ form.topic }}</span>
@@ -1108,11 +1108,24 @@ function classNameForTTS(name) {
   return out.replace(/\s+/g, ' ').trim()
 }
 
-// แปลงตัวเลขเป็นคำไทย (1–20 ใช้ตรง ๆ, อื่น ๆ เรียงตัว)
+// แปลงตัวเลขเป็นคำไทยแบบอ่านจำนวน (ไม่เรียงตัว)
 function numberForTTS(n) {
-  const num = Number(n)
-  if (num >= 0 && num <= 20) return THAI_NUMS[num] || String(n)
-  return [...String(num)].map(d => THAI_DIGITS[+d]).join(' ')
+  const units = ['','หนึ่ง','สอง','สาม','สี่','ห้า','หก','เจ็ด','แปด','เก้า']
+  const num = Math.floor(Number(n))
+  if (num === 0)  return 'ศูนย์'
+  if (num < 10)   return units[num]
+  if (num === 10) return 'สิบ'
+  if (num === 11) return 'สิบเอ็ด'
+  if (num < 20)   return 'สิบ' + units[num % 10]
+  if (num === 20) return 'ยี่สิบ'
+  if (num === 21) return 'ยี่สิบเอ็ด'
+  if (num < 30)   return 'ยี่สิบ' + units[num % 10]
+  const tens = Math.floor(num / 10)
+  const ones = num % 10
+  const tensWord = units[tens] + 'สิบ'
+  if (ones === 0) return tensWord
+  if (ones === 1) return tensWord + 'เอ็ด'
+  return tensWord + units[ones]
 }
 
 // หาชื่อวิชาจาก allSubjects (ถ้า subject_name คือรหัส → แปลงเป็นชื่อ)
