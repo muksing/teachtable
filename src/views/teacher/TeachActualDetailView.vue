@@ -1091,20 +1091,57 @@ const saveSummaryData = computed(() => ({
   leave:   countLeave(),
 }))
 
+const THAI_DIGITS = ['ศูนย์','หนึ่ง','สอง','สาม','สี่','ห้า','หก','เจ็ด','แปด','เก้า']
+const THAI_NUMS   = ['','หนึ่ง','สอง','สาม','สี่','ห้า','หก','เจ็ด','แปด','เก้า',
+                     'สิบ','สิบเอ็ด','สิบสอง','สิบสาม','สิบสี่','สิบห้า','สิบหก','สิบเจ็ด','สิบแปด','สิบเก้า','ยี่สิบ']
+
+// อ่านชื่อห้องเรียนเรียงตัว เช่น ม.6/1 → ม. หก ทับ หนึ่ง
+function classNameForTTS(name) {
+  if (!name) return ''
+  let out = ''
+  for (const ch of name) {
+    if (ch >= '0' && ch <= '9') out += THAI_DIGITS[+ch] + ' '
+    else if (ch === '/') out += 'ทับ '
+    else if (ch === '.') out += '. '
+    else out += ch
+  }
+  return out.replace(/\s+/g, ' ').trim()
+}
+
+// แปลงตัวเลขเป็นคำไทย (1–20 ใช้ตรง ๆ, อื่น ๆ เรียงตัว)
+function numberForTTS(n) {
+  const num = Number(n)
+  if (num >= 0 && num <= 20) return THAI_NUMS[num] || String(n)
+  return [...String(num)].map(d => THAI_DIGITS[+d]).join(' ')
+}
+
+// หาชื่อวิชาจาก allSubjects (ถ้า subject_name คือรหัส → แปลงเป็นชื่อ)
+const ttsSubjectName = computed(() => {
+  const ta_ = ta.value
+  if (!ta_) return ''
+  const code = ta_.subject_plan_id || ta_.subject_id || ''
+  const fromList = allSubjects.value.find(s => s.subject_code === code)
+  if (fromList?.name) return fromList.name
+  // subject_name ที่ enrich มาจาก timetable_slots อาจเป็นชื่อจริงอยู่แล้ว
+  return ta_.subject_name || code
+})
+
 const saveSummaryText = computed(() => {
   const d   = saveSummaryData.value
   const ta_ = ta.value
   const parts = []
   if (ta_) {
-    if (ta_.class_name || ta_.class_id) parts.push(`ห้อง${ta_.class_name || ta_.class_id}`)
-    if (ta_.period !== undefined) parts.push(`คาบ${ta_.period}`)
-    if (ta_.subject_name) parts.push(`วิชา${ta_.subject_name}`)
+    const className = ta_.class_name || ta_.class_id
+    if (className) parts.push(`ห้อง ${classNameForTTS(className)}`)
+    if (ta_.period !== undefined) parts.push(`คาบ ${numberForTTS(ta_.period)}`)
+    const subName = ttsSubjectName.value
+    if (subName) parts.push(`วิชา${subName}`)
   }
-  parts.push(`นักเรียนทั้งหมด${d.total}คน`)
-  parts.push(`มาเรียน${d.present}คน`)
-  if (d.late  > 0) parts.push(`มาสาย${d.late}คน`)
-  if (d.skip  > 0) parts.push(`โดดเรียน${d.skip}คน`)
-  if (d.leave > 0) parts.push(`ลา${d.leave}คน`)
+  parts.push(`นักเรียนทั้งหมด ${numberForTTS(d.total)} คน`)
+  parts.push(`มาเรียน ${numberForTTS(d.present)} คน`)
+  if (d.late  > 0) parts.push(`มาสาย ${numberForTTS(d.late)} คน`)
+  if (d.skip  > 0) parts.push(`โดดเรียน ${numberForTTS(d.skip)} คน`)
+  if (d.leave > 0) parts.push(`ลา ${numberForTTS(d.leave)} คน`)
   return parts.join(' ')
 })
 
