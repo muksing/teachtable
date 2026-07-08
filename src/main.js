@@ -17,3 +17,14 @@ app.mount('#app')
 
 const { initAuthListener } = useMasterAuth()
 initAuthListener(router)
+
+// รีโหลดหน้าอัตโนมัติครั้งเดียวเมื่อ service worker เวอร์ชันใหม่เข้าควบคุมหน้า
+// (ป้องกันแท็บเก่าค้างแสดงโค้ด/แบรนด์เวอร์ชันก่อนหน้าหลัง deploy)
+if ('serviceWorker' in navigator) {
+  let reloaded = false
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloaded) return
+    reloaded = true
+    window.location.reload()
+  })
+}
