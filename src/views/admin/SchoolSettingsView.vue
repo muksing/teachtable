@@ -594,7 +594,8 @@ async function publishTimetableSnapshot() {
   try {
     const sid = schoolId.value
     if (!sid) { ElMessage.error('ไม่พบ schoolId'); return }
-    const currentTerm = `${form.year}_${form.semester}`
+    // ใช้เทอมที่ active จริง (schools.current_term) ไม่ใช่ฟอร์มข้อมูลโรงเรียนซึ่งอาจไม่ตรงกับเทอมจริง
+    const currentTerm = schoolStore.currentTerm || `${form.year}_${form.semester}`
 
     // Load data from Supabase tables
     // หมายเหตุ: ตาราง classes ไม่มีคอลัมน์ term_id (ห้องเรียนไม่ผูกกับเทอม) จึงกรองเฉพาะ school_id
