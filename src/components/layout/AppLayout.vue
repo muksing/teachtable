@@ -19,7 +19,7 @@
             <span v-else class="text-2xl">🏫</span>
           </div>
           <div class="sb-school-info">
-            <div class="sb-app-name">TeachTable</div>
+            <div class="sb-app-name">SchoolLOG</div>
             <div class="sb-school-name">{{ schoolStore.schoolName || 'โรงเรียน' }}</div>
             <div class="sb-term">{{ currentTermLabel }}</div>
           </div>
@@ -127,7 +127,7 @@
           <span /><span /><span />
         </button>
         <div class="topbar-title-wrap">
-          <span class="topbar-title">{{ schoolStore.schoolName || 'TeachTable' }}</span>
+          <span class="topbar-title">{{ schoolStore.schoolName || 'SchoolLOG' }}</span>
           <span class="topbar-sub">{{ currentTermLabel }}</span>
         </div>
         <div class="topbar-avatar">{{ authStore.profile?.displayName?.charAt(0) || '?' }}</div>

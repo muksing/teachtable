@@ -722,7 +722,7 @@ function openNudge(cls) {
   nudgeDialog.value = {
     visible: true,
     cls,
-    message: `เรียน ${cls.teacher_name || 'ครูที่ปรึกษา'}\n\nขอความกรุณาบันทึกการมาเรียนของห้อง ${cls.class_name} ประจำวัน${dateLabel} ในระบบ TeachTable ด้วยนะครับ/ค่ะ\n\nขอบคุณครับ/ค่ะ`,
+    message: `เรียน ${cls.teacher_name || 'ครูที่ปรึกษา'}\n\nขอความกรุณาบันทึกการมาเรียนของห้อง ${cls.class_name} ประจำวัน${dateLabel} ในระบบ SchoolLOG ด้วยนะครับ/ค่ะ\n\nขอบคุณครับ/ค่ะ`,
   }
 }
 

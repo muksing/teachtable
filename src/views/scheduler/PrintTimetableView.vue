@@ -1216,7 +1216,7 @@ async function exportExcel(section) {
   generating.value = `${section}_xlsx`
   try {
     const wb   = new ExcelJS.Workbook()
-    wb.creator = 'TeachTable'
+    wb.creator = 'SchoolLOG'
     const days = DAYS.value
     const perds = PERIODS.value
 
@@ -1245,7 +1245,7 @@ async function exportExcel2(section) {
   generating.value = `${section}_xlsx2`
   try {
     const wb   = new ExcelJS.Workbook()
-    wb.creator = 'TeachTable'
+    wb.creator = 'SchoolLOG'
     const ws   = wb.addWorksheet('data')
     const days = DAYS.value
     const perds = PERIODS.value

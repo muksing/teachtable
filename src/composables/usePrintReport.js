@@ -163,7 +163,7 @@ export function usePrintReport() {
   </table>
 
   <div class="report-footer">
-    <span>ระบบ TeachTable — ${schoolName}</span>
+    <span>ระบบ SchoolLOG — ${schoolName}</span>
     <span>ภาคเรียน: ${schoolStore.currentTerm || '-'}</span>
   </div>
 

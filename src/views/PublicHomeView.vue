@@ -10,7 +10,7 @@
       <div class="lp-brand">
         <div class="lp-brand-icon">🏫</div>
         <div>
-          <div class="lp-brand-name">TeachTable</div>
+          <div class="lp-brand-name">SchoolLOG</div>
           <div class="lp-brand-sub">ระบบบริหารจัดการโรงเรียน</div>
         </div>
       </div>

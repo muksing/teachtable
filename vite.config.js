@@ -13,9 +13,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icons/*.png', 'icons/*.svg'],
       manifest: {
-        name: 'TeachTable School',
-        short_name: 'TeachTable',
-        description: 'ระบบบริหารโรงเรียน TeachTable',
+        name: 'SchoolLOG',
+        short_name: 'SchoolLOG',
+        description: 'ระบบบริหารโรงเรียน SchoolLOG',
         theme_color: '#6d28d9',
         background_color: '#ffffff',
         display: 'standalone',
