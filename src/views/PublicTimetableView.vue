@@ -18,13 +18,13 @@
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1">📅 ค้นหาตามห้องเรียน</label>
             <el-select v-model="selectedClass" placeholder="เลือกห้องเรียน" class="w-full" filterable clearable>
-              <el-option v-for="c in classes" :key="c.class_id" :label="c.class_id" :value="c.class_id" />
+              <el-option v-for="c in classes" :key="c.class_name" :label="c.class_name" :value="c.class_name" />
             </el-select>
           </div>
           <div>
             <label class="block text-sm font-semibold text-gray-700 mb-1">👨‍🏫 ค้นหาตามชื่อครู</label>
             <el-select v-model="selectedTeacher" placeholder="เลือกชื่อครู" class="w-full" filterable clearable>
-              <el-option v-for="t in teachers" :key="t.teacher_id" :label="`${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
+              <el-option v-for="t in teachers" :key="t.teacher_code" :label="`${t.prefix||''}${t.first_name} ${t.last_name}`" :value="t.teacher_code" />
             </el-select>
           </div>
         </div>
@@ -131,8 +131,8 @@ const DAYS = [
 ]
 
 const selectedTeacherName = computed(() => {
-  const t = teachers.value.find(x => x.teacher_id === selectedTeacher.value)
-  return t ? `${t.prefix||''}${t.name} ${t.surname}` : selectedTeacher.value
+  const t = teachers.value.find(x => x.teacher_code === selectedTeacher.value)
+  return t ? `${t.prefix||''}${t.first_name} ${t.last_name}` : selectedTeacher.value
 })
 
 async function loadSchoolData() {

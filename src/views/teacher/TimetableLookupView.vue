@@ -15,13 +15,13 @@
           <div class="filter-item">
             <label>📅 ค้นหาตามห้องเรียน</label>
             <el-select v-model="selectedClass" placeholder="เลือกห้องเรียน" filterable clearable class="w-full">
-              <el-option v-for="c in classes" :key="c.class_id" :label="c.class_id" :value="c.class_id" />
+              <el-option v-for="c in classes" :key="c.class_name" :label="c.class_name" :value="c.class_name" />
             </el-select>
           </div>
           <div class="filter-item">
             <label>👨‍🏫 ค้นหาตามชื่อครู</label>
             <el-select v-model="selectedTeacher" placeholder="เลือกชื่อครู" filterable clearable class="w-full">
-              <el-option v-for="t in teachers" :key="t.teacher_id" :label="`${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
+              <el-option v-for="t in teachers" :key="t.teacher_code" :label="`${t.prefix||''}${t.first_name} ${t.last_name}`" :value="t.teacher_code" />
             </el-select>
           </div>
           <el-button :loading="loading" @click="loadPublished">รีเฟรช</el-button>
@@ -144,8 +144,8 @@ function buildPeriodTimesMap(times) {
 const periodTimes = computed(() => buildPeriodTimesMap(schoolStore.schoolInfo?.period_times))
 
 const selectedTeacherName = computed(() => {
-  const t = teachers.value.find(x => x.teacher_id === selectedTeacher.value)
-  return t ? `${t.prefix || ''}${t.name} ${t.surname}` : selectedTeacher.value
+  const t = teachers.value.find(x => x.teacher_code === selectedTeacher.value)
+  return t ? `${t.prefix || ''}${t.first_name} ${t.last_name}` : selectedTeacher.value
 })
 
 function getSlot(day, period) {

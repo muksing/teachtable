@@ -597,8 +597,9 @@ async function publishTimetableSnapshot() {
     const currentTerm = `${form.year}_${form.semester}`
 
     // Load data from Supabase tables
+    // หมายเหตุ: ตาราง classes ไม่มีคอลัมน์ term_id (ห้องเรียนไม่ผูกกับเทอม) จึงกรองเฉพาะ school_id
     const [classesRes, teachersRes, slotsRes] = await Promise.all([
-      supabase.from('classes').select('*').eq('school_id', sid).eq('term_id', currentTerm).order('class_id'),
+      supabase.from('classes').select('*').eq('school_id', sid).order('class_name'),
       supabase.from('teachers').select('*').eq('school_id', sid).eq('term_id', currentTerm).order('first_name'),
       supabase.from('timetable_slots').select('*').eq('school_id', sid).eq('term_id', currentTerm).limit(10000),
     ])
