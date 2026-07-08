@@ -426,7 +426,7 @@ async function openSubDialog() {
   showSubDialog.value = true
   if (teacherList.value.length === 0) {
     loadingTeachers.value = true
-    try { teacherList.value = await getTeachers() } catch(e) {}
+    try { teacherList.value = await getTeachers() } catch (e) { ElMessage.error('โหลดรายชื่อครูไม่สำเร็จ: ' + e.message) }
     loadingTeachers.value = false
   }
 }

@@ -452,12 +452,16 @@ async function confirmDelete(row) {
       'ยืนยันการลบ',
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
-    loading.value = true
+  } catch {
+    return // ผู้ใช้กดยกเลิก
+  }
+  loading.value = true
+  try {
     await deleteClass(row.class_id)
     ElMessage.success('ลบห้องเรียนเรียบร้อย')
     classes.value = await getClasses()
-  } catch {
-    // cancelled or error
+  } catch (e) {
+    ElMessage.error('ลบห้องเรียนไม่สำเร็จ: ' + e.message)
   } finally {
     loading.value = false
   }
@@ -473,14 +477,22 @@ async function deleteSelected() {
       'ยืนยันการลบ',
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
-    loading.value = true
-    for (const row of selectedRows.value) {
-      await deleteClass(row.class_id)
-    }
-    selectedRows.value = []
+  } catch {
+    return // ผู้ใช้กดยกเลิก
+  }
+  loading.value = true
+  const failed = []
+  for (const row of selectedRows.value) {
+    try { await deleteClass(row.class_id) } catch (e) { failed.push(row.class_id); console.warn('deleteClass failed:', row.class_id, e.message) }
+  }
+  selectedRows.value = []
+  classes.value = await getClasses()
+  loading.value = false
+  if (failed.length) {
+    ElMessage.error(`ลบไม่สำเร็จบางรายการ: ${failed.join(', ')}`)
+  } else {
     ElMessage.success('ลบรายการที่เลือกเรียบร้อย')
-    classes.value = await getClasses()
-  } catch { /* cancelled */ } finally { loading.value = false }
+  }
 }
 
 async function deleteAll() {
@@ -492,13 +504,21 @@ async function deleteAll() {
       'ยืนยันการลบทั้งหมด',
       { confirmButtonText: 'ลบทั้งหมด', cancelButtonText: 'ยกเลิก', type: 'error' }
     )
-    loading.value = true
-    for (const row of [...allRows]) {
-      await deleteClass(row.class_id)
-    }
+  } catch {
+    return // ผู้ใช้กดยกเลิก
+  }
+  loading.value = true
+  const failed = []
+  for (const row of [...allRows]) {
+    try { await deleteClass(row.class_id) } catch (e) { failed.push(row.class_id); console.warn('deleteClass failed:', row.class_id, e.message) }
+  }
+  classes.value = await getClasses()
+  loading.value = false
+  if (failed.length) {
+    ElMessage.error(`ลบไม่สำเร็จบางรายการ: ${failed.join(', ')}`)
+  } else {
     ElMessage.success('ลบทั้งหมดเรียบร้อย')
-    classes.value = await getClasses()
-  } catch { /* cancelled */ } finally { loading.value = false }
+  }
 }
 
 // ===== Export =====
