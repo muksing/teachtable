@@ -67,29 +67,29 @@
               <span class="text-gray-700 font-medium">{{ row.counts?.teachers ?? '...' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="วิชา" align="center" width="80">
-            <template #default="{ row }">
-              <span class="text-gray-700 font-medium">{{ row.counts?.subjects ?? '...' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="ห้อง/Lab" align="center" width="90">
-            <template #default="{ row }">
-              <span class="text-gray-700 font-medium">{{ row.counts?.rooms ?? '...' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="นักเรียน" align="center" width="90">
-            <template #default="{ row }">
-              <span class="text-gray-700 font-medium">{{ row.counts?.students ?? '...' }}</span>
-            </template>
-          </el-table-column>
           <el-table-column label="ตารางสอน" align="center" width="100">
             <template #default="{ row }">
               <span class="text-gray-700 font-medium">{{ row.counts?.timetable_slots ?? '...' }}</span>
             </template>
           </el-table-column>
+          <el-table-column label="ตารางเผยแพร่" align="center" width="110">
+            <template #default="{ row }">
+              <span class="text-gray-700 font-medium">{{ row.counts?.timetable_slots_published ?? '...' }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="กิจกรรม" align="center" width="90">
             <template #default="{ row }">
               <span class="text-gray-700 font-medium">{{ row.counts?.activity_bookings ?? '...' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="บันทึกเข้าสอน" align="center" width="110">
+            <template #default="{ row }">
+              <span class="text-gray-700 font-medium">{{ row.counts?.teach_actuals ?? '...' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="พฤติกรรม" align="center" width="90">
+            <template #default="{ row }">
+              <span class="text-gray-700 font-medium">{{ row.counts?.behavior_logs ?? '...' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="แถวรวม" align="center" width="100">
@@ -141,7 +141,7 @@
             </el-select>
           </el-form-item>
           <el-alert type="info" :closable="false" class="mb-3">
-            ค่าเริ่มต้นคือสร้างเทอมแบบข้อมูลครูว่าง จากนั้นค่อยดึงครูจากเทอมอื่นในหน้าจัดการครู
+            ห้องเรียน/วิชา/ห้อง Lab/นักเรียน ใช้ร่วมกันทุกเทอมอยู่แล้ว ไม่ต้องโคลน — เลือกโคลนเฉพาะข้อมูลที่เปลี่ยนทุกเทอมด้านล่าง (ครูติ๊กไว้ให้แล้วเป็นค่าเริ่มต้น กันลืม)
           </el-alert>
           <div v-if="cloneFrom" class="mb-4 px-2">
             <div class="text-sm font-semibold text-gray-600 mb-2">เลือกข้อมูลที่จะโคลน:</div>
@@ -267,16 +267,22 @@ const cloneTarget = ref('')
 const newTermIdForClone = ref('')
 
 // Tables that can be cloned (mapped to Supabase tables)
-// classes ไม่มีคอลัมน์ term_id (ห้องเรียนใช้ร่วมกันทุกเทอมอยู่แล้ว) จึงไม่มีในรายการโคลนนี้
+// classes, rooms, subjects, students, attendance_records ไม่มีคอลัมน์ term_id (ใช้ร่วมกันทุกเทอมอยู่แล้ว) จึงไม่มีในรายการโคลนนี้
 const CLONE_COLS = [
-  { key: 'teachers',          label: '👨‍🏫 ครู',           defaultOn: true  },
-  { key: 'subjects',          label: '📚 วิชา',           defaultOn: true  },
-  { key: 'rooms',             label: '🚪 ห้อง/Lab',       defaultOn: true  },
-  { key: 'students',          label: '👨‍🎓 นักเรียน',     defaultOn: true  },
-  { key: 'timetable_slots',   label: '📅 ตารางสอน',       defaultOn: true  },
-  { key: 'activity_bookings', label: '🎯 กิจกรรม',        defaultOn: false },
+  { key: 'teachers',           label: '👨‍🏫 ครู',           defaultOn: true  },
+  { key: 'timetable_slots',    label: '📅 ตารางสอน',       defaultOn: true  },
+  { key: 'activity_bookings',  label: '🎯 กิจกรรม',        defaultOn: false },
+  { key: 'teaching_assignments', label: '📋 มอบหมายภาระงาน', defaultOn: false },
+  { key: 'clubs',               label: '🏸 ชุมนุม',          defaultOn: false },
 ]
 const cloneCollections = reactive(CLONE_COLS.map(c => ({ ...c, selected: c.defaultOn })))
+
+// ตารางที่มีคอลัมน์ term_id จริงทั้งหมด (สำหรับนับ/export/ลบ — ไม่ใช่รายการโคลน)
+const TERM_SCOPED_TABLES = [
+  'teachers', 'timetable_slots', 'timetable_slots_published', 'activity_bookings',
+  'teach_actuals', 'behavior_logs', 'clubs', 'club_memberships',
+  'score_records', 'teaching_assignments', 'leave_requests',
+]
 
 // ── Stats ─────────────────────────────────────────────────────────────────
 const totalRows = computed(() => terms.value.reduce((s, t) => s + (t.totalRows || 0), 0))
@@ -289,16 +295,15 @@ async function loadTerms() {
 
   try {
     // Discover distinct term_ids from all term-scoped tables
-    // classes ไม่มีคอลัมน์ term_id (ห้องเรียนไม่ผูกกับเทอม) จึงไม่รวมในรายการนี้
-    const tables = ['teachers','subjects','rooms','students','timetable_slots','activity_bookings']
+    const tables = TERM_SCOPED_TABLES
     const termIdSet = new Set([currentTerm.value])
 
     // Also load from academic_terms table if it exists
     const { data: academicTerms } = await supabase
       .from('academic_terms')
-      .select('term_id')
+      .select('term_name')
       .eq('school_id', sid)
-    if (academicTerms) academicTerms.forEach(r => termIdSet.add(r.term_id))
+    if (academicTerms) academicTerms.forEach(r => r.term_name && termIdSet.add(r.term_name))
 
     // Collect term_ids from each table
     const discoverFailed = []
@@ -340,8 +345,7 @@ async function loadTerms() {
 }
 
 async function countTermRows(termId, sid) {
-  // classes ไม่มีคอลัมน์ term_id (ห้องเรียนไม่ผูกกับเทอม) จึงไม่รวมในรายการนี้
-  const tables = ['teachers','subjects','rooms','students','timetable_slots','activity_bookings']
+  const tables = TERM_SCOPED_TABLES
   const counts = {}
   await Promise.all(tables.map(async tbl => {
     try {
@@ -608,8 +612,7 @@ async function exportTerm(termId) {
   try {
     ElMessage.info(`กำลัง export เทอม ${termId}...`)
     const sid = schoolId.value
-    // classes ไม่มีคอลัมน์ term_id (ห้องเรียนไม่ผูกกับเทอม) จึงไม่รวมในรายการนี้
-    const tables = ['teachers','subjects','rooms','students','timetable_slots','activity_bookings']
+    const tables = TERM_SCOPED_TABLES
     const wb = XLSX.utils.book_new()
     for (const tbl of tables) {
       const { data } = await supabase.from(tbl).select('*').eq('school_id', sid).eq('term_id', termId)
@@ -635,9 +638,8 @@ async function deleteTerm(termId) {
   )
   try {
     const sid = schoolId.value
-    // classes ไม่มีคอลัมน์ term_id (ห้องเรียนไม่ผูกกับเทอม) จึงไม่รวมในรายการนี้ — ลบเทอมจะไม่ลบห้องเรียน
-    const tables = ['teachers','subjects','rooms','students',
-      'timetable_slots','activity_bookings','teach_actuals','behavior_logs','attendance_records']
+    // classes, rooms, subjects, students, attendance_records ไม่มีคอลัมน์ term_id — ลบเทอมจะไม่ลบสิ่งเหล่านี้
+    const tables = TERM_SCOPED_TABLES
 
     const failed = []
     for (const tbl of tables) {
@@ -649,7 +651,7 @@ async function deleteTerm(termId) {
     }
 
     // Remove from academic_terms
-    await supabase.from('academic_terms').delete().eq('school_id', sid).eq('term_id', termId)
+    await supabase.from('academic_terms').delete().eq('school_id', sid).eq('term_name', termId)
 
     ElMessage.success(`ลบเทอม ${termId} เรียบร้อย`)
     await loadTerms()
