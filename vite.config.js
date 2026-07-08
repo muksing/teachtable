@@ -54,10 +54,10 @@ export default defineConfig({
     outDir: 'dist',
     rollupOptions: {
       output: {
+        // ใส่ content hash ใน filename เสมอ (ค่า default ของ Vite) เพื่อ cache-bust
+        // อัตโนมัติทุกครั้งที่ deploy — ถ้าตั้งชื่อไฟล์คงที่ (ไม่มี hash) เบราว์เซอร์/CDN/
+        // เครือข่ายมือถือจะแคชไฟล์เก่าไว้ที่ URL เดิมได้เรื่อย ๆ แม้เนื้อหาจะเปลี่ยนแล้ว
         inlineDynamicImports: true,
-        entryFileNames: 'assets/[name].js',
-        chunkFileNames: 'assets/[name].js',
-        assetFileNames: 'assets/[name].[ext]',
       },
     },
     assetsInlineLimit: 999999999,
