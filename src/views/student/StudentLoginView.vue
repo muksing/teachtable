@@ -7,19 +7,47 @@
         <p class="login-subtitle">ตรวจสอบคะแนนและข้อมูลการเรียน</p>
       </div>
 
-      <form class="login-form" @submit.prevent="handleLogin">
-        <div class="field-group">
-          <label class="field-label">รหัสนักเรียน</label>
-          <input
-            v-model="form.studentCode"
-            type="text"
-            class="field-input"
-            placeholder="เช่น 12345"
-            autocomplete="username"
-            required
-          />
-        </div>
+      <!-- login mode toggle -->
+      <div class="mode-tabs">
+        <button class="mode-tab" :class="{ active: loginMode === 'code' }" @click="loginMode = 'code'; errorMsg = ''">
+          🎫 รหัสนักเรียน
+        </button>
+        <button class="mode-tab" :class="{ active: loginMode === 'email' }" @click="loginMode = 'email'; errorMsg = ''">
+          📧 อีเมล
+        </button>
+      </div>
 
+      <form class="login-form" @submit.prevent="handleLogin">
+
+        <!-- Mode: รหัสนักเรียน -->
+        <template v-if="loginMode === 'code'">
+          <div class="field-group">
+            <label class="field-label">รหัสนักเรียน</label>
+            <input
+              v-model="form.studentCode"
+              type="text"
+              class="field-input"
+              placeholder="เช่น 12345"
+              autocomplete="username"
+            />
+          </div>
+        </template>
+
+        <!-- Mode: อีเมล -->
+        <template v-else>
+          <div class="field-group">
+            <label class="field-label">อีเมล</label>
+            <input
+              v-model="form.email"
+              type="email"
+              class="field-input"
+              placeholder="email@example.com"
+              autocomplete="email"
+            />
+          </div>
+        </template>
+
+        <!-- Credential (ใช้ทั้ง 2 mode) -->
         <div class="field-group">
           <label class="field-label">
             {{ hasSetPin ? 'รหัสผ่าน (PIN)' : 'เลขบัตรประชาชน หรือ วันเดือนปีเกิด' }}
@@ -42,7 +70,7 @@
           </p>
         </div>
 
-        <div v-if="!schoolId" class="no-school-msg">
+        <div v-if="loginMode === 'code' && !schoolId" class="no-school-msg">
           ลิงก์ไม่ถูกต้อง —
           <router-link to="/" class="picker-link">กลับไปเลือกโรงเรียน</router-link>
         </div>
@@ -71,11 +99,12 @@ const route = useRoute()
 const router = useRouter()
 const studentStore = useStudentStore()
 
-const form = ref({ studentCode: '', credential: '' })
-const loading = ref(false)
-const showCred = ref(false)
+const form = ref({ studentCode: '', email: '', credential: '' })
+const loading   = ref(false)
+const showCred  = ref(false)
 const hasSetPin = ref(false)
-const errorMsg = ref('')
+const errorMsg  = ref('')
+const loginMode = ref('code')  // 'code' | 'email'
 
 // Pre-fill school_id from query param (admin distributes the link)
 const schoolId = ref(route.query.school || '')
@@ -86,18 +115,22 @@ onMounted(() => {
 
 async function handleLogin() {
   errorMsg.value = ''
-  if (!schoolId.value) {
-    errorMsg.value = 'ลิงก์ไม่ถูกต้อง — ขอลิงก์ใหม่จากครูหรือผู้ดูแลระบบ'
-    return
-  }
   loading.value = true
   try {
-    const ok = await studentStore.login(schoolId.value, form.value.studentCode.trim(), form.value.credential.trim())
+    let ok = false
+    if (loginMode.value === 'email') {
+      if (!form.value.email.trim()) { errorMsg.value = 'กรุณากรอกอีเมล'; return }
+      ok = await studentStore.loginByEmail(form.value.email.trim(), form.value.credential.trim())
+    } else {
+      if (!schoolId.value) { errorMsg.value = 'ลิงก์ไม่ถูกต้อง — ขอลิงก์ใหม่จากครูหรือผู้ดูแลระบบ'; return }
+      ok = await studentStore.login(schoolId.value, form.value.studentCode.trim(), form.value.credential.trim())
+    }
     if (!ok) {
-      errorMsg.value = 'รหัสนักเรียนหรือรหัสผ่านไม่ถูกต้อง'
+      errorMsg.value = loginMode.value === 'email'
+        ? 'ไม่พบบัญชีที่ตรงกับอีเมลและรหัสผ่านนี้'
+        : 'รหัสนักเรียนหรือรหัสผ่านไม่ถูกต้อง'
       return
     }
-    // ถ้ายังไม่ได้ตั้ง PIN → แนะนำให้ตั้ง
     if (!studentStore.session?.has_set_pin) {
       router.push('/student/change-pin')
     } else {
@@ -183,5 +216,23 @@ async function handleLogin() {
 .back-school-link {
   display: block; text-align: center; color: #9ca3af; font-size: 13px;
   text-decoration: none; margin-top: 4px;
+}
+
+/* ── Login mode tabs ── */
+.mode-tabs {
+  display: flex; gap: 0;
+  background: #f1f5f9; border-radius: 14px; padding: 4px;
+  margin-bottom: 20px;
+}
+.mode-tab {
+  flex: 1; padding: 11px 8px; border: none; border-radius: 11px;
+  background: transparent; color: #64748b;
+  font-size: 15px; font-weight: 700; cursor: pointer;
+  transition: all 0.15s;
+}
+.mode-tab.active {
+  background: #fff;
+  color: #1e293b;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 </style>

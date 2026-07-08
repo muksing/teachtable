@@ -501,7 +501,7 @@ onMounted(async () => {
   pageLoading.value = true
   try {
     const [cls, settings] = await Promise.all([getClasses(), getBehaviorSettings()])
-    classes.value          = cls
+    classes.value          = cls.filter(c => !c.is_schedule_only)
     behaviorSettings.value = settings
   } catch {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ')

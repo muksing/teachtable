@@ -50,7 +50,12 @@
         <div class="mta-teacher-summary">
           <div class="mta-teacher-summary-title-row">
             <div class="mta-teacher-summary-title">📊 สรุปการลืมบันทึก รายครู</div>
-            <div style="display:flex;gap:6px">
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <el-button size="small" type="success" :loading="notifySending"
+                :disabled="!teacherSummary.length"
+                @click="openNotifyAll">
+                📨 แจ้งเตือนทุกคน
+              </el-button>
               <el-button size="small" type="warning" @click="printSummary">🖨️ พิมพ์ตารางสรุป</el-button>
               <el-button size="small" type="danger" @click="printAllTeachers">🖨️ พิมพ์ทุกคน</el-button>
             </div>
@@ -81,26 +86,54 @@
                 <el-button size="small" type="primary" plain @click="printOneTeacher(row)">🖨️ พิมพ์</el-button>
               </template>
             </el-table-column>
+            <el-table-column label="แจ้งเตือน" width="110" align="center">
+              <template #default="{ row }">
+                <el-button size="small" type="success" plain @click="openNotifyOne(row)">📨 ส่ง</el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </div>
 
+        <!-- ── Notify Dialog ── -->
+        <el-dialog v-model="notifyDlg.show" title="📨 ส่งข้อความแจ้งเตือนครู" width="480px" destroy-on-close>
+          <div class="notify-target-row">
+            <el-tag :type="notifyDlg.targetAll ? 'success' : 'info'" size="large" effect="light">
+              {{ notifyDlg.targetAll
+                ? `ครูทุกคนที่มีค้าง (${teacherSummary.length} คน)`
+                : `เฉพาะ ${notifyDlg.targetName}` }}
+            </el-tag>
+          </div>
+          <div class="mt-3 mb-1 text-xs font-bold text-gray-600">ประเภทข้อความ</div>
+          <el-radio-group v-model="notifyDlg.type" class="mb-3">
+            <el-radio-button value="reminder">🔔 แจ้งเตือน</el-radio-button>
+            <el-radio-button value="urgent">⚠️ เร่งด่วน</el-radio-button>
+            <el-radio-button value="info">ℹ️ ทั่วไป</el-radio-button>
+          </el-radio-group>
+          <div class="mt-1 mb-1 text-xs font-bold text-gray-600">ข้อความแจ้งเตือน (แก้ไขได้)</div>
+          <el-input
+            v-model="notifyDlg.message"
+            type="textarea" :rows="4"
+            style="font-size:13px"
+          />
+          <el-button size="small" plain class="mt-1" @click="copyNotifyMsg">📋 คัดลอก</el-button>
+          <template #footer>
+            <el-button @click="notifyDlg.show = false">ยกเลิก</el-button>
+            <el-button type="success" :loading="notifySending" @click="sendNotify">
+              📨 ส่งข้อความ
+            </el-button>
+          </template>
+        </el-dialog>
+
         <!-- Filter bar -->
         <div class="mta-filter-bar">
-          <el-select
+          <TeacherSelect
             v-model="filterTeacher"
-            clearable
-            filterable
+            :teachers="teacherOptions"
             placeholder="ครูทั้งหมด"
+            clearable
             size="small"
             style="min-width:200px"
-          >
-            <el-option
-              v-for="t in teacherOptions"
-              :key="t.id"
-              :value="t.id"
-              :label="t.name"
-            />
-          </el-select>
+          />
 
           <el-date-picker
             v-model="filterDate"
@@ -242,7 +275,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -261,9 +294,89 @@ const allData      = ref([])
 const filterTeacher = ref('')
 const filterDate    = ref('')
 
+// ── Notify dialog ──────────────────────────────────────────────────────────
+const notifySending = ref(false)
+const notifyDlg = reactive({
+  show:       false,
+  targetAll:  false,
+  targetId:   '',
+  targetName: '',
+  type:       'reminder',
+  message:    '',
+})
+
+function defaultMessage(teacherName, count) {
+  return `เรียน ${teacherName || 'คุณครู'}\nขณะนี้ท่านมีรายการบันทึกการสอนค้างอยู่ ${count || ''} คาบ กรุณาดำเนินการให้เป็นปัจจุบัน\nขอบคุณครับ/ค่ะ`
+}
+
+function openNotifyOne(row) {
+  notifyDlg.targetAll  = false
+  notifyDlg.targetId   = row.id || ''
+  notifyDlg.targetName = row.name || ''
+  notifyDlg.type       = 'reminder'
+  notifyDlg.message    = defaultMessage(row.name, row.count)
+  notifyDlg.show       = true
+}
+
+function openNotifyAll() {
+  notifyDlg.targetAll  = true
+  notifyDlg.targetId   = ''
+  notifyDlg.targetName = ''
+  notifyDlg.type       = 'reminder'
+  notifyDlg.message    = `เรียน คณะครูที่มีรายการค้างบันทึก\nขณะนี้ท่านมีรายการบันทึกการสอนค้างอยู่ กรุณาดำเนินการให้เป็นปัจจุบัน\nขอบคุณครับ/ค่ะ`
+  notifyDlg.show       = true
+}
+
+function copyNotifyMsg() {
+  navigator.clipboard.writeText(notifyDlg.message).catch(() => {})
+  ElMessage.success('คัดลอกแล้ว')
+}
+
+async function sendNotify() {
+  if (!notifyDlg.message.trim()) { ElMessage.warning('กรุณาพิมพ์ข้อความ'); return }
+  notifySending.value = true
+  try {
+    const schoolId   = authStore.schoolId
+    const authorId   = authStore.profile?.uid || authStore.profile?.teacher_id || ''
+    const authorName = authStore.profile?.displayName || authStore.profile?.name || 'ผู้บริหาร'
+    if (notifyDlg.targetAll) {
+      // ส่งทุกครูที่มีค้าง — insert แยกแต่ละคนเพื่อให้ filter per-teacher ใช้งานได้
+      const rows = teacherSummary.value.map(t => ({
+        school_id:        schoolId,
+        author_id:        authorId,
+        author_name:      authorName,
+        author_role:      'admin',
+        content:          defaultMessage(t.name, t.count),
+        type:             notifyDlg.type,
+        target_teacher_id: t.id || null,
+      }))
+      const { error } = await supabase.from('school_announcements').insert(rows)
+      if (error) throw error
+      ElMessage.success(`ส่งข้อความถึงครู ${rows.length} คน เรียบร้อย`)
+    } else {
+      const { error } = await supabase.from('school_announcements').insert({
+        school_id:        schoolId,
+        author_id:        authorId,
+        author_name:      authorName,
+        author_role:      'admin',
+        content:          notifyDlg.message,
+        type:             notifyDlg.type,
+        target_teacher_id: notifyDlg.targetId || null,
+      })
+      if (error) throw error
+      ElMessage.success('ส่งข้อความเรียบร้อย')
+    }
+    notifyDlg.show = false
+  } catch (e) {
+    ElMessage.error('ส่งข้อความไม่สำเร็จ: ' + e.message)
+  } finally {
+    notifySending.value = false
+  }
+}
+
 // ── Role ──────────────────────────────────────────────────────────────────
 const isAdmin = computed(() =>
-  authStore.hasAnyRole(['school_admin', 'admin', 'superadmin'])
+  authStore.hasAnyRole(['school_admin', 'admin', 'superadmin', 'school_director'])
 )
 
 const myTeacherId = computed(() =>
@@ -311,9 +424,14 @@ function relativeLabel(dateKey) {
 // ── Teacher view data ─────────────────────────────────────────────────────
 const unfilled = computed(() => {
   const myId = myTeacherId.value
-  return allData.value.filter(r =>
-    String(r.teacher_plan_id) === myId || String(r.subject_actual_teacher_id) === myId
-  )
+  return allData.value.filter(r => {
+    // ถ้ามีครูสอนแทนรับมอบหมายแล้ว (is_substitute_mandatory=true) → ให้ครูสอนแทนรับผิดชอบ
+    // ครูเจ้าของคาบ (teacher_plan_id) ที่ลาอยู่ ไม่ต้องแสดงในรายการของตัวเอง
+    if (r.is_substitute_mandatory && r.subject_actual_teacher_id) {
+      return String(r.subject_actual_teacher_id) === myId
+    }
+    return String(r.teacher_plan_id) === myId
+  })
 })
 
 const groups = computed(() => {
@@ -346,8 +464,8 @@ const teacherOptions = computed(() => {
     if (id && !map[id]) map[id] = r.teacher_plan_name || id
   }
   return Object.entries(map)
-    .map(([id, name]) => ({ id, name }))
-    .sort((a, b) => a.name.localeCompare(b.name, 'th'))
+    .map(([teacher_id, fullName]) => ({ teacher_id, name: fullName, surname: '', prefix: '', photo_url: '' }))
+    .sort((a, b) => String(a.teacher_id).localeCompare(String(b.teacher_id), 'th', { numeric: true }))
 })
 
 const filteredRows = computed(() => {
@@ -537,7 +655,7 @@ function printDetail() {
   const now = new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
   const rangeLabel = `${maxDays.value} วันล่าสุด`
   const filterLabel = filterTeacher.value
-    ? (teacherOptions.value.find(t => t.id === filterTeacher.value)?.name || filterTeacher.value)
+    ? (teacherOptions.value.find(t => t.teacher_id === filterTeacher.value)?.name || filterTeacher.value)
     : 'ครูทุกคน'
 
   const detailByTeacher = {}

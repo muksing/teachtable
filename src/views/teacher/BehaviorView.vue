@@ -276,7 +276,7 @@ function scoreClass(score) {
 // ─── Load ─────────────────────────────────────────────────────────────────────
 onMounted(async () => {
   try {
-    classes.value = await getClasses()
+    classes.value = (await getClasses()).filter(c => !c.is_schedule_only)
   } catch (e) {
     ElMessage.error('โหลดห้องเรียนไม่สำเร็จ: ' + e.message)
   }
@@ -289,8 +289,8 @@ async function onClassChange() {
   summaryData.value = []
   if (!selectedClassId.value) return
   try {
-    const studs = await getStudents(selectedClassId.value)
-    students.value = studs.filter(s => !s.student_status || s.student_status === 'เรียนอยู่')
+    const studs = await getStudents(selectedClassId.value, { activeOnly: true })
+    students.value = studs
   } catch (e) {
     ElMessage.error('โหลดนักเรียนไม่สำเร็จ: ' + e.message)
   }

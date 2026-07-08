@@ -169,21 +169,30 @@ async function buildMissingPayloads() {
       .gte('date', start).lte('date', today)
       .range(f, t)
   )
-  // key = class|date|period|subject_id — ถ้า subject_id ผิดก็ไม่นับว่ามี
-  const existSet = new Set(existing.map(r => `${r.class_id}|${r.date}|${r.period_number}|${r.subject_id}`))
+  // key พร้อม subject_id — ถ้า subject_id ผิดก็ไม่นับว่ามี
+  const existSet     = new Set(existing.map(r => `${r.class_id}|${r.date}|${r.period_number}|${r.subject_id}`))
+  // key ไม่มี subject_id — ใช้ตรวจว่า record มีอยู่แต่ subject_id ผิด
+  const existSlotSet = new Set(existing.map(r => `${r.class_id}|${r.date}|${r.period_number}`))
 
   // 3. homeroom period numbers
   const hmPeriods = new Set(homeroomPeriods.value.map(hp => Number(hp.period)).filter(Number.isFinite))
 
-  // 4. slots by day
+  // 3b. วันหยุดที่ admin กำหนด
+  const settingsData = await supabase.from('schools').select('settings').eq('id', schoolId).single()
+  const rawHols = settingsData.data?.settings?.teaching_log_settings?.holidays || []
+  const holidaySet = new Set(rawHols.map(h => (typeof h === 'string' ? h : h?.date)).filter(Boolean))
+
+  // 4. slots by day — รองรับทั้ง day_of_week เป็นตัวเลขและชื่อวันไทย
+  const THAI_DAY_NUM = { จันทร์: 1, อังคาร: 2, พุธ: 3, พฤหัสบดี: 4, ศุกร์: 5, เสาร์: 6, อาทิตย์: 7 }
   const byDay = {}
   for (const s of slots) {
-    const d = Number(s.day_of_week)
-    ;(byDay[d] = byDay[d] || []).push(s)
+    const d = Number(s.day_of_week) || THAI_DAY_NUM[s.day_of_week] || 0
+    if (d) (byDay[d] = byDay[d] || []).push(s)
   }
 
-  // 5. วนทุกวัน — มีแล้ว (ถูก) ข้าม / ไม่มี (หรือผิด) สร้าง
-  const payloads = []
+  // 5. วนทุกวัน — มีแล้ว (ถูก) ข้าม / ไม่มีเลย → insert / มีแต่ subject_id ผิด → update subject เท่านั้น
+  const newPayloads   = []  // record ใหม่ที่ยังไม่มีใน DB
+  const wrongPayloads = []  // มีใน DB แต่ subject_id ผิด → update subject_id เท่านั้น ไม่แตะ is_filled
   let totalExpected = 0
 
   for (let d = new Date(start + 'T00:00:00'); localStr(d) <= today; d.setDate(d.getDate() + 1)) {
@@ -192,6 +201,8 @@ async function buildMissingPayloads() {
     if (!dayNum) continue
 
     const dateStr  = localStr(d)
+    if (holidaySet.has(dateStr)) continue  // ข้ามวันหยุด
+
     const daySlots = byDay[dayNum] || []
 
     for (const slot of daySlots) {
@@ -200,25 +211,35 @@ async function buildMissingPayloads() {
       if (!Number.isFinite(period)) continue
       if (hmPeriods.has(period)) continue
       totalExpected++
-      const key = `${slot.class_id}|${dateStr}|${period}|${slot.subject_id}`
-      if (existSet.has(key)) continue  // มีแล้ว subject_id ถูก → ข้าม
-      payloads.push({
+      const key     = `${slot.class_id}|${dateStr}|${period}|${slot.subject_id}`
+      const slotKey = `${slot.class_id}|${dateStr}|${period}`
+      if (existSet.has(key)) continue  // subject_id ถูกแล้ว → ข้าม
+
+      const base = {
         school_id:          schoolId,
         term_id:            tid,
         class_id:           slot.class_id,
         date:               dateStr,
         period_number:      period,
-        planned_teacher_id: slot.teacher_id || null,
-        actual_teacher_id:  null,
         subject_id:         slot.subject_id || null,
-        is_filled:          false,
+        planned_teacher_id: slot.teacher_id || null,
         slot_type:          slot.slot_type || 'normal',
-      })
+      }
+
+      if (existSlotSet.has(slotKey)) {
+        // มีใน DB แต่ subject_id ผิด → แก้แค่ subject_id + planned_teacher_id
+        wrongPayloads.push(base)
+      } else {
+        // ไม่มีเลย → insert ใหม่
+        newPayloads.push({ ...base, actual_teacher_id: null, is_filled: false })
+      }
     }
   }
 
-  const existCount = new Set(existing.map(r => `${r.class_id}|${r.date}|${r.period_number}`)).size
-  return { payloads, totalExpected, existCount }
+  const existCount = existSlotSet.size
+  const wrongSubject = wrongPayloads.length
+  const payloads = [...newPayloads, ...wrongPayloads]
+  return { payloads, newPayloads, wrongPayloads, totalExpected, existCount, wrongSubject }
 }
 
 // ─── Scan ──────────────────────────────────────────────────────────
@@ -229,12 +250,12 @@ async function scan() {
   doneMsg.value = ''
   errorMsg.value = ''
   try {
-    const { payloads, totalExpected, existCount } = await buildMissingPayloads()
+    const { payloads, totalExpected, existCount, wrongSubject } = await buildMissingPayloads()
     scanResult.value = {
-      total:   totalExpected,
-      exists:  existCount,
-      missing: payloads.length,
-      wrongSubject: 0,
+      total:        totalExpected,
+      exists:       existCount,
+      missing:      payloads.length - wrongSubject,
+      wrongSubject: wrongSubject,
     }
     previewRows.value = payloads.slice(0, 20).map(p => ({
       date:          p.date,
@@ -257,18 +278,33 @@ async function generate() {
   doneMsg.value = ''
   errorMsg.value = ''
   try {
-    const { payloads } = await buildMissingPayloads()
+    const { newPayloads, wrongPayloads } = await buildMissingPayloads()
     const CHUNK = 400
-    for (let i = 0; i < payloads.length; i += CHUNK) {
+
+    // 1. Insert คาบใหม่ที่ยังไม่มีใน DB
+    for (let i = 0; i < newPayloads.length; i += CHUNK) {
       const { error } = await supabase.from('teach_actuals')
-        .upsert(payloads.slice(i, i + CHUNK), {
+        .upsert(newPayloads.slice(i, i + CHUNK), {
           onConflict: 'school_id,term_id,class_id,date,period_number',
-          ignoreDuplicates: false,
+          ignoreDuplicates: true,
         })
       if (error) throw error
-      progressCount.value = Math.min(i + CHUNK, payloads.length)
+      progressCount.value = Math.min(i + CHUNK, newPayloads.length)
     }
-    doneMsg.value = `✅ เสร็จ ${payloads.length} คาบ`
+
+    // 2. แก้ subject_id ที่ผิด — update เฉพาะ subject_id + planned_teacher_id ไม่แตะ is_filled / student_records
+    for (let i = 0; i < wrongPayloads.length; i += CHUNK) {
+      const chunk = wrongPayloads.slice(i, i + CHUNK)
+      await Promise.all(chunk.map(p =>
+        supabase.from('teach_actuals')
+          .update({ subject_id: p.subject_id, planned_teacher_id: p.planned_teacher_id })
+          .eq('school_id', p.school_id).eq('term_id', p.term_id)
+          .eq('class_id', p.class_id).eq('date', p.date).eq('period_number', p.period_number)
+      ))
+      progressCount.value = newPayloads.length + Math.min(i + CHUNK, wrongPayloads.length)
+    }
+
+    doneMsg.value = `✅ เสร็จ — สร้างใหม่ ${newPayloads.length} คาบ, ซ่อม subject_id ${wrongPayloads.length} คาบ`
     scanResult.value = null
     previewRows.value = []
   } catch (e) {

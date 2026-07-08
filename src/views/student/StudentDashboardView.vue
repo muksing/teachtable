@@ -1,48 +1,51 @@
 <template>
   <div>
-    <!-- Photo Gallery -->
-    <div class="gallery-intro">
-      <div class="gallery-intro-title">📸 ภาพความทรงจำของฉัน</div>
-      <div class="gallery-intro-desc">บันทึกภาพช่วงเวลาดีๆ ในวัยเรียน ความทรงจำเหล่านี้จะอยู่กับคุณไปตลอด</div>
-    </div>
-    <div class="photo-section">
-      <div class="gallery-scroll">
-        <div
-          v-for="(url, idx) in gallery"
-          :key="idx"
-          class="gallery-item"
-          @click="viewPhoto(url)"
-        >
-          <img :src="fixPhotoUrl(url)" class="gallery-img" />
-          <button
-            v-if="gallery.length > 1"
-            class="delete-btn"
-            @click.stop="deletePhoto(idx)"
-          >✕</button>
+    <!-- ── Announcements ──────────────────────────────── -->
+    <AnnSlideshow :items="announcements">
+      <template #footer>
+        <router-link to="/student/announcements" class="ann-see-all">ดูประกาศทั้งหมด ›</router-link>
+      </template>
+    </AnnSlideshow>
+
+    <!-- ── Profile card ─────────────────────────────────── -->
+    <div class="profile-card">
+      <router-link to="/student/profile" class="avatar-wrap">
+        <img v-if="photoUrl" :src="fixPhotoUrl(photoUrl)" class="profile-avatar" @error="avatarErr = true" />
+        <div v-else class="profile-avatar-placeholder">{{ initials }}</div>
+        <div class="avatar-edit-badge">✏️</div>
+      </router-link>
+      <div class="profile-info">
+        <div class="profile-prefix">{{ session.prefix }}</div>
+        <div class="profile-name">
+          <span class="name-first">{{ session.first_name }}</span>
+          <span class="name-last">{{ session.last_name }}</span>
         </div>
-
-        <!-- Add photo button -->
-        <label class="add-photo-btn">
-          <input type="file" accept="image/*" style="display:none" multiple @change="onPhotoFiles" />
-          <span class="add-icon">+</span>
-          <span class="add-label">เพิ่มภาพ</span>
-        </label>
+        <div class="profile-meta">{{ session.student_code }} · ห้อง {{ session.class_id }}</div>
+        <div class="profile-term">{{ termLabel }}</div>
       </div>
-      <div v-if="photoUploading" class="upload-progress">กำลังอัปโหลด...</div>
     </div>
 
-    <!-- Student info -->
-    <div class="info-card">
-      <div class="student-display-prefix">{{ session.prefix }}</div>
-      <div class="student-display-name">
-        <span class="name-first">{{ session.first_name }}</span>
-        <span class="name-last">{{ session.last_name }}</span>
+    <!-- ── Check-in strip ───────────────────────────────── -->
+    <router-link to="/student/checkin" class="checkin-strip" :class="todayCheckin ? 'strip--done' : 'strip--idle'">
+      <span class="strip-icon">{{ todayCheckin ? '✅' : '🏫' }}</span>
+      <span class="strip-text">
+        {{ todayCheckin ? `เช็คอินแล้ว ${formatCheckinTime(todayCheckin.checkin_time)}` : 'เช็คอินเข้าโรงเรียน' }}
+      </span>
+      <span class="strip-arrow">›</span>
+    </router-link>
+
+    <!-- ── Behavior scores ──────────────────────────────── -->
+    <div class="section-card" @click="$router.push('/student/behavior')">
+      <div class="sc-label">⭐ คะแนนพฤติกรรมรวม</div>
+      <div class="sc-score">{{ session.total_behavior_score ?? 0 }}</div>
+      <div class="sc-chips">
+        <span class="sc-chip sc-chip--g">ทั่วไป {{ session.general_behavior_score ?? 0 }}</span>
+        <span class="sc-chip sc-chip--a">มาเรียน {{ session.attendance_behavior_score ?? 0 }}</span>
+        <span class="sc-chip sc-chip--l">ในห้อง {{ session.learning_behavior_score ?? 0 }}</span>
       </div>
-      <div class="student-display-meta">{{ session.student_code }} · ห้อง {{ session.class_id }}</div>
-      <div class="student-display-term">{{ termLabel }}</div>
     </div>
 
-    <!-- BMI quick card (ถ้ามี) -->
+    <!-- ── BMI quick card ───────────────────────────────── -->
     <div v-if="latestHealth" class="bmi-card" @click="$router.push('/student/health')">
       <div class="bmi-left">
         <div class="bmi-label">BMI ล่าสุด</div>
@@ -57,18 +60,7 @@
       <div class="bmi-arrow">›</div>
     </div>
 
-    <!-- Behavior scores -->
-    <div class="section-card" @click="$router.push('/student/behavior')">
-      <div class="sc-label">⭐ คะแนนพฤติกรรมรวม</div>
-      <div class="sc-score">{{ session.total_behavior_score ?? 0 }}</div>
-      <div class="sc-chips">
-        <span class="sc-chip sc-chip--g">ทั่วไป {{ session.general_behavior_score ?? 0 }}</span>
-        <span class="sc-chip sc-chip--a">มาเรียน {{ session.attendance_behavior_score ?? 0 }}</span>
-        <span class="sc-chip sc-chip--l">ในห้อง {{ session.learning_behavior_score ?? 0 }}</span>
-      </div>
-    </div>
-
-    <!-- Quick menu -->
+    <!-- ── Quick menu ───────────────────────────────────── -->
     <div class="menu-grid">
       <router-link to="/student/health" class="menu-card menu-card--health">
         <div class="menu-icon">💪</div>
@@ -91,11 +83,6 @@
         <div class="menu-sub">เวลาเรียน &amp; คะแนนเก็บ</div>
       </router-link>
     </div>
-
-    <!-- Photo viewer dialog -->
-    <div v-if="viewingPhoto" class="photo-overlay" @click="viewingPhoto = ''">
-      <img :src="fixPhotoUrl(viewingPhoto)" class="photo-full" />
-    </div>
   </div>
 </template>
 
@@ -103,26 +90,52 @@
 import { ref, computed, onMounted } from 'vue'
 import { supabase } from '@/supabase/client'
 import { useStudentStore } from '@/stores/student'
-import { useStudentUpload, fixPhotoUrl } from '@/composables/useStudentUpload'
+import { fixPhotoUrl } from '@/composables/useStudentUpload'
+import { useCheckin } from '@/composables/useCheckin'
+import AnnSlideshow from '@/components/AnnSlideshow.vue'
+
+const announcements = ref([])
+
+async function loadAnnouncements() {
+  const { school_id } = (studentStore.session || {})
+  if (!school_id) return
+  try {
+    const { data, error } = await supabase.rpc('get_school_announcements_public', {
+      p_school_id: String(school_id),
+      p_target:    'student',
+    })
+    if (error) { console.warn('[announcements]', error.message); return }
+    announcements.value = Array.isArray(data) ? data : (data ? [data] : [])
+  } catch (e) { console.warn('[announcements]', e) }
+}
+
 
 const studentStore = useStudentStore()
-const { uploadFile } = useStudentUpload()
+const { todayCheckin, loadTodayCheckin } = useCheckin()
 
-const session = computed(() => studentStore.session || {})
-const gallery = ref([])
-const latestHealth = ref(null)
-const photoUploading = ref(false)
-const viewingPhoto = ref('')
+const session  = computed(() => studentStore.session || {})
+const avatarErr = ref(false)
 
-const fullName = computed(() => {
-  const s = session.value
-  return [s.prefix, s.first_name, s.last_name].filter(Boolean).join('')
+const photoUrl = computed(() => {
+  if (avatarErr.value) return ''
+  return session.value.photo_url || ''
 })
+const initials = computed(() => (session.value.first_name || '?').charAt(0))
+
 const termLabel = computed(() => {
-  const t = session.value.current_term || ''
-  if (t.includes('_')) { const [y, s] = t.split('_'); return `ปีการศึกษา ${y} ภาคเรียนที่ ${s}` }
+  const s = session.value
+  if (s.term_year && s.term_semester) return `ปีการศึกษา ${s.term_year} ภาคเรียนที่ ${s.term_semester}`
+  const t = s.current_term || ''
+  if (t.includes('_')) { const [y, sm] = t.split('_'); return `ปีการศึกษา ${y} ภาคเรียนที่ ${sm}` }
   return t || ''
 })
+
+function formatCheckinTime(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) + ' น.'
+}
+
+const latestHealth = ref(null)
 
 function bmiLabel(bmi) {
   if (!bmi) return ''
@@ -141,27 +154,7 @@ function bmiColor(bmi) {
 function formatDate(d) {
   if (!d) return ''
   const [y, m, day] = d.split('-')
-  return `${day}/${m}/${Number(y)+543}`
-}
-
-async function loadGallery() {
-  const { school_id, student_code, photo_url } = session.value
-  if (!school_id || !student_code) return
-  const { data } = await supabase
-    .from('students')
-    .select('photo_gallery, photo_url')
-    .eq('school_id', school_id)
-    .eq('student_code', student_code)
-    .single()
-  let g = data?.photo_gallery || []
-  if (!Array.isArray(g)) g = []
-  if (!g.length && (data?.photo_url || photo_url)) {
-    g = [data?.photo_url || photo_url]
-  }
-  gallery.value = g.filter(Boolean)
-  // ภาพล่าสุด (ท้ายสุดของ array) เป็นโปรไฟล์
-  const latest = gallery.value[gallery.value.length - 1]
-  if (latest) studentStore.updatePhotoUrl(latest)
+  return `${day}/${m}/${Number(y) + 543}`
 }
 
 async function loadLatestHealth() {
@@ -176,104 +169,103 @@ async function loadLatestHealth() {
   latestHealth.value = data || null
 }
 
-async function saveGallery(newGallery) {
-  const { school_id, student_code } = session.value
-  const { error } = await supabase.rpc('update_student_photo_gallery', {
-    p_school_id: school_id,
-    p_student_code: student_code,
-    p_gallery: newGallery,
-  })
-  if (error) {
-    alert('บันทึกไม่สำเร็จ: ' + error.message + '\n\nกรุณาแจ้งผู้ดูแลระบบรัน SQL สร้าง update_student_photo_gallery')
-    return
-  }
-  gallery.value = newGallery
-  const latest = newGallery[newGallery.length - 1]
-  if (latest) studentStore.updatePhotoUrl(latest)
-}
-
-async function onPhotoFiles(e) {
-  const files = [...(e.target.files || [])]
-  if (!files.length) return
-  photoUploading.value = true
-  try {
-    const { school_id, student_code } = session.value
-    const urls = []
-    for (const file of files) {
-      const url = await uploadFile(file, school_id, student_code, 'gallery')
-      urls.push(url)
-    }
-    await saveGallery([...gallery.value, ...urls])
-  } catch (err) {
-    alert('อัปโหลดไม่สำเร็จ: ' + err.message)
-  } finally {
-    photoUploading.value = false
-    e.target.value = ''
-  }
-}
-
-async function deletePhoto(idx) {
-  if (gallery.value.length <= 1) return
-  if (!confirm('ลบภาพนี้?')) return
-  const updated = gallery.value.filter((_, i) => i !== idx)
-  await saveGallery(updated)
-}
-
-function viewPhoto(url) { viewingPhoto.value = url }
-
 onMounted(() => {
-  loadGallery()
   loadLatestHealth()
+  loadTodayCheckin()
+  loadAnnouncements()
 })
 </script>
 
 <style scoped>
-/* Photo gallery */
-.photo-section { margin-bottom: 14px; }
-.gallery-scroll {
-  display: flex; gap: 10px; overflow-x: auto;
-  padding-bottom: 4px; scrollbar-width: none;
+/* Profile card */
+.profile-card {
+  background: white;
+  border-radius: 20px;
+  padding: 20px;
+  box-shadow: 0 2px 14px rgba(0,0,0,.08);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
-.gallery-scroll::-webkit-scrollbar { display: none; }
-.gallery-item {
-  position: relative; flex-shrink: 0;
-  width: 100px; height: 100px; border-radius: 14px; overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0,0,0,.15);
+.avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+  display: block;
+  text-decoration: none;
 }
-.gallery-img { width: 100%; height: 100%; object-fit: cover; cursor: pointer; }
-.delete-btn {
-  position: absolute; top: 4px; right: 4px;
-  background: rgba(0,0,0,.55); color: white; border: none;
-  border-radius: 50%; width: 22px; height: 22px; font-size: 11px;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
+.profile-avatar {
+  width: 76px; height: 76px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid #ede9fe;
+  box-shadow: 0 2px 10px rgba(109,40,217,.2);
 }
+.profile-avatar-placeholder {
+  width: 76px; height: 76px;
+  border-radius: 50%;
+  background: linear-gradient(135deg,#ede9fe,#ddd6fe);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 30px; font-weight: 800; color: #6d28d9;
+}
+.avatar-edit-badge {
+  position: absolute;
+  bottom: 2px; right: 2px;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: #7c3aed;
+  color: white;
+  font-size: 10px;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid white;
+}
+.profile-info { flex: 1; min-width: 0; }
+.profile-prefix { font-size: 12px; color: #9ca3af; margin-bottom: 1px; }
+.profile-name { display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
+.name-first { font-size: 20px; font-weight: 900; color: #6d28d9; }
+.name-last  { font-size: 20px; font-weight: 900; color: #1e1b4b; }
+.profile-meta { font-size: 13px; color: #6b7280; margin-top: 3px; }
+.profile-term { font-size: 11px; color: #9ca3af; margin-top: 2px; }
 
-.add-photo-btn {
-  flex-shrink: 0; width: 100px; height: 100px; border-radius: 14px;
-  background: rgba(99,102,241,.1); border: 2px dashed #6366f1;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  cursor: pointer; gap: 4px;
+/* Check-in strip */
+.checkin-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 16px;
+  text-decoration: none;
+  margin-bottom: 12px;
+  font-weight: 700;
+  transition: opacity .15s;
 }
-.add-icon { font-size: 28px; color: #6366f1; line-height: 1; }
-.add-label { font-size: 12px; color: #6366f1; font-weight: 600; }
-.upload-progress { font-size: 13px; color: #6366f1; text-align: center; margin-top: 6px; }
+.checkin-strip:active { opacity: .85; }
+.strip--idle {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  color: white;
+  box-shadow: 0 4px 16px rgba(79,70,229,.35);
+}
+.strip--done {
+  background: linear-gradient(135deg, #059669, #10b981);
+  color: white;
+  box-shadow: 0 4px 16px rgba(5,150,105,.3);
+}
+.strip-icon { font-size: 22px; }
+.strip-text { flex: 1; font-size: 15px; }
+.strip-arrow { font-size: 22px; opacity: .7; }
 
-/* Gallery intro */
-.gallery-intro { margin-bottom: 8px; }
-.gallery-intro-title { font-size: 15px; font-weight: 700; color: #1e1b4b; }
-.gallery-intro-desc { font-size: 12px; color: #9ca3af; margin-top: 2px; line-height: 1.5; }
-
-/* Info card */
-.info-card {
+/* Behavior */
+.section-card {
   background: white; border-radius: 16px; padding: 16px;
-  box-shadow: 0 2px 12px rgba(0,0,0,.07); margin-bottom: 12px; text-align: center;
+  box-shadow: 0 2px 12px rgba(0,0,0,.07); margin-bottom: 12px; cursor: pointer;
 }
-.student-display-prefix { font-size: 14px; color: #6b7280; margin-bottom: 2px; }
-.student-display-name { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
-.name-first { font-size: 24px; font-weight: 900; color: #6366f1; }
-.name-last  { font-size: 24px; font-weight: 900; color: #1e1b4b; }
-.student-display-meta { font-size: 14px; color: #6b7280; margin-top: 4px; }
-.student-display-term { font-size: 12px; color: #9ca3af; margin-top: 2px; }
+.sc-label { font-size: 13px; color: #6b7280; margin-bottom: 4px; }
+.sc-score { font-size: 44px; font-weight: 900; color: #6366f1; text-align: center; line-height: 1; margin: 4px 0 10px; }
+.sc-chips { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+.sc-chip { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 8px; }
+.sc-chip--g { background: #ede9fe; color: #5b21b6; }
+.sc-chip--a { background: #dcfce7; color: #166534; }
+.sc-chip--l { background: #dbeafe; color: #1e40af; }
 
 /* BMI card */
 .bmi-card {
@@ -290,18 +282,8 @@ onMounted(() => {
 .bmi-date { font-size: 11px; color: #9ca3af; margin-top: 4px; }
 .bmi-arrow { font-size: 22px; color: #9ca3af; }
 
-/* Behavior */
-.section-card {
-  background: white; border-radius: 16px; padding: 16px;
-  box-shadow: 0 2px 12px rgba(0,0,0,.07); margin-bottom: 12px; cursor: pointer;
-}
-.sc-label { font-size: 13px; color: #6b7280; margin-bottom: 4px; }
-.sc-score { font-size: 44px; font-weight: 900; color: #6366f1; text-align: center; line-height: 1; margin: 4px 0 10px; }
-.sc-chips { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
-.sc-chip { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 8px; }
-.sc-chip--g { background: #ede9fe; color: #5b21b6; }
-.sc-chip--a { background: #dcfce7; color: #166534; }
-.sc-chip--l { background: #dbeafe; color: #1e40af; }
+/* Announcements */
+.ann-see-all { font-size: 13px; color: #7c3aed; font-weight: 700; text-decoration: none; }
 
 /* Quick menu */
 .menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
@@ -314,15 +296,8 @@ onMounted(() => {
 .menu-icon { font-size: 34px; }
 .menu-label { font-size: 13px; font-weight: 700; text-align: center; line-height: 1.4; }
 .menu-sub { font-size: 10px; text-align: center; opacity: .75; margin-top: 2px; line-height: 1.3; }
-.menu-card--health   { background: linear-gradient(135deg,#bbf7d0,#86efac); color: #166534; }
-.menu-card--deeds    { background: linear-gradient(135deg,#fde68a,#fbbf24); color: #92400e; }
-.menu-card--gratitude{ background: linear-gradient(135deg,#fce7f3,#fbcfe8); color: #9d174d; }
-.menu-card--scores   { background: linear-gradient(135deg,#dbeafe,#93c5fd); color: #1e40af; }
-
-/* Photo overlay */
-.photo-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.88); z-index: 999;
-  display: flex; align-items: center; justify-content: center; padding: 20px;
-}
-.photo-full { max-width: 100%; max-height: 90dvh; border-radius: 12px; object-fit: contain; }
+.menu-card--health    { background: linear-gradient(135deg,#bbf7d0,#86efac); color: #166534; }
+.menu-card--deeds     { background: linear-gradient(135deg,#fde68a,#fbbf24); color: #92400e; }
+.menu-card--gratitude { background: linear-gradient(135deg,#fce7f3,#fbcfe8); color: #9d174d; }
+.menu-card--scores    { background: linear-gradient(135deg,#dbeafe,#93c5fd); color: #1e40af; }
 </style>

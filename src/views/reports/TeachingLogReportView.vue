@@ -34,9 +34,13 @@
 
           <div v-if="isAdmin" class="tlr-filter-item">
             <div class="tlr-filter-label">👤 กรองตามครู</div>
-            <el-select v-model="filterTeacher" placeholder="ครูทั้งหมด" clearable filterable style="width:210px">
-              <el-option v-for="t in teacherList" :key="t.id" :label="t.name" :value="t.id" />
-            </el-select>
+            <TeacherSelect
+              v-model="filterTeacher"
+              :teachers="teacherList"
+              placeholder="ครูทั้งหมด"
+              clearable
+              style="width:210px"
+            />
           </div>
 
           <div class="tlr-filter-item">
@@ -62,7 +66,7 @@
             </el-select>
           </div>
 
-          <el-button type="primary" :loading="loading" @click="loadReport">🔍 โหลด</el-button>
+          <el-button type="primary" :loading="loading" @click="loadReport">🔄 รีเฟรช</el-button>
           <el-button v-if="hasActiveFilter" plain @click="clearFilters">✕ ล้างตัวกรอง</el-button>
         </div>
       </el-card>
@@ -253,19 +257,21 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useSchoolStore } from '@/stores/school'
 import { useSchoolDb } from '@/composables/useSchoolDb'
 import * as XLSX from 'xlsx'
 
-const authStore = useAuthStore()
+const authStore  = useAuthStore()
+const schoolStore = useSchoolStore()
 const { getTeachActualsRange, getTeachers } = useSchoolDb()
 
 const isAdmin = computed(() => authStore.hasAnyRole(['school_admin', 'admin', 'superadmin']))
 const myTeacherId = computed(() => String(authStore.profile?.teacher_id || authStore.profile?.uid || ''))
 
 // ── Filter state ───────────────────────────────────────────────────
-const today    = new Date().toISOString().split('T')[0]
-const weekAgo  = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
-const dateRange     = ref([weekAgo, today])
+const today      = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' })
+const termStart  = computed(() => schoolStore.settingsObj?.term_start || '')
+const dateRange  = ref([termStart.value || today, today])
 const filterTeacher = ref('')
 const filterClass   = ref('')
 const filterSubject = ref('')
@@ -286,8 +292,16 @@ function clearFilters() {
   detailSearch.value  = ''
 }
 
-// reset page on filter change
+// reset page on client-side filter change
 watch([filterTeacher, filterClass, filterSubject, filterStatus, detailSearch], () => { currentPage.value = 1 })
+
+// auto-reload when date range changes (debounced)
+let reloadTimer = null
+watch(dateRange, (val) => {
+  if (!val?.[0] || !val?.[1]) return
+  clearTimeout(reloadTimer)
+  reloadTimer = setTimeout(() => loadReport(), 300)
+})
 
 // ── Data ───────────────────────────────────────────────────────────
 const loading     = ref(false)
@@ -378,9 +392,10 @@ async function loadReport() {
     return
   }
   loading.value = true
+  reportRows.value = []   // clear ก่อนเสมอ ไม่ให้ข้อมูลเก่าค้าง
+  currentPage.value = 1
   try {
     reportRows.value = await getTeachActualsRange(dateRange.value[0], dateRange.value[1])
-    currentPage.value = 1
   } catch (e) {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ: ' + e.message)
   } finally {
@@ -391,11 +406,7 @@ async function loadReport() {
 async function loadTeachers() {
   if (!isAdmin.value) return
   try {
-    const teachers = await getTeachers()
-    teacherList.value = teachers.map(t => ({
-      id:   t.teacher_id || t.id,
-      name: `${t.prefix || ''}${t.name || ''} ${t.surname || ''}`.trim()
-    }))
+    teacherList.value = await getTeachers()
   } catch { /* ignore */ }
 }
 
@@ -405,9 +416,10 @@ function scrollToDetail() {
 }
 
 onMounted(() => {
+  // ตั้ง start date เป็นวันเปิดเรียน (ถ้ามี) ก่อน load
+  if (termStart.value) dateRange.value = [termStart.value, today]
   loadTeachers()
   loadReport()
-  // teachers: default filter to self
   if (!isAdmin.value) {
     filterTeacher.value = myTeacherId.value
   }

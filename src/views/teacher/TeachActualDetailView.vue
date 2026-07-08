@@ -22,7 +22,7 @@
           <div class="tad-plan-label">ตามแผน</div>
           <div class="tad-plan-body">
             <div class="tad-subject-code">{{ ta?.subject_plan_id || '—' }}</div>
-            <div class="tad-subject-name-text">{{ ta?.subject_name || '—' }}</div>
+            <div class="tad-subject-name-text">{{ ttsSubjectName || '—' }}</div>
           </div>
           <div v-if="ta?.teacher_plan_name" class="tad-plan-teacher">
             <div class="tad-plan-teacher-name">{{ ta.teacher_plan_name }}</div>
@@ -452,6 +452,10 @@
               <div class="cs-num">{{ saveSummaryData.late }}</div>
               <div class="cs-lbl">มาสาย</div>
             </div>
+            <div class="cs-stat cs-s-absent">
+              <div class="cs-num">{{ saveSummaryData.absent }}</div>
+              <div class="cs-lbl">ขาดเรียน</div>
+            </div>
             <div class="cs-stat cs-s-skip">
               <div class="cs-num">{{ saveSummaryData.skip }}</div>
               <div class="cs-lbl">โดดเรียน</div>
@@ -459,6 +463,13 @@
             <div class="cs-stat cs-s-leave">
               <div class="cs-num">{{ saveSummaryData.leave }}</div>
               <div class="cs-lbl">ลา</div>
+            </div>
+          </div>
+          <!-- รายชื่อนักเรียนขาดเรียน -->
+          <div v-if="saveSummaryData.absentNames.length" class="cs-absent-list">
+            <div class="cs-absent-title">❌ รายชื่อขาดเรียน ({{ saveSummaryData.absent }} คน)</div>
+            <div v-for="(name, i) in saveSummaryData.absentNames" :key="i" class="cs-absent-name">
+              {{ name }}
             </div>
           </div>
         </div>
@@ -519,10 +530,11 @@ const ACTIVITY_TYPES = ['บรรยาย', 'อภิปราย', 'ปฏ�
 const DEFAULT_STATUSES = [
   { status_code: 'B001', label: 'มาเรียน',   color: 'green',  points_default:   0, sort_order: 1 },
   { status_code: 'B002', label: 'มาสาย',     color: 'yellow', points_default:  -2, sort_order: 2 },
-  { status_code: 'B003', label: 'โดดเรียน',  color: 'red',    points_default: -15, sort_order: 3 },
-  { status_code: 'B004', label: 'ลาป่วย',    color: 'purple', points_default:   0, sort_order: 4 },
-  { status_code: 'B005', label: 'ลากิจ',     color: 'blue',   points_default:   0, sort_order: 5 },
-  { status_code: 'B006', label: 'ไปราชการ',  color: 'gray',   points_default:   0, sort_order: 6 },
+  { status_code: 'B007', label: 'ขาดเรียน',  color: 'orange', points_default:  -5, sort_order: 3 },
+  { status_code: 'B003', label: 'โดดเรียน',  color: 'red',    points_default: -15, sort_order: 4 },
+  { status_code: 'B004', label: 'ลาป่วย',    color: 'purple', points_default:   0, sort_order: 5 },
+  { status_code: 'B005', label: 'ลากิจ',     color: 'blue',   points_default:   0, sort_order: 6 },
+  { status_code: 'B006', label: 'ไปราชการ',  color: 'gray',   points_default:   0, sort_order: 7 },
 ]
 
 // ─── State ────────────────────────────────────────────────────────
@@ -812,6 +824,7 @@ function getTotalDeduction(studentId) {
 function cardColorClass(status) {
   const map = {
     'มาเรียน': 'tad-card-present', 'มาสาย': 'tad-card-late',
+    'ขาดเรียน': 'tad-card-absent',
     'โดดเรียน': 'tad-card-skip', 'ลาป่วย': 'tad-card-sick',
     'ลากิจ': 'tad-card-leave', 'ไปราชการ': 'tad-card-official',
   }
@@ -819,7 +832,7 @@ function cardColorClass(status) {
 }
 
 function mapStatusColor(color) {
-  const m = { green:'present', yellow:'late', red:'skip', purple:'sick', blue:'leave', gray:'official' }
+  const m = { green:'present', yellow:'late', orange:'absent', red:'skip', purple:'sick', blue:'leave', gray:'official' }
   return m[color] || 'present'
 }
 
@@ -986,8 +999,8 @@ async function loadPage() {
     }
 
     loadingStudents.value = true
-    const studs = await getStudents(d.class_id)
-    students.value = studs.filter(s => !s.student_status || s.student_status === 'เรียนอยู่')
+    const studs = await getStudents(d.class_id, { activeOnly: true })
+    students.value = studs
 
     students.value.forEach(s => {
       const prev = prevRecs[s.student_id]
@@ -1021,8 +1034,8 @@ let _studentsChannel = null
 
 async function reloadStudents() {
   if (!ta.value?.class_id) return
-  const studs = await getStudents(ta.value.class_id)
-  students.value = studs.filter(s => !s.student_status || s.student_status === 'เรียนอยู่')
+  const studs = await getStudents(ta.value.class_id, { activeOnly: true })
+  students.value = studs
 }
 
 async function handleVisibilityChange() {
@@ -1083,13 +1096,25 @@ function buildStudentRecordsPayload() {
 // ─── Confirm before save ──────────────────────────────────────
 const showSaveConfirm = ref(false)
 
-const saveSummaryData = computed(() => ({
-  total:   students.value.length,
-  present: countStatus('มาเรียน'),
-  late:    countStatus('มาสาย'),
-  skip:    countStatus('โดดเรียน'),
-  leave:   countLeave(),
-}))
+const saveSummaryData = computed(() => {
+  const PRESENT_SET = new Set(['มาเรียน'])
+  const LATE_SET    = new Set(['มาสาย'])
+  const SKIP_SET    = new Set(['โดดเรียน'])
+  // absent = ทุก status ที่ไม่ใช่ present / late / skip / leave (isExcused)
+  const absentStudents = students.value.filter(s => {
+    const st = getRecord(s.student_id).status
+    return !PRESENT_SET.has(st) && !LATE_SET.has(st) && !SKIP_SET.has(st) && !isExcused(st)
+  })
+  return {
+    total:       students.value.length,
+    present:     countStatus('มาเรียน'),
+    late:        countStatus('มาสาย'),
+    skip:        countStatus('โดดเรียน'),
+    leave:       countLeave(),
+    absent:      absentStudents.length,
+    absentNames: absentStudents.map(s => `${s.seat_number ? s.seat_number + '. ' : ''}${s.prefix || ''}${s.name || ''} ${s.surname || ''}`.trim()),
+  }
+})
 
 const THAI_DIGITS = ['ศูนย์','หนึ่ง','สอง','สาม','สี่','ห้า','หก','เจ็ด','แปด','เก้า']
 const THAI_NUMS   = ['','หนึ่ง','สอง','สาม','สี่','ห้า','หก','เจ็ด','แปด','เก้า',
@@ -1152,9 +1177,10 @@ const saveSummaryText = computed(() => {
   }
   parts.push(`นักเรียนทั้งหมด ${numberForTTS(d.total)} คน`)
   parts.push(`มาเรียน ${numberForTTS(d.present)} คน`)
-  if (d.late  > 0) parts.push(`มาสาย ${numberForTTS(d.late)} คน`)
-  if (d.skip  > 0) parts.push(`โดดเรียน ${numberForTTS(d.skip)} คน`)
-  if (d.leave > 0) parts.push(`ลา ${numberForTTS(d.leave)} คน`)
+  if (d.late   > 0) parts.push(`มาสาย ${numberForTTS(d.late)} คน`)
+  if (d.absent > 0) parts.push(`ขาดเรียน ${numberForTTS(d.absent)} คน`)
+  if (d.skip   > 0) parts.push(`โดดเรียน ${numberForTTS(d.skip)} คน`)
+  if (d.leave  > 0) parts.push(`ลา ${numberForTTS(d.leave)} คน`)
   return parts.join(' ')
 })
 
@@ -1458,12 +1484,19 @@ async function checkDoublePeriod(taRaw, t) {
       .eq('school_id', authStore.schoolId)
 
     // หาคาบที่อยู่ติดกัน: prefer period+1 (ถัดไป) ก่อน period-1 (ก่อนหน้า)
+    // เงื่อนไข: วิชาเดียวกัน + ครูคนเดียวกัน เท่านั้น
+    const myTeacher = String(taRaw.planned_teacher_id || '')
     const isValidAdjacent = r => {
       if (r.id === String(taId.value)) return false
       if (Math.abs(Number(r.period_number) - period) !== 1) return false
       if (r.is_filled) return false
+      if (r.slot_type === 'homeroom' || r.slot_type === 'activity') return false
+      // วิชาต้องตรงกัน — ทั้งคู่ต้องมี subject_id และต้องเป็นวิชาเดียวกัน
       const rSubject = String(r.subject_id || '')
-      if (mySubject && rSubject && mySubject !== rSubject) return false
+      if (!mySubject || !rSubject || mySubject !== rSubject) return false
+      // ครูต้องเป็นคนเดียวกัน — planned_teacher_id ต้องตรงกัน
+      const rTeacher = String(r.planned_teacher_id || '')
+      if (!myTeacher || !rTeacher || myTeacher !== rTeacher) return false
       return true
     }
     const adjacent = (data || []).find(r => Number(r.period_number) === period + 1 && isValidAdjacent(r))
@@ -1681,6 +1714,7 @@ async function saveDoublePeriod() {
 
 .tad-card-present  { border-color: #4ade80; background: linear-gradient(160deg,#f0fdf4,white); }
 .tad-card-late     { border-color: #fbbf24; background: linear-gradient(160deg,#fffbeb,white); }
+.tad-card-absent   { border-color: #fb923c; background: linear-gradient(160deg,#fff7ed,white); }
 .tad-card-skip     { border-color: #f87171; background: linear-gradient(160deg,#fff1f2,white); }
 .tad-card-sick     { border-color: #a78bfa; background: linear-gradient(160deg,#f5f3ff,white); }
 .tad-card-leave    { border-color: #60a5fa; background: linear-gradient(160deg,#eff6ff,white); }
@@ -1723,6 +1757,7 @@ async function saveDoublePeriod() {
 .tad-sbtn-off     { background: white; border-color: #e2e8f0; color: #94a3b8; }
 .tad-sbtn-present { background: linear-gradient(135deg,#22c55e,#16a34a); border-color: #16a34a; color: white; }
 .tad-sbtn-late    { background: linear-gradient(135deg,#f59e0b,#d97706); border-color: #d97706; color: white; }
+.tad-sbtn-absent  { background: linear-gradient(135deg,#f97316,#ea580c); border-color: #ea580c; color: white; }
 .tad-sbtn-skip    { background: linear-gradient(135deg,#ef4444,#dc2626); border-color: #dc2626; color: white; }
 .tad-sbtn-sick    { background: linear-gradient(135deg,#8b5cf6,#7c3aed); border-color: #7c3aed; color: white; }
 .tad-sbtn-leave   { background: linear-gradient(135deg,#3b82f6,#2563eb); border-color: #2563eb; color: white; }
@@ -1824,6 +1859,25 @@ async function saveDoublePeriod() {
 .cs-s-total   { background: linear-gradient(135deg,#1e1b4b,#312e81); color: white; }
 .cs-s-present { background: linear-gradient(135deg,#22c55e,#16a34a); color: white; }
 .cs-s-late    { background: linear-gradient(135deg,#f59e0b,#d97706); color: white; }
-.cs-s-skip    { background: linear-gradient(135deg,#ef4444,#dc2626); color: white; }
+.cs-s-absent  { background: linear-gradient(135deg,#f97316,#ea580c); color: white; }
+.cs-s-skip    { background: linear-gradient(135deg,#7c3aed,#6d28d9); color: white; }
 .cs-s-leave   { background: linear-gradient(135deg,#3b82f6,#2563eb); color: white; }
+
+.cs-absent-list {
+  margin-top: 14px;
+  background: #fef2f2;
+  border: 1.5px solid #fca5a5;
+  border-radius: 10px;
+  padding: 10px 14px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.cs-absent-title {
+  font-size: 12px; font-weight: 800; color: #dc2626; margin-bottom: 6px;
+}
+.cs-absent-name {
+  font-size: 13px; color: #7f1d1d; padding: 2px 0;
+  border-bottom: 1px dashed #fca5a5;
+}
+.cs-absent-name:last-child { border-bottom: none; }
 </style>

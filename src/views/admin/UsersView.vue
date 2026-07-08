@@ -72,8 +72,9 @@
           <el-table-column label="ชื่อ-นามสกุล" min-width="200">
             <template #default="{ row }">
               <div class="flex items-center gap-2">
-                <div class="avatar-circle" :style="`background:${row.user ? getRoleColor(row.user.displayRole || row.user.role) : '#9ca3af'}`">
-                  {{ avatarLetter(row) }}
+                <div class="avatar-circle" :style="`background:${row.user ? getRoleColor(row.user.displayRole || row.user.role) : '#9ca3af'}`" style="overflow:hidden">
+                  <img v-if="row.user?.photo_url" :src="row.user.photo_url" style="width:100%;height:100%;object-fit:cover;border-radius:50%" @error="e => e.target.style.display='none'" />
+                  <span v-else>{{ avatarLetter(row) }}</span>
                 </div>
                 <div>
                   <div class="font-medium text-gray-800">

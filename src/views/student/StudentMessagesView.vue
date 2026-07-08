@@ -16,7 +16,8 @@
             class="list-item" :class="{ 'list-item--active': activeTeacherId === c.teacher_id, 'list-item--unread': c.unread > 0 }"
             @click="openConvo(c.teacher_id, c.teacher_name, c.teacher_photo)">
             <div class="list-avatar convo-avatar">
-              <img v-if="c.teacher_photo" :src="fixPhotoUrl(c.teacher_photo)" class="list-avatar-img" />
+              <img v-if="c.teacher_photo && !photoErrors[c.teacher_id]" :src="fixPhotoUrl(c.teacher_photo)" class="list-avatar-img"
+                @error="photoErrors[c.teacher_id] = true" />
               <span v-else>{{ initial(c.teacher_name) }}</span>
             </div>
             <div class="list-info">
@@ -40,7 +41,8 @@
             class="list-item" :class="{ 'list-item--active': activeTeacherId === t.teacher_code }"
             @click="openConvo(t.teacher_code, t.full_name, t.photo_url)">
             <div class="list-avatar teacher-avatar">
-              <img v-if="t.photo_url" :src="fixPhotoUrl(t.photo_url)" class="list-avatar-img" />
+              <img v-if="t.photo_url && !photoErrors[t.teacher_code]" :src="fixPhotoUrl(t.photo_url)" class="list-avatar-img"
+                @error="photoErrors[t.teacher_code] = true" />
               <span v-else>{{ initial(t.full_name) }}</span>
             </div>
             <div class="list-info">
@@ -64,10 +66,12 @@
         <div class="chat-header">
           <button class="back-btn" @click="closeConvo">‹</button>
           <div class="header-avatar">
-            <img v-if="activeTeacherPhoto" :src="fixPhotoUrl(activeTeacherPhoto)" class="header-avatar-img" />
+            <img v-if="activeTeacherPhoto && !photoErrors[activeTeacherId]" :src="fixPhotoUrl(activeTeacherPhoto)" class="header-avatar-img"
+              @error="photoErrors[activeTeacherId] = true" />
             <span v-else>{{ initial(activeTeacherName) }}</span>
           </div>
           <div class="header-name">{{ activeTeacherName }}</div>
+          <button class="refresh-btn" @click="refreshMessages" title="รีเฟรชข้อความ">🔄</button>
         </div>
 
         <!-- bubbles -->
@@ -82,7 +86,8 @@
             <div v-if="m._showDate" class="date-sep">{{ m._dateLabel }}</div>
             <div class="bubble-row" :class="m.sender === 'student' ? 'bubble-row--me' : ''">
               <div v-if="m.sender === 'teacher'" class="bubble-avatar">
-                <img v-if="activeTeacherPhoto" :src="fixPhotoUrl(activeTeacherPhoto)" class="bubble-avatar-img" />
+                <img v-if="activeTeacherPhoto && !photoErrors[activeTeacherId]" :src="fixPhotoUrl(activeTeacherPhoto)" class="bubble-avatar-img"
+                  @error="photoErrors[activeTeacherId] = true" />
                 <span v-else>{{ initial(activeTeacherName) }}</span>
               </div>
               <div class="bubble" :class="m.sender === 'student' ? 'bubble--me' : 'bubble--them'">
@@ -158,7 +163,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { supabase } from '@/supabase/client'
 import { useStudentStore } from '@/stores/student'
 import { uploadViaGAS, fixPhotoUrl } from '@/composables/useStudentUpload'
@@ -166,6 +171,7 @@ import { uploadViaGAS, fixPhotoUrl } from '@/composables/useStudentUpload'
 const studentStore   = useStudentStore()
 const session        = computed(() => studentStore.session || {})
 
+const photoErrors        = reactive({})
 const search             = ref('')
 const teachers           = ref([])
 const teachersLoading    = ref(false)
@@ -219,8 +225,38 @@ function addDateSeparators(msgs) {
 function scrollToBottom() {
   nextTick(() => {
     const el = bubblesRef.value
-    if (el) el.scrollTop = el.scrollHeight
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    const last = el.lastElementChild
+    if (last) last.scrollIntoView({ behavior: 'instant', block: 'end' })
+    setTimeout(() => {
+      if (!bubblesRef.value) return
+      bubblesRef.value.scrollTop = bubblesRef.value.scrollHeight
+    }, 200)
   })
+}
+
+watch(messages, () => {
+  nextTick(() => {
+    const el = bubblesRef.value
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    const last = el.lastElementChild
+    if (last) last.scrollIntoView({ behavior: 'instant', block: 'end' })
+  })
+}, { flush: 'post' })
+
+async function refreshMessages() {
+  const { school_id, student_code } = session.value
+  if (!activeTeacherId.value) return
+  msgsLoading.value = true
+  const { data } = await supabase.from('student_messages').select('*')
+    .eq('school_id', school_id).eq('student_code', student_code)
+    .eq('teacher_id', activeTeacherId.value)
+    .order('created_at', { ascending: true })
+  messages.value = addDateSeparators(data || [])
+  msgsLoading.value = false
+  scrollToBottom()
 }
 function autoResize() {
   const el = textareaRef.value
@@ -241,15 +277,28 @@ async function loadTeachers() {
     return
   }
   try {
-    const { data, error } = await supabase.from('teachers')
-      .select('teacher_code, prefix, first_name, last_name, photo_url')
-      .eq('school_id', school_id)
-      .order('first_name')
-    if (error) throw error
-    teachers.value = (data || []).map(t => ({
+    const [teacherRes, userRes] = await Promise.all([
+      supabase.from('teachers')
+        .select('teacher_code, prefix, first_name, last_name')
+        .eq('school_id', school_id)
+        .order('first_name'),
+      supabase.from('users')
+        .select('teacher_id, photo_url')
+        .eq('school_id', school_id)
+        .not('teacher_id', 'is', null),
+    ])
+    if (teacherRes.error) throw teacherRes.error
+
+    // build photo map: teacher_code → photo_url from users table
+    const photoMap = {}
+    for (const u of (userRes.data || [])) {
+      if (u.teacher_id && u.photo_url) photoMap[String(u.teacher_id)] = u.photo_url
+    }
+
+    teachers.value = (teacherRes.data || []).map(t => ({
       teacher_code: String(t.teacher_code),
       full_name: `${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`.trim(),
-      photo_url: t.photo_url || '',
+      photo_url: photoMap[String(t.teacher_code)] || '',
     }))
   } catch (e) {
     teachersError.value = 'โหลดรายชื่อครูไม่สำเร็จ: ' + (e.message || e)
@@ -310,7 +359,7 @@ async function openConvo(teacherId, teacherName, teacherPhoto = '') {
   const c = recentConvos.value.find(c => c.teacher_id === teacherId)
   if (c) c.unread = 0
 
-  // realtime
+  // realtime — รับเฉพาะข้อความครูตอบ (student ใช้ optimistic แล้ว)
   if (msgChannel) supabase.removeChannel(msgChannel)
   msgChannel = supabase
     .channel(`smsg_${school_id}_${student_code}_${teacherId}`)
@@ -320,11 +369,10 @@ async function openConvo(teacherId, teacherName, teacherPhoto = '') {
     }, payload => {
       const m = payload.new
       if (m.student_code !== student_code || m.teacher_id !== activeTeacherId.value) return
-      // rebuild separators
+      if (m.sender === 'student') return  // ข้าม — เพิ่ม optimistic แล้ว
       const all = [...messages.value.map(x => ({ ...x, _showDate: undefined, _dateLabel: undefined })), m]
       messages.value = addDateSeparators(all)
-      if (m.sender === 'teacher')
-        supabase.from('student_messages').update({ read_by_student: true }).eq('id', m.id)
+      supabase.from('student_messages').update({ read_by_student: true }).eq('id', m.id)
       scrollToBottom()
     }).subscribe()
 }
@@ -362,28 +410,72 @@ async function onAttach(e) {
 
 /* ── send message ── */
 async function sendMsg() {
-  if (!msgText.value.trim() && !pendingAttachments.value.length) return
+  const text = msgText.value.trim()
+  const atts = [...pendingAttachments.value]
+  if (!text && !atts.length) return
+  if (sending.value) return
   sending.value = true
+
+  // Clear input immediately
+  msgText.value = ''
+  pendingAttachments.value = []
+  if (textareaRef.value) textareaRef.value.style.height = 'auto'
+
   const { school_id, student_code, class_id } = session.value
+  const now = new Date().toISOString()
+  const prev = messages.value[messages.value.length - 1]
+  const dateLabel = fmtDate(now)
+  const localId = `local_${Date.now()}`
+
+  // Add to local array immediately — no await, pure sync
+  messages.value = [
+    ...messages.value,
+    {
+      id: localId,
+      sender: 'student',
+      content: text || null,
+      attachments: [],
+      read_by_teacher: false,
+      created_at: now,
+      _showDate: !prev || fmtDate(prev.created_at) !== dateLabel,
+      _dateLabel: dateLabel,
+    },
+  ]
+
+  // Scroll immediately after DOM update
+  nextTick(() => {
+    const el = bubblesRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+
   try {
     const attachments = []
-    for (const att of pendingAttachments.value) {
+    for (const att of atts) {
       const url = await uploadViaGAS(att.file, school_id, `msg_${student_code}`)
       attachments.push({ url, type: att.type, name: att.file.name })
     }
-    await supabase.from('student_messages').insert({
+    // Update attachments if any
+    if (attachments.length) {
+      messages.value = messages.value.map(m =>
+        m.id === localId ? { ...m, attachments } : m
+      )
+    }
+
+    const { error } = await supabase.from('student_messages').insert({
       school_id, student_code,
       class_id: class_id || null,
       teacher_id: activeTeacherId.value,
       sender: 'student',
-      content: msgText.value.trim() || null,
+      content: text || null,
       attachments: attachments.length ? attachments : [],
       read_by_teacher: false,
     })
-    msgText.value = ''
-    pendingAttachments.value = []
-    if (textareaRef.value) textareaRef.value.style.height = 'auto'
+    if (error) throw error
+
   } catch (e) {
+    messages.value = messages.value.filter(m => m.id !== localId)
+    msgText.value = text
+    pendingAttachments.value = atts
     alert('ส่งไม่สำเร็จ: ' + (e.message || e))
   } finally {
     sending.value = false
@@ -443,6 +535,7 @@ onUnmounted(() => {
 /* ── shell ── */
 .msg-shell {
   display: flex;
+  position: relative;
   height: calc(100dvh - 130px); /* account for topbar + bottomnav */
   overflow: hidden;
   background: #f8fafc;
@@ -538,11 +631,18 @@ onUnmounted(() => {
   font-size: 15px; font-weight: 800; overflow: hidden; flex-shrink: 0;
 }
 .header-avatar-img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
-.header-name { font-size: 15px; font-weight: 800; color: #1e293b; }
+.header-name { font-size: 15px; font-weight: 800; color: #1e293b; flex: 1; }
+.refresh-btn {
+  background: none; border: none; font-size: 18px; cursor: pointer;
+  padding: 4px 6px; border-radius: 8px; transition: background .12s; flex-shrink: 0;
+}
+.refresh-btn:hover { background: #f1f5f9; }
 
 /* bubbles */
 .chat-bubbles {
-  flex: 1; overflow-y: auto; padding: 16px 16px 8px;
+  flex: 1; min-height: 0; overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 16px 8px;
   display: flex; flex-direction: column; gap: 4px;
 }
 .hint-text.center { text-align: center; padding: 24px; }
@@ -655,7 +755,15 @@ onUnmounted(() => {
 
 /* ── MOBILE: toggle panels ── */
 @media (max-width: 639px) {
-  .msg-shell { height: calc(100dvh - 130px); }
+  /* Fixed between topbar (66px) and bottom nav (64px) — stable, no dvh arithmetic */
+  .msg-shell {
+    position: fixed;
+    top: 66px; bottom: 64px;
+    left: 0; right: 0;
+    height: auto;
+    border-radius: 0;
+    z-index: 10;
+  }
   .msg-sidebar { width: 100%; position: absolute; inset: 0; z-index: 2; transition: transform .22s; }
   .msg-sidebar--hidden { transform: translateX(-100%); }
   .msg-chat { position: absolute; inset: 0; z-index: 3; transform: translateX(100%); transition: transform .22s; }

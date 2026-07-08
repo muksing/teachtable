@@ -39,9 +39,7 @@
               </template>
               <!-- Filter by teacher -->
               <template v-else-if="filterMode==='teacher'">
-                <el-select v-model="filterTeachers" placeholder="ทุกครู" class="w-full" size="small" multiple collapse-tags :collapse-tags-tooltip="true" clearable filterable>
-                  <el-option v-for="t in sortedTeachers" :key="t.teacher_id" :label="`${t.teacher_id}  ${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
-                </el-select>
+                <TeacherSelect v-model="filterTeachers" :teachers="teachers" multiple placeholder="ทุกครู" class="w-full" size="small" />
                 <div class="flex gap-1">
                   <button class="flex-1 text-xs py-0.5 rounded text-white font-medium transition-all hover:opacity-80" style="background:#1d4ed8;font-size:10px" @click="filterTeachers = teachers.map(t => t.teacher_id)">ทั้งหมด</button>
                   <button class="flex-1 text-xs py-0.5 rounded font-medium transition-all hover:opacity-80" style="background:#e5e7eb;color:#6b7280;font-size:10px" @click="filterTeachers = []">ยกเลิก</button>
@@ -184,10 +182,7 @@
               <!-- Teacher selector -->
               <div v-else-if="lockForm.lock_type === 'teacher'" class="rounded-lg p-2" style="background:#f0fdf4;border:1px solid #bbf7d0">
                 <div class="text-green-700 font-semibold mb-1">👨‍🏫 อาจารย์ที่ล็อก <span class="text-red-400">*</span></div>
-                <el-select v-model="lockForm.target_teachers" multiple size="small" class="w-full" collapse-tags :collapse-tags-tooltip="true" filterable>
-                  <el-option v-for="t in teachers" :key="t.teacher_id"
-                    :label="`${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
-                </el-select>
+                <TeacherSelect v-model="lockForm.target_teachers" :teachers="teachers" multiple class="w-full" size="small" />
                 <div class="flex gap-1 mt-1.5">
                   <button class="flex-1 text-xs py-0.5 rounded text-white font-medium transition-all hover:opacity-80"
                     style="background:#15803d;font-size:10px"
@@ -231,50 +226,38 @@
       <!-- ===== Main: 3 stacked panels ===== -->
       <div class="flex-1 overflow-y-auto p-4 space-y-4" :class="fontScaleClass" style="height:100vh" @contextmenu="onContextCancel">
 
-        <!-- Workflow pre-check card: run activity locks and supervision locks before scheduling -->
-        <div v-if="workflowStep !== null" class="rounded-xl border overflow-hidden"
+        <!-- Workflow card: ล็อกกิจกรรม + ครูคุม — แสดงตลอดเวลา -->
+        <div v-if="!isLocked" class="rounded-xl border overflow-hidden"
           style="border-color:#c4b5fd;background:#faf5ff">
           <div class="flex items-center justify-between px-3 py-2"
             style="background:linear-gradient(135deg,#f3e8ff,#ede9fe)">
-            <div class="text-xs font-semibold text-purple-700">📋 ขั้นตอนก่อนจัดตารางสอน</div>
-            <button class="text-xs text-purple-500 hover:text-purple-700 underline" @click="workflowStep = null">ข้ามทั้งหมด</button>
-          </div>
-
-          <div class="px-3 py-2 text-xs" style="color:#92400e;background:#fef3c7;border-top:1px solid #f59e0b">
-            ⚠️ กรุณาดำเนินการล็อกกิจกรรมและครูคุมก่อน หรือกดข้ามขั้นตอน
+            <div class="text-xs font-semibold text-purple-700">📋 ล็อกคาบกิจกรรม / ครูคุม</div>
           </div>
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-2 p-3">
-            <div class="rounded-lg border p-2.5" :style="workflowStep === '1' ? 'border-color:#a78bfa;background:#f5f3ff' : 'border-color:#bbf7d0;background:#f0fdf4'">
+            <!-- ① ลงกิจกรรม -->
+            <div class="rounded-lg border p-2.5" style="border-color:#a78bfa;background:#f5f3ff">
               <div class="flex items-center gap-2 mb-1">
-                <span class="text-xs font-semibold" :class="workflowStep === '1' ? 'text-purple-700' : 'text-green-700'">
-                  {{ workflowStep === '1' ? '① ลงกิจกรรม' : '✅ ลงกิจกรรมแล้ว' }}
-                </span>
+                <span class="text-xs font-semibold text-purple-700">① ล็อกคาบกิจกรรมห้องเรียน</span>
               </div>
-              <p class="text-xs text-gray-500 mb-2">นำคาบกิจกรรมจากตารางกิจกรรมมาลงในตารางสอน</p>
-              <div class="flex items-center gap-2">
-                <el-button v-if="workflowStep === '1'" size="small" :loading="workflowLoading === '1'" :disabled="!!workflowLoading"
-                  @click="doApplyAllActivities"
-                  style="background:#7c3aed;border-color:#7c3aed;color:white;font-weight:700">
-                  ① ลงกิจกรรม
-                </el-button>
-                <button v-if="workflowStep === '1'" class="text-xs text-gray-400 hover:text-gray-600 underline" @click="workflowStep = '2'">ข้ามขั้นตอนนี้</button>
-              </div>
+              <p class="text-xs text-gray-500 mb-2">นำคาบกิจกรรมจากตารางกิจกรรมมาล็อกในตารางสอน</p>
+              <el-button size="small" :loading="workflowLoading === '1'" :disabled="!!workflowLoading"
+                @click="doApplyAllActivities"
+                style="background:#7c3aed;border-color:#7c3aed;color:white;font-weight:700">
+                ① ล็อกคาบกิจกรรม
+              </el-button>
             </div>
 
-            <div class="rounded-lg border p-2.5" :style="workflowStep === '2' ? 'border-color:#93c5fd;background:#eff6ff' : 'border-color:#e5e7eb;background:#f9fafb'">
+            <!-- ② ครูคุม + ล็อกห้อง -->
+            <div class="rounded-lg border p-2.5" style="border-color:#93c5fd;background:#eff6ff">
               <div class="flex items-center gap-2 mb-1">
-                <span class="text-xs font-semibold" :class="workflowStep === '2' ? 'text-blue-700' : 'text-gray-400'">② ครูคุม + ล็อกห้อง</span>
+                <span class="text-xs font-semibold text-blue-700">② ล็อกครูคุมกิจกรรม + ล็อกห้อง</span>
               </div>
               <p class="text-xs text-gray-500 mb-2">นำข้อมูลครูคุมกิจกรรมมาลงตารางครู และล็อกห้องที่จองไว้</p>
-              <div class="flex items-center gap-2">
-                <el-button v-if="workflowStep === '2'" size="small" type="primary" :loading="workflowLoading === '2'" :disabled="!!workflowLoading"
-                  @click="doApplySupervisions" style="font-weight:700">
-                  ② ครูคุม + ล็อกห้อง
-                </el-button>
-                <span v-else class="text-xs text-gray-400">⏳ รอขั้นตอนที่ 1</span>
-                <button v-if="workflowStep === '2'" class="text-xs text-gray-400 hover:text-gray-600 underline" @click="workflowStep = null">ข้ามขั้นตอนนี้</button>
-              </div>
+              <el-button size="small" type="primary" :loading="workflowLoading === '2'" :disabled="!!workflowLoading"
+                @click="doApplySupervisions" style="font-weight:700">
+                ② ล็อกครูคุม + ห้อง
+              </el-button>
             </div>
           </div>
         </div>
@@ -470,6 +453,7 @@
                         :style="`border-left:3px solid ${getSubjectColor(rt.getClassSlot(day.value,p,selectedClass).subject_code)};background:${getSubjectColor(rt.getClassSlot(day.value,p,selectedClass).subject_code)}18`">
                         <div class="tt-subj-content">
                           <div class="tt-subj-name">{{ rt.getClassSlot(day.value, p, selectedClass).subject_name }}</div>
+                          <div class="tt-subj-code">{{ rt.getClassSlot(day.value, p, selectedClass).subject_code }}</div>
                           <div class="tt-subj-sub">{{ rt.getClassSlot(day.value, p, selectedClass).teacher_name }}</div>
                           <!-- Co-teach badges -->
                           <div v-for="ct in getCoTeachSlots(day.value, p, selectedClass)" :key="ct.id" class="tt-coteach-badge">
@@ -496,18 +480,7 @@
         <div class="bg-white rounded-xl shadow-sm border overflow-hidden">
           <div class="flex items-center gap-3 px-4 py-2.5 border-b panel-header-teacher flex-wrap">
             <span class="font-bold text-blue-700">👨‍🏫 อาจารย์</span>
-            <el-select v-model="selectedTeacher" placeholder="เลือกอาจารย์" size="small" style="width:240px" filterable>
-              <template v-if="teacherSortBy === 'dept'">
-                <el-option-group v-for="(group, dept) in teachersByDept" :key="dept" :label="dept">
-                  <el-option v-for="t in group" :key="t.teacher_id"
-                    :label="`${t.teacher_id}  ${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
-                </el-option-group>
-              </template>
-              <template v-else>
-                <el-option v-for="t in sortedTeachers" :key="t.teacher_id"
-                  :label="`${t.teacher_id}  ${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
-              </template>
-            </el-select>
+            <TeacherSelect v-model="selectedTeacher" :teachers="teachers" placeholder="เลือกอาจารย์" style="width:240px" />
             <el-button size="small" plain
               :title="teacherSortBy === 'code' ? 'เรียงตามรหัสครู — คลิกเพื่อเรียงตามกลุ่มสาระ' : 'เรียงตามกลุ่มสาระ — คลิกเพื่อเรียงตามรหัส'"
               @click="teacherSortBy = teacherSortBy === 'code' ? 'dept' : 'code'">
@@ -584,6 +557,7 @@
                         <div class="tt-subj-content">
                           <div class="tt-class-badge">{{ rt.getTeacherSlot(day.value, p, selectedTeacher).class_id }}</div>
                           <div class="tt-subj-name">{{ rt.getTeacherSlot(day.value, p, selectedTeacher).subject_name }}</div>
+                          <div class="tt-subj-code">{{ rt.getTeacherSlot(day.value, p, selectedTeacher).subject_code }}</div>
                           <div v-if="rt.getTeacherSlot(day.value, p, selectedTeacher).preferred_room" class="tt-room">🏛 {{ rt.getTeacherSlot(day.value, p, selectedTeacher).preferred_room }}</div>
                         </div>
                       </div>
@@ -679,6 +653,7 @@
                         <div class="tt-subj-content">
                           <div class="tt-class-badge" style="color:#059669">{{ rt.getRoomSlot(day.value, p, selectedRoom).class_id }}</div>
                           <div class="tt-subj-name">{{ rt.getRoomSlot(day.value, p, selectedRoom).subject_name }}</div>
+                          <div class="tt-subj-code">{{ rt.getRoomSlot(day.value, p, selectedRoom).subject_code }}</div>
                           <div class="tt-subj-sub">{{ rt.getRoomSlot(day.value, p, selectedRoom).teacher_name }}</div>
                         </div>
                       </div>
@@ -717,10 +692,7 @@
             ห้อง <span class="text-purple-600">{{ editDlg.slot.class_id }}</span>
             และอัปเดตรายการมอบหมายงานอัตโนมัติ
           </div>
-          <el-select v-model="editDlg.newTeacherId" class="w-full" filterable>
-            <el-option v-for="t in teachers" :key="t.teacher_id"
-              :label="`${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
-          </el-select>
+          <TeacherSelect v-model="editDlg.newTeacherId" :teachers="teachers" class="w-full" />
         </div>
 
         <!-- Swap Mode trigger from dialog -->
@@ -801,10 +773,7 @@
         </div>
         <div>
           <div class="text-sm font-semibold text-gray-700 mb-1.5">เลือกครูใหม่</div>
-          <el-select v-model="cardEditDlg.newTeacherId" class="w-full" filterable placeholder="ค้นหาครู">
-            <el-option v-for="t in teachers" :key="t.teacher_id"
-              :label="`${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
-          </el-select>
+          <TeacherSelect v-model="cardEditDlg.newTeacherId" :teachers="teachers" placeholder="ค้นหาครู" class="w-full" />
         </div>
         <div>
           <div class="text-sm font-semibold text-gray-700 mb-1.5">เลือกห้อง/Lab ใหม่ (ไม่บังคับ)</div>
@@ -854,10 +823,7 @@
         </div>
         <div>
           <div class="font-semibold text-gray-700 mb-1.5">เลือกครูร่วมสอน</div>
-          <el-select v-model="coTeachDlg.teacherId" class="w-full" filterable placeholder="เลือกครู">
-            <el-option v-for="t in availableCoTeachers" :key="t.teacher_id"
-              :label="`${t.prefix||''}${t.name} ${t.surname}`" :value="t.teacher_id" />
-          </el-select>
+          <TeacherSelect v-model="coTeachDlg.teacherId" :teachers="availableCoTeachers" class="w-full" />
         </div>
       </div>
       <template #footer>
@@ -1256,6 +1222,20 @@ onUnmounted(() => {
   window.removeEventListener('beforeunload', onBeforeUnload)
   rt.unsubscribe()
   window.removeEventListener('keyup', onGlobalKeyUp)
+})
+
+// Reload ข้อมูลทั้งหมดเมื่อ currentTerm เปลี่ยน (เช่น admin สลับเทอม)
+watch(() => schoolStore.currentTerm, async (newTerm, oldTerm) => {
+  if (!newTerm || newTerm === oldTerm) return
+  ElMessage.info(`เทอมเปลี่ยนเป็น ${newTerm} — โหลดตารางสอนใหม่`)
+  rt.unsubscribe()
+  const [c, tArr] = await Promise.all([getClasses(), getTeachers()])
+  classes.value = c
+  teachers.value = tArr
+  await rt.subscribe()
+  await loadAssignmentsWithProgress()
+  if (c.length)    selectedClass.value   = c[0].class_id
+  if (tArr.length) selectedTeacher.value = tArr[0].teacher_id
 })
 
 function onBeforeUnload() {
@@ -3037,6 +3017,7 @@ async function handleAIMode() {
 }
 .tt-subj-content { flex: 1; overflow: hidden; min-height: 0; }
 .tt-subj-name { font-size: calc(10px * var(--tt-scale, 1.0)); font-weight: 600; color: #1f2937; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tt-subj-code { font-size: calc(8px * var(--tt-scale, 1.0)); color: #7c3aed; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .tt-subj-sub  { font-size: calc(9px * var(--tt-scale, 1.0)); color: #6b7280; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Slot action bar (bottom of subject card) */
@@ -3278,6 +3259,7 @@ async function handleAIMode() {
 
 /* Font scale classes */
 .tt-scale-small .tt-subj-name { font-size: 10px; }
+.tt-scale-small .tt-subj-code { font-size: 8px; }
 .tt-scale-small .tt-subj-sub  { font-size: 9px; }
 .tt-scale-small .tt-class-badge { font-size: 10px; }
 .tt-scale-small .tt-room { font-size: 9px; }
@@ -3287,6 +3269,7 @@ async function handleAIMode() {
 .tt-scale-small .tt-day { font-size: 12px; }
 
 .tt-scale-medium .tt-subj-name { font-size: 12px; }
+.tt-scale-medium .tt-subj-code { font-size: 10px; }
 .tt-scale-medium .tt-subj-sub  { font-size: 11px; }
 .tt-scale-medium .tt-class-badge { font-size: 12px; }
 .tt-scale-medium .tt-room { font-size: 11px; }
@@ -3296,6 +3279,7 @@ async function handleAIMode() {
 .tt-scale-medium .tt-day { font-size: 13px; }
 
 .tt-scale-large .tt-subj-name { font-size: 14px; line-height: 1.4; }
+.tt-scale-large .tt-subj-code { font-size: 11px; }
 .tt-scale-large .tt-subj-sub  { font-size: 12px; }
 .tt-scale-large .tt-class-badge { font-size: 13px; }
 .tt-scale-large .tt-room { font-size: 12px; }

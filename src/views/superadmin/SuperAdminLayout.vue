@@ -35,12 +35,12 @@
 
           <el-menu-item index="/superadmin/packages">
             <el-icon><Box /></el-icon>
-            <span>Package Catalog</span>
+            <span>แพ็กเกจ</span>
           </el-menu-item>
 
-          <el-menu-item index="/superadmin/pricing-formula">
-            <el-icon><Setting /></el-icon>
-            <span>Pricing Formula</span>
+          <el-menu-item index="/superadmin/renewal-approval">
+            <el-icon><DocumentChecked /></el-icon>
+            <span>อนุมัติต่ออายุ</span>
           </el-menu-item>
 
           <el-menu-item index="/superadmin/settings">
@@ -83,9 +83,10 @@ import { useSchoolManagement } from '@/composables/useSchoolManagement'
 import {
   House,
   DocumentAdd,
+  DocumentChecked,
   School,
-  Setting,
   Box,
+  Setting,
   SwitchButton
 } from '@element-plus/icons-vue'
 
@@ -105,8 +106,7 @@ const currentPageTitle = computed(() => {
     '/superadmin/dashboard': 'Dashboard',
     '/superadmin/school-requests': 'School Registration Requests',
     '/superadmin/schools': 'Active Schools',
-    '/superadmin/packages': 'Package Catalog',
-    '/superadmin/pricing-formula': 'Pricing Formula Settings',
+    '/superadmin/renewal-approval': 'อนุมัติต่ออายุ',
     '/superadmin/settings': 'System Settings'
   }
   return titles[route.path] || 'Master-teachtable'

@@ -4,10 +4,16 @@ import { ref, computed } from 'vue'
 export const useSchoolStore = defineStore('school', () => {
   const schoolInfo = ref(null)
   const currentTerm = ref(null)
+  const viewingTerm = ref(null) // null = ใช้ currentTerm, กำหนดค่าเพื่อดูเทอมย้อนหลัง
+
+  const displayTerm = computed(() => viewingTerm.value || currentTerm.value)
+  const isViewingOldTerm = computed(() => !!viewingTerm.value && viewingTerm.value !== currentTerm.value)
 
   function setSchool(data) { schoolInfo.value = data }
   function setCurrentTerm(term) { currentTerm.value = term }
-  function clear() { schoolInfo.value = null; currentTerm.value = null }
+  function setViewingTerm(term) { viewingTerm.value = term || null }
+  function clearViewingTerm() { viewingTerm.value = null }
+  function clear() { schoolInfo.value = null; currentTerm.value = null; viewingTerm.value = null }
 
   const schoolName = computed(() => schoolInfo.value?.name || schoolInfo.value?.schoolName || '')
   const schoolId = computed(() => schoolInfo.value?.id || schoolInfo.value?.schoolId || schoolInfo.value?.school_id || null)
@@ -145,6 +151,9 @@ export const useSchoolStore = defineStore('school', () => {
     schoolInfo,
     settingsObj,
     currentTerm,
+    viewingTerm,
+    displayTerm,
+    isViewingOldTerm,
     schoolName,
     schoolId,
     termYear,
@@ -166,6 +175,8 @@ export const useSchoolStore = defineStore('school', () => {
     isViewOnlyMode,
     setSchool,
     setCurrentTerm,
+    setViewingTerm,
+    clearViewingTerm,
     clear,
   }
 })

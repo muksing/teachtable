@@ -333,7 +333,7 @@ const filteredDetailLogs = computed(() => {
 
 // ─── Load classes ──────────────────────────────────────────────
 onMounted(async () => {
-  try { classes.value = await getClasses() }
+  try { classes.value = (await getClasses()).filter(c => !c.is_schedule_only) }
   catch (e) { ElMessage.error('โหลดห้องเรียนไม่สำเร็จ: ' + e.message) }
 })
 

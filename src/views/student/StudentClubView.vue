@@ -2,12 +2,17 @@
   <div>
     <h2 class="page-title">🎯 กิจกรรมชุมนุม</h2>
 
-    <div v-if="!myClubs.length" class="empty-card">
+    <div v-if="loading" class="empty-card">
+      <div class="empty-icon">⏳</div>
+      <div>กำลังโหลด...</div>
+    </div>
+
+    <div v-else-if="!clubs.length" class="empty-card">
       <div class="empty-icon">🎪</div>
       <div>ยังไม่มีข้อมูลชุมนุมในภาคเรียนนี้</div>
     </div>
 
-    <div v-for="club in myClubs" :key="club.club_id" class="club-card">
+    <div v-for="club in clubs" :key="club.club_id" class="club-card">
       <div class="club-header">
         <div class="club-name">{{ club.name }}</div>
         <div v-if="club.type === 'special'" class="club-badge">พิเศษ</div>
@@ -15,15 +20,15 @@
       <div class="club-teacher">ครูที่ปรึกษา: {{ club.teacher_name || '-' }}</div>
 
       <!-- Evaluation result -->
-      <div v-if="myEval(club)" class="eval-row" :class="myEval(club).result === 'ผ่าน' ? 'eval--pass' : 'eval--fail'">
-        {{ myEval(club).result === 'ผ่าน' ? '✅ ผ่าน' : '❌ ไม่ผ่าน' }}
-        <span v-if="myEval(club).note" class="eval-note"> — {{ myEval(club).note }}</span>
+      <div v-if="club.my_eval" class="eval-row" :class="club.my_eval.result === 'ผ่าน' ? 'eval--pass' : 'eval--fail'">
+        {{ club.my_eval.result === 'ผ่าน' ? '✅ ผ่าน' : '❌ ไม่ผ่าน' }}
+        <span v-if="club.my_eval.note" class="eval-note"> — {{ club.my_eval.note }}</span>
       </div>
 
       <!-- Attendance summary bar -->
       <div class="club-summary">
         <div class="club-summary-text">
-          เข้าร่วม <strong>{{ mySessionCount(club) }}</strong> / {{ totalSessions(club) }} ครั้ง
+          เข้าร่วม <strong>{{ mySessionCount(club) }}</strong> / {{ club.sessions.length }} ครั้ง
         </div>
         <div class="club-bar-track">
           <div class="club-bar-fill" :style="{ width: clubPct(club) + '%' }"></div>
@@ -33,7 +38,7 @@
       <!-- Sessions attendance -->
       <div class="sessions-header">รายละเอียดแต่ละครั้ง</div>
       <div class="sessions-list">
-        <div v-for="(session, sid) in club.sessions" :key="sid" class="session-row">
+        <div v-for="session in club.sessions" :key="session.session_id" class="session-row">
           <div class="session-status" :class="sessionStatusClass(session)">
             {{ myAttendStatus(session) }}
           </div>
@@ -42,61 +47,81 @@
             <div class="session-date">{{ formatDate(session.session_date) }}</div>
           </div>
         </div>
-        <div v-if="!Object.keys(club.sessions || {}).length" class="empty-text">ยังไม่มีการบันทึกกิจกรรม</div>
+        <div v-if="!club.sessions.length" class="empty-text">ยังไม่มีการบันทึกกิจกรรม</div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { supabase } from '@/supabase/client'
 import { useStudentStore } from '@/stores/student'
 
 const studentStore = useStudentStore()
-const session = computed(() => studentStore.session || {})
+const studentCode  = computed(() => studentStore.session?.student_code || '')
+const schoolId     = computed(() => studentStore.session?.school_id    || '')
+const currentTerm  = computed(() => studentStore.session?.current_term || '')
 
-const myClubs = computed(() => {
-  const clubs = session.value.clubs || {}
-  const studentId = session.value.student_code
-  return Object.values(clubs).filter(club =>
-    club.members && Object.prototype.hasOwnProperty.call(club.members, studentId)
-  )
-})
+const loading = ref(false)
+const clubs   = ref([])
 
-function myEval(club) {
-  const id = session.value.student_code
-  return club.evaluations?.[id] || null
+async function loadMyClubs() {
+  if (!studentCode.value) return
+  loading.value = true
+  try {
+    const membershipsQ = supabase
+      .from('club_memberships')
+      .select('club_id, eval_result, eval_note')
+      .eq('student_id', studentCode.value)
+      .eq('school_id', schoolId.value)
+    if (currentTerm.value) membershipsQ.eq('term_id', currentTerm.value)
+    const { data: memberships } = await membershipsQ
+
+    if (!memberships?.length) { clubs.value = []; return }
+
+    const clubIds = memberships.map(m => m.club_id)
+    const [{ data: clubRows }, { data: sessionRows }] = await Promise.all([
+      supabase.from('clubs').select('club_id, name, type, teacher_name, is_active').in('club_id', clubIds),
+      supabase.from('club_sessions').select('*').in('club_id', clubIds).order('session_number'),
+    ])
+
+    const clubMap = Object.fromEntries((clubRows || []).map(c => [c.club_id, c]))
+    clubs.value = memberships.map(m => ({
+      ...clubMap[m.club_id],
+      my_eval:  m.eval_result ? { result: m.eval_result, note: m.eval_note } : null,
+      sessions: (sessionRows || []).filter(s => s.club_id === m.club_id),
+    })).filter(c => c.club_id)
+  } catch (e) {
+    console.error(e)
+  } finally {
+    loading.value = false
+  }
 }
 
 function myAttendStatus(sess) {
-  const id = session.value.student_code
-  return sess.attendance?.[id]?.status || '-'
+  return sess.attendance?.[studentCode.value]?.status || '-'
 }
 
 function sessionStatusClass(sess) {
   const st = myAttendStatus(sess)
   if (st.includes('มาเรียน')) return 'st--attend'
-  if (st.includes('มาสาย')) return 'st--late'
-  if (st.includes('ลาป่วย')) return 'st--sick'
-  if (st.includes('ลากิจ')) return 'st--leave'
+  if (st.includes('มาสาย'))   return 'st--late'
+  if (st.includes('ลาป่วย'))  return 'st--sick'
+  if (st.includes('ลากิจ'))   return 'st--leave'
   if (st.includes('ขาด') || st.includes('โดด')) return 'st--absent'
   return ''
 }
 
 function mySessionCount(club) {
-  const id = session.value.student_code
-  return Object.values(club.sessions || {}).filter(s => {
-    const st = s.attendance?.[id]?.status || ''
+  return club.sessions.filter(s => {
+    const st = s.attendance?.[studentCode.value]?.status || ''
     return st.includes('มาเรียน') || st.includes('มาสาย')
   }).length
 }
 
-function totalSessions(club) {
-  return Object.keys(club.sessions || {}).length
-}
-
 function clubPct(club) {
-  const total = totalSessions(club)
+  const total = club.sessions.length
   if (!total) return 0
   return Math.round((mySessionCount(club) / total) * 100)
 }
@@ -105,11 +130,10 @@ function formatDate(d) {
   if (!d) return '-'
   const dt = new Date(d)
   if (isNaN(dt)) return d
-  const day = String(dt.getDate()).padStart(2, '0')
-  const month = String(dt.getMonth() + 1).padStart(2, '0')
-  const year = dt.getFullYear() + 543
-  return `${day}/${month}/${year}`
+  return `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}/${dt.getFullYear()+543}`
 }
+
+onMounted(loadMyClubs)
 </script>
 
 <style scoped>

@@ -1,6 +1,4 @@
-﻿<template>
-  <div class="register-page">
-    <div class="register-glow register-glow-a" />
+﻿    <div class="register-glow register-glow-a" />
     <div class="register-glow register-glow-b" />
 
     <div class="register-container">

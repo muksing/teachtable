@@ -281,7 +281,8 @@ async function loadStudentsAndScores(asgn) {
     const [{ data: stuData }, { data: scoreData }] = await Promise.all([
       supabase.from('students').select('*')
         .eq('school_id', schoolId.value)
-        .eq('class_id', asgn.class_id),
+        .eq('class_id', asgn.class_id)
+        .or('student_status.is.null,student_status.eq.เรียนอยู่'),
       supabase.from('score_records')
         .select('student_id, scores')
         .eq('school_id', schoolId.value)

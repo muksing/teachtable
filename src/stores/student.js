@@ -23,19 +23,20 @@ export const useStudentStore = defineStore('student', () => {
     if (error) throw error
     if (!data) return false
 
-    // โหลด current_term + clubs จาก schools table
-    const { data: schoolData } = await supabase
-      .from('schools')
-      .select('current_term, settings')
-      .eq('id', schoolId)
-      .single()
+    const [{ data: schoolData }, { data: studentExtra }] = await Promise.all([
+      supabase.from('schools').select('current_term, settings').eq('id', schoolId).single(),
+      supabase.from('students').select('prefix').eq('school_id', schoolId).eq('student_code', data.student_code).maybeSingle(),
+    ])
 
+    const info = schoolData?.settings?.school_info || {}
     session.value = {
       ...data,
-      school_id: schoolId,
-      current_term: schoolData?.current_term || null,
-      clubs: schoolData?.settings?.clubs || {},
-      has_set_pin: data.has_set_pin,
+      prefix:        studentExtra?.prefix || data.prefix || '',
+      school_id:     schoolId,
+      current_term:  schoolData?.current_term || null,
+      term_year:     info.year     || null,
+      term_semester: info.semester || null,
+      has_set_pin:   data.has_set_pin,
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(session.value))
     return true
@@ -52,11 +53,38 @@ export const useStudentStore = defineStore('student', () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(session.value))
   }
 
+  async function loginByEmail(email, credential) {
+    const { data, error } = await supabase.rpc('authenticate_student_by_email', {
+      p_email:      email.trim().toLowerCase(),
+      p_credential: credential,
+    })
+    if (error) throw error
+    if (!data) return false
+
+    const schoolId = data.school_id
+    const [{ data: schoolData }, { data: studentExtra }] = await Promise.all([
+      supabase.from('schools').select('current_term, settings').eq('id', schoolId).single(),
+      supabase.from('students').select('prefix').eq('school_id', schoolId).eq('student_code', data.student_code).maybeSingle(),
+    ])
+
+    const info = schoolData?.settings?.school_info || {}
+    session.value = {
+      ...data,
+      prefix:        studentExtra?.prefix || data.prefix || '',
+      school_id:     schoolId,
+      current_term:  schoolData?.current_term || null,
+      term_year:     info.year     || null,
+      term_semester: info.semester || null,
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(session.value))
+    return true
+  }
+
   function updatePhotoUrl(url) {
     if (!session.value || !url) return
     session.value = { ...session.value, photo_url: url }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(session.value))
   }
 
-  return { session, isLoggedIn, login, logout, refreshScores, updatePhotoUrl }
+  return { session, isLoggedIn, login, loginByEmail, logout, refreshScores, updatePhotoUrl }
 })

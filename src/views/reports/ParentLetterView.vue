@@ -179,7 +179,7 @@ async function loadData() {
       for (let from = 0; ; from += PAGE) {
         const { data, error } = await supabase
           .from('teach_actuals')
-          .select('student_records, is_filled, subject_id, planned_teacher_id')
+          .select('student_records, is_filled, subject_id, planned_teacher_id, date')
           .eq('school_id', schoolId.value).eq('term_id', termId.value).eq('class_id', classId)
           .range(from, from + PAGE - 1)
         if (error) throw error
@@ -195,7 +195,8 @@ async function loadData() {
       { data: subjectMasterData },
     ] = await Promise.all([
       supabase.from('students').select('*')
-        .eq('school_id', schoolId.value).eq('class_id', classId),
+        .eq('school_id', schoolId.value).eq('class_id', classId)
+        .or('student_status.is.null,student_status.eq.เรียนอยู่'),
       supabase.from('score_records').select('student_id, subject_code, scores')
         .eq('school_id', schoolId.value).eq('term_id', termId.value).eq('class_id', classId),
       fetchTeachActuals(),
@@ -244,7 +245,6 @@ async function loadData() {
       .sort((a, b) => a.subject_code.localeCompare(b.subject_code, 'th'))
 
     const students = (stuData || [])
-      .filter(s => !s.student_status || s.student_status === 'เรียนอยู่')
       .sort((a, b) => (parseInt(a.seat_number) || 999) - (parseInt(b.seat_number) || 999))
     const studentIds = students.map(s => s.student_code)
 
@@ -258,16 +258,23 @@ async function loadData() {
 
     const attendSubj = {}
     const attendCount = {}
+    // build join_date + carry_over maps
+    const joinDateMap = {}
+    const carryOverMap = {}
+    for (const stu of (stuData || [])) {
+      if (stu.join_date) joinDateMap[stu.student_code] = stu.join_date
+      carryOverMap[stu.student_code] = stu.subject_carry_over || {}
+    }
     for (const sid of studentIds) { attendSubj[sid] = {}; attendCount[sid] = { present: 0, total: 0 } }
 
     for (const ta of (taData || [])) {
       const subjId = (ta.subject_id || '').trim() || null
-      // นับ per-subject เฉพาะ subject ที่อยู่ใน list (filled-based) เท่านั้น
       const trackSubj = subjId && subjectMapObj[subjId]
+      const taDate = ta.date || null
 
       if (!ta.is_filled) {
-        // ครูไม่บันทึก → ทุกคนขาดคาบนี้
         for (const sid of studentIds) {
+          if (joinDateMap[sid] && taDate && taDate < joinDateMap[sid]) continue
           if (trackSubj) {
             if (!attendSubj[sid][subjId]) attendSubj[sid][subjId] = { present: 0, total: 0 }
             attendSubj[sid][subjId].total++
@@ -278,6 +285,7 @@ async function loadData() {
         const recs = ta.student_records || {}
         for (const [sid, rec] of Object.entries(recs)) {
           if (!attendCount[sid]) continue
+          if (joinDateMap[sid] && taDate && taDate < joinDateMap[sid]) continue
           const isPresent = categorizeStatus(rec.status || 'มาเรียน') === 'present'
           if (trackSubj) {
             if (!attendSubj[sid][subjId]) attendSubj[sid][subjId] = { present: 0, total: 0 }
@@ -287,6 +295,26 @@ async function loadData() {
           attendCount[sid].total++
           if (isPresent) attendCount[sid].present++
         }
+      }
+    }
+
+    // บวก carry-over คาบที่ยกมาจากโรงเรียนเดิม
+    for (const sid of studentIds) {
+      const co = carryOverMap[sid] || {}
+      // per-subject carry-over
+      for (const [subjCode, periods] of Object.entries(co)) {
+        const n = Number(periods) || 0
+        if (n > 0 && attendSubj[sid]?.[subjCode]) {
+          attendSubj[sid][subjCode].present += n
+          attendSubj[sid][subjCode].total   += n
+        }
+      }
+      // overall carry-over (average)
+      const vals = Object.values(co).map(Number).filter(v => v > 0)
+      const overall = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0
+      if (overall > 0) {
+        attendCount[sid].present += overall
+        attendCount[sid].total   += overall
       }
     }
 

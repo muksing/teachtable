@@ -389,69 +389,63 @@ export function useSchoolManagement() {
     }
   }
 
-  async function createPackage(data, superAdminUid) {
-    loading.value = true
-    error.value = null
+  async function createPackage(data) {
     try {
       const code = String(data.code || '').trim()
       if (!code) throw new Error('กรุณากรอกรหัสแพ็กเกจ')
-      const { error: err } = await supabase.from('package_catalog').insert([{
-        code,
-        name: String(data.name || code).trim(),
-        monthly_fee: Number(data.monthly_fee || 0),
-        scheduler_limit: Number(data.scheduler_limit || 1),
-        duration_months: Number(data.duration_months || 1),
-        is_active: data.is_active !== false,
-        sort_order: Number(data.sort_order || 99)
-      }])
+      const { error: err } = await supabase.rpc('upsert_package', {
+        p_code: code,
+        p_name: String(data.name || code).trim(),
+        p_annual_fee: Number(data.monthly_fee || 0),
+        p_sort_order: Number(data.sort_order || 99),
+        p_is_active: data.is_active !== false,
+      })
       if (err) throw err
       return { success: true }
     } catch (err) {
-      error.value = err.message
       return { success: false, error: err.message }
-    } finally {
-      loading.value = false
     }
   }
 
-  async function updatePackage(packageId, data, superAdminUid) {
-    loading.value = true
-    error.value = null
+  async function updatePackage(packageCode, data) {
     try {
-      if (!packageId) throw new Error('packageId is required')
-      const payload = {}
-      if (data.name !== undefined) payload.name = String(data.name || '').trim()
-      if (data.monthly_fee !== undefined) payload.monthly_fee = Number(data.monthly_fee || 0)
-      if (data.scheduler_limit !== undefined) payload.scheduler_limit = Number(data.scheduler_limit || 1)
-      if (data.duration_months !== undefined) payload.duration_months = Number(data.duration_months || 1)
-      if (data.sort_order !== undefined) payload.sort_order = Number(data.sort_order || 99)
-      
-      const { error: err } = await supabase.from('package_catalog').update(payload).eq('code', packageId)
+      if (!packageCode) throw new Error('packageCode is required')
+      const { error: err } = await supabase.rpc('upsert_package', {
+        p_code: packageCode,
+        p_name: String(data.name || '').trim(),
+        p_annual_fee: Number(data.monthly_fee || 0),
+        p_sort_order: Number(data.sort_order || 99),
+        p_is_active: true,
+      })
       if (err) throw err
       return { success: true }
     } catch (err) {
-      error.value = err.message
       return { success: false, error: err.message }
-    } finally {
-      loading.value = false
     }
   }
 
-  async function togglePackageActive(packageId, isActive, superAdminUid) {
-    loading.value = true
-    error.value = null
+  async function togglePackageActive(packageCode, isActive) {
     try {
-      if (!packageId) throw new Error('packageId is required')
-      const { error: err } = await supabase.from('package_catalog').update({
-        is_active: Boolean(isActive)
-      }).eq('code', packageId)
+      if (!packageCode) throw new Error('packageCode is required')
+      const { error: err } = await supabase.rpc('toggle_package_active', {
+        p_code: packageCode,
+        p_is_active: Boolean(isActive),
+      })
       if (err) throw err
       return { success: true }
     } catch (err) {
-      error.value = err.message
       return { success: false, error: err.message }
-    } finally {
-      loading.value = false
+    }
+  }
+
+  async function deletePackage(packageCode) {
+    try {
+      if (!packageCode) throw new Error('packageCode is required')
+      const { error: err } = await supabase.rpc('delete_package_by_code', { p_code: packageCode })
+      if (err) throw err
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err.message }
     }
   }
 
@@ -680,6 +674,34 @@ export function useSchoolManagement() {
     }
   }
 
+  async function deleteSchool(schoolId) {
+    loading.value = true
+    error.value = null
+    try {
+      // ลองใช้ RPC cascade ก่อน (ถ้ามี)
+      const { error: rpcErr } = await supabase.rpc('delete_school_cascade', { p_school_id: schoolId })
+      if (!rpcErr) return { success: true }
+
+      // Fallback: ลบเป็นลำดับ (child tables ก่อน)
+      const tables = [
+        'student_health_records', 'student_good_deeds', 'student_gratitude',
+        'behavior_logs', 'score_records', 'teach_actuals', 'timetable_slots',
+        'students', 'teachers', 'subjects', 'classes', 'terms', 'renewal_requests',
+      ]
+      for (const t of tables) {
+        await supabase.from(t).delete().eq('school_id', schoolId)
+      }
+      const { error: delErr } = await supabase.from('schools').delete().eq('id', schoolId)
+      if (delErr) throw delErr
+      return { success: true }
+    } catch (err) {
+      error.value = err.message
+      return { success: false, error: err.message }
+    } finally {
+      loading.value = false
+    }
+  }
+
   return {
     loading,
     error,
@@ -695,9 +717,11 @@ export function useSchoolManagement() {
     updateSchoolPricingPlan,
     updateSchoolFeatureFlags,
     deleteRenewalRequest,
+    deleteSchool,
     getPackageCatalog,
     createPackage,
     updatePackage,
     togglePackageActive,
+    deletePackage,
   }
 }

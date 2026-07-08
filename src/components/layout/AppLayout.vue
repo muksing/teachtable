@@ -1,5 +1,5 @@
 <template>
-  <div class="app-layout">
+  <div :class="['app-layout', roleThemeClass]">
 
     <!-- Mobile overlay -->
     <transition name="fade">
@@ -29,7 +29,10 @@
 
       <!-- ── User chip ── -->
       <div class="sb-user-chip">
-        <div class="sb-avatar">{{ authStore.profile?.displayName?.charAt(0) || '?' }}</div>
+        <div class="sb-avatar">
+          <img v-if="authStore.profile?.photo_url" :src="authStore.profile.photo_url" class="sb-avatar-img" @error="e => e.target.style.display='none'" />
+          <span v-else>{{ authStore.profile?.displayName?.charAt(0) || '?' }}</span>
+        </div>
         <div class="sb-user-info">
           <div class="sb-user-name">{{ authStore.profile?.displayName || 'ผู้ใช้' }}</div>
           <div class="sb-user-role">{{ roleLabel }}</div>
@@ -74,7 +77,9 @@
                     <span class="sb-it-label">{{ item.label }}</span>
                     <span v-if="item.sub" class="sb-it-sub">{{ item.sub }}</span>
                   </div>
-                  <span class="sb-ia">›</span>
+                  <span v-if="item.to === '/teacher/teaching-log' && subCount > 0"
+                    class="sb-sub-badge">{{ subCount }}</span>
+                  <span v-else class="sb-ia">›</span>
                 </router-link>
               </template>
             </div>
@@ -103,6 +108,9 @@
         <router-link to="/profile" class="sb-footer-btn" @click="mobileOpen = false">
           ✏️ แก้ไขข้อมูลส่วนตัว
         </router-link>
+        <button class="sb-footer-btn" @click="toggleDark" style="letter-spacing:.5px">
+          {{ isDark ? '☀️ โหมดสว่าง' : '🌙 โหมดมืด' }}
+        </button>
         <button class="sb-footer-btn sb-logout" @click="handleLogout">
           🚪 ออกจากระบบ
         </button>
@@ -149,6 +157,8 @@ import { useSchoolStore } from '@/stores/school'
 import { useMasterAuth } from '@/composables/useMasterAuth'
 import { USER_ROLES as AUTH_ROLES } from '@/supabase/schema'
 import { supabase } from '@/supabase/client'
+import { useDarkMode } from '@/composables/useDarkMode'
+const { isDark, toggle: toggleDark } = useDarkMode()
 
 const authStore   = useAuthStore()
 const schoolStore = useSchoolStore()
@@ -158,6 +168,31 @@ const { logout } = useMasterAuth()
 
 const mobileOpen = ref(false)
 const openGroup  = ref('')
+const subCount   = ref(0)
+
+async function loadSubCount() {
+  const tid = authStore.profile?.teacher_id
+  const sid = authStore.schoolId
+  if (!tid || !sid) return
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' })
+  try {
+    const { count } = await supabase
+      .from('teach_actuals')
+      .select('id', { count: 'exact', head: true })
+      .eq('school_id', sid)
+      .eq('date', today)
+      .eq('actual_teacher_id', tid)
+      .eq('is_substitute_mandatory', true)
+      .eq('is_filled', false)
+    subCount.value = count || 0
+  } catch { subCount.value = 0 }
+}
+
+const roleThemeClass = computed(() => {
+  if (authStore.hasAnyRole(['superadmin', 'school_admin', 'admin'])) return 'theme-admin'
+  if (authStore.isSchoolDirector) return 'theme-director'
+  return 'theme-teacher'
+})
 
 const roleLabels = {
   superadmin: 'Super Admin',
@@ -167,6 +202,7 @@ const roleLabels = {
   scheduler: 'นักวิชาการ',
   school_teacher: 'ครูผู้สอน',
   teacher: 'ครูผู้สอน',
+  school_director: 'ผู้บริหาร',
   school_student: 'นักเรียน',
   student: 'นักเรียน'
 }
@@ -200,8 +236,8 @@ function selectViewingTerm(termId) {
   }
 }
 
-onMounted(loadAvailableTerms)
-watch(() => authStore.schoolId, loadAvailableTerms)
+onMounted(() => { loadAvailableTerms(); loadSubCount() })
+watch(() => authStore.schoolId, () => { loadAvailableTerms(); loadSubCount() })
 
 // ── กลุ่มเมนูทั้งหมด ──────────────────────────────────────────────
 const allGroups = computed(() => {
@@ -222,6 +258,23 @@ const allGroups = computed(() => {
           sub:'API Keys, Uptime' },
       ],
     }] : []), // End SuperAdmin Group
+
+    // Director Group — read-only overview & reports
+    ...(authStore.isSchoolDirector && !authStore.isAdmin ? [{
+      key: 'director', icon: '👔', label: 'เมนูผู้บริหาร',
+      grad: 'linear-gradient(135deg,#052e16,#14532d)',
+      roles: ['school_director'],
+      items: [
+        ...(schoolStore.isTeachingLogEnabled ? [
+          { to:'/teacher/missed-records', icon:'⚠️', bg:'#fef3c7', label:'รายวิชาที่ลืมบันทึก',      sub:'ภาพรวมทุกครู + ส่งแจ้งเตือน' },
+          { to:'/reports/teaching-log',   icon:'📘', bg:'#dbeafe', label:'รายงานบันทึกสอน',          sub:'คาบที่บันทึก/ยังไม่บันทึก' },
+          { to:'/reports/attendance',     icon:'📋', bg:'#cffafe', label:'รายงานการมาเรียน',          sub:'สรุปรายคน กรองห้อง/วิชา' },
+          { to:'/admin/attendance-maeso', icon:'🚨', bg:'#fee2e2', label:'รายงานสรุป มส.',            sub:'เวลาเรียนต่ำกว่า 80%' },
+          { to:'/reports/parent-letter',  icon:'✉️', bg:'#fef9c3', label:'จดหมายแจ้งผู้ปกครอง',     sub:'พิมพ์ PDF รายห้อง/ทั้งหมด' },
+          { to:'/admin/substitute-manage',icon:'🔄', bg:'#ede9fe', label:'ดูการจัดสอนแทน',           sub:'ตารางสอนแทนรายวัน' },
+        ] : []),
+      ],
+    }] : []),
 
     // Admin (School Admin) Group
     {
@@ -255,6 +308,16 @@ const allGroups = computed(() => {
         { to:'/teacher/my-timetable',    icon:'👤', bg:'#ecfeff', label:'ตารางสอนของฉัน',   sub:'อ่านจากตารางที่เผยแพร่', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
       ],
     },
+    // Announcements — เห็นเฉพาะผู้มีสิทธิ์ (ไม่ขึ้น feature gate)
+    ...(authStore.isAnnouncer ? [{
+      key: 'announcements', icon: '📣', label: 'ประชาสัมพันธ์',
+      grad: 'linear-gradient(135deg,#f59e0b,#fbbf24)',
+      roles: ['announcer', AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, 'school_director', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'],
+      items: [
+        { to:'/teacher/announcements', icon:'📣', bg:'#fef3c7', label:'จัดการประกาศ', sub:'สร้าง แก้ไข ลบ · ส่งถึงครู นักเรียน ผู้ปกครอง' },
+      ],
+    }] : []),
+
     // Teaching log module (SuperAdmin feature-gated)
     ...(schoolStore.isTeachingLogEnabled ? [{
       key: 'teaching-log', icon: '🧾', label: 'บันทึกเข้าสอน',
@@ -269,6 +332,7 @@ const allGroups = computed(() => {
           { to:'/admin/teach-actuals', icon:'🗑️', bg:'#fee2e2', label:'จัดการบันทึกเข้าสอน', sub:'ตรวจสอบ ลบข้อมูล', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
           { to:'/admin/import-teach-actuals', icon:'📥', bg:'#e0f2fe', label:'นำเข้าข้อมูล (จากระบบเดิม)', sub:'อัพโหลด Excel 2 Sheet → import', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
           { to:'/admin/generate-teach-actuals', icon:'🔧', bg:'#fef3c7', label:'สร้างคาบที่หาย', sub:'สแกนและสร้าง teach_actuals ที่ยังไม่มีใน DB', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
+          { to:'/admin/makeup-days', icon:'📆', bg:'#dbeafe', label:'วันเรียนชดเชย', sub:'กำหนดวันชดเชย · ใช้ตารางวันอื่น · สร้างคาบอัตโนมัติ', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
           { to:'/admin/notification-settings', icon:'📩', bg:'#ede9fe', label:'ตั้งค่าจดหมายแจ้งผู้ปกครอง', sub:'เกณฑ์กลุ่มเสี่ยง ข้อความ นัดหมาย', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
         ] : []),
         { type:'section', label:'ทำรายการบันทึกการสอน', icon:'📝', badgeStyle:'background:linear-gradient(90deg,#059669,#10b981);' },
@@ -278,7 +342,6 @@ const allGroups = computed(() => {
         { to:'/teacher/missed-records', icon:'⚠️', bg:'#fef3c7', label:'รายวิชาที่ลืมบันทึก', sub:'คาบค้างบันทึกในช่วงย้อนหลัง', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/teacher/daily-attendance', icon:'📋', bg:'#f0fdf4', label:'เช็คชื่อรายวัน / สรุปส่ง ผปค.', sub:'ครูประจำชั้น · บันทึกรายวัน · แจ้งผู้ปกครอง', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/teacher/homeroom-dashboard', icon:'🏫', bg:'#e0f2fe', label:'Dashboard ห้องประจำชั้น', sub:'สรุปการมาเรียน · เฝ้าระวัง · คัดกรองอัตโนมัติ', roles:[AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
-        { to:'/teacher/behavior-entry', icon:'📝', bg:'#fdf4ff', label:'บันทึกพฤติกรรม', sub:'เลือกนักเรียน · แนบรูปภาพประกอบ', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'], featureGate: 'behavior_system_enabled' },
         { to:'/teacher/score-entry', icon:'🔢', bg:'#f0fdf4', label:'บันทึกคะแนนเก็บ', sub:'กรอกคะแนนรายหน่วย · Paste จาก Excel', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         ...(schoolStore.isClubModuleEnabled ? [
           { to:'/teacher/club-open', icon:'🎯', bg:'#ffedd5', label:'เปิดชุมนุม', sub:'ครูเปิดชุมนุมปกติและพิเศษ', roles:[AUTH_ROLES.SCHOOL_TEACHER, 'teacher', AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN] },
@@ -287,7 +350,6 @@ const allGroups = computed(() => {
         { to:'/reports/teaching-log', icon:'📘', bg:'#dbeafe', label:'รายงานบันทึกสอน', sub:'คาบที่บันทึก/ยังไม่บันทึก', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/reports/attendance', icon:'📋', bg:'#cffafe', label:'รายงานการมาเรียน (รายวิชา)', sub:'สรุปรายคน กรองห้อง/วิชา', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/admin/attendance-maeso', icon:'🚨', bg:'#fee2e2', label:'รายงานสรุป มส.', sub:'นักเรียนเวลาเรียนต่ำกว่า 80% · PDF รายห้อง/ทั้งหมด', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
-        { to:'/reports/behavior', icon:'📈', bg:'#fae8ff', label:'รายงานพฤติกรรม', sub:'คะแนนสะสมและเหตุการณ์', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'], featureGate: 'behavior_system_enabled' },
         { to:'/reports/parent-letter', icon:'✉️', bg:'#fef9c3', label:'จดหมายแจ้งคะแนนและเวลาเรียน', sub:'พิมพ์ PDF · ส่ง LINE รายคน', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
       ],
     }] : []),
@@ -304,6 +366,31 @@ const allGroups = computed(() => {
         { to:'/teacher/proctor', icon:'👁',  bg:'#dbeafe', label:'คุมสอบในตาราง', sub:'คุมสอบตามตาราง · เลือกห้อง · อนุมัติ', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
       ],
     }] : []),
+    // Student Affairs Group
+    ...(schoolStore.isTeachingLogEnabled ? [{
+      key: 'student-affairs', icon: '🎓', label: 'ฝ่ายกิจการนักเรียน',
+      grad: 'linear-gradient(135deg,#b45309,#d97706)',
+      roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher', 'student_affairs'],
+      items: [
+        { type:'section', label:'บันทึกกิจการนักเรียน', icon:'📝', badgeStyle:'background:linear-gradient(135deg,#b45309,#d97706);color:#fff;' },
+        { to:'/teacher/behavior-entry', icon:'😊', bg:'#fdf4ff', label:'บันทึกพฤติกรรม', sub:'เลือกนักเรียน · แนบรูปภาพประกอบ', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher', 'student_affairs'], featureGate: 'behavior_system_enabled' },
+        { to:'/admin/hair-inspection', icon:'💇', bg:'#ccfbf1', label:'บันทึกการตรวจทรงผม', sub:'ผ่าน / ไม่ผ่าน / ตรวจซ้ำ · แนบรูปถ่าย', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher', 'student_affairs'] },
+        { to:'/admin/probation', icon:'⚠️', bg:'#fee2e2', label:'บันทึกทัณฑ์บน', sub:'กรณีความผิดร้ายแรง · ชดเชยคะแนนไม่ได้', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher', 'student_affairs'] },
+        { type:'section', label:'รายงานฝ่ายกิจการ', icon:'📊', badgeStyle:'background:linear-gradient(135deg,#0f766e,#0d9488);color:#fff;' },
+        { to:'/reports/behavior', icon:'📈', bg:'#fae8ff', label:'รายงานพฤติกรรม', sub:'คะแนนสะสมและเหตุการณ์', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher', 'student_affairs'], featureGate: 'behavior_system_enabled' },
+        { to:'/teacher/homeroom-dashboard', icon:'📸', bg:'#e0f2fe', label:'รายงานเช็คอิน', sub:'สรุปการมาเรียน · เช็คอินรายห้อง', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher', 'student_affairs'] },
+      ],
+    }] : []),
+
+    // Student support system
+    {
+      key: 'student-support', icon: '🤝', label: 'ระบบดูแลช่วยเหลือนักเรียน',
+      grad: 'linear-gradient(135deg,#065f46,#059669)',
+      roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'],
+      items: [
+        { to:'/teacher/home-visits', icon:'🏠', bg:'#d1fae5', label:'เยี่ยมบ้านนักเรียน', sub:'ดูพิกัดบ้าน · นำทาง · บันทึกการเยี่ยม', roles:[AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
+      ],
+    },
   ];
 
   return groups;
@@ -432,6 +519,10 @@ async function handleLogout() {
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   color: white; font-weight: 700; font-size: 14px; flex-shrink: 0;
+  overflow: hidden;
+}
+.sb-avatar-img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: 50%;
 }
 .topbar-title-wrap { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
 .topbar-sub { font-size: 11px; color: #64748b; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
@@ -543,6 +634,22 @@ async function handleLogout() {
 .sb-it-label { display: block; font-size: 12px; font-weight: 600; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sb-it-sub   { display: block; font-size: 10px; color: #94a3b8; }
 .sb-ia { font-size: 13px; color: #cbd5e1; flex-shrink: 0; }
+.sb-sub-badge {
+  flex-shrink: 0;
+  min-width: 20px; height: 20px;
+  border-radius: 10px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 5px;
+  animation: pulse-badge 1.5s infinite;
+}
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.65; }
+}
 
 /* ── Footer ──────────────────────────────────────────────────────── */
 .sb-footer {
@@ -666,5 +773,165 @@ async function handleLogout() {
   :deep([class*="-page"]) {
     padding: 12px !important;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   🎨 ADMIN THEME — Dark sidebar, gold accent
+   ═══════════════════════════════════════════════════════════════ */
+.theme-admin { background: #f1f5f9; }
+.theme-admin .sidebar {
+  background: #0f172a;
+  border-right-color: rgba(255,255,255,0.06);
+}
+.theme-admin .sb-header {
+  background: linear-gradient(135deg, #1e1b4b 0%, #312e81 60%, #1e3a5f 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.theme-admin .sb-user-chip {
+  background: rgba(255,255,255,0.04);
+  border-bottom-color: rgba(255,255,255,0.07);
+}
+.theme-admin .sb-user-name { color: #f1f5f9; }
+.theme-admin .sb-user-role { color: #64748b; }
+.theme-admin .sb-avatar    { background: linear-gradient(135deg,#fbbf24,#f59e0b); color: #0f172a; }
+.theme-admin .sb-nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); }
+.theme-admin .sb-standalone {
+  border-color: rgba(255,255,255,0.1);
+  color: #cbd5e1;
+}
+.theme-admin .sb-standalone:hover { background: rgba(255,255,255,0.06); }
+.theme-admin .sb-standalone.router-link-active {
+  background: rgba(251,191,36,0.14);
+  border-color: rgba(251,191,36,0.5);
+  color: #fbbf24;
+}
+.theme-admin .sb-group-btn  { color: #94a3b8; }
+.theme-admin .sb-group-btn:hover { background: rgba(255,255,255,0.06); }
+.theme-admin .sb-group-open { background: rgba(255,255,255,0.05); }
+.theme-admin .sb-gl         { color: #e2e8f0; }
+.theme-admin .sb-chevron    { color: rgba(255,255,255,0.25); }
+.theme-admin .sb-chevron-open { color: #fbbf24; }
+.theme-admin .sb-arrow      { color: rgba(255,255,255,0.25); }
+.theme-admin .sb-group-items { border-left-color: rgba(255,255,255,0.1); }
+.theme-admin .sb-item       { color: #94a3b8; }
+.theme-admin .sb-item:hover { background: rgba(255,255,255,0.06); color: #e2e8f0; }
+.theme-admin .sb-item.router-link-active {
+  background: rgba(251,191,36,0.14);
+  color: #fbbf24;
+  border-left-color: #fbbf24;
+}
+.theme-admin .sb-it-label   { color: inherit; }
+.theme-admin .sb-it-sub     { color: #475569; }
+.theme-admin .sb-ia         { color: rgba(255,255,255,0.15); }
+.theme-admin .sb-si-label   { color: #e2e8f0; }
+.theme-admin .sb-si-sub     { color: #475569; }
+.theme-admin .sb-footer     { border-top-color: rgba(255,255,255,0.07); }
+.theme-admin .sb-footer-btn { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); color: #64748b; }
+.theme-admin .sb-footer-btn:hover { background: rgba(255,255,255,0.09); color: #94a3b8; }
+.theme-admin .sb-logout     { color: #f87171; border-color: rgba(248,113,113,0.25); }
+.theme-admin .sb-logout:hover { background: rgba(248,113,113,0.1); }
+.theme-admin .sb-term-selector { border-top-color: rgba(255,255,255,0.07); }
+.theme-admin .sb-term-label { color: #475569; }
+.theme-admin .sb-term-btn   { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); color: #64748b; }
+.theme-admin .sb-term-btn:hover { border-color: #fbbf24; color: #fbbf24; }
+.theme-admin .sb-term-btn.active { background: #fbbf24; color: #0f172a; border-color: #fbbf24; }
+@media (max-width: 1023px) {
+  .theme-admin .mobile-topbar  { background: #0f172a; border-bottom-color: rgba(255,255,255,0.08); }
+  .theme-admin .topbar-title   { color: #fbbf24; }
+  .theme-admin .topbar-sub     { color: #475569; }
+  .theme-admin .topbar-avatar  { background: linear-gradient(135deg,#fbbf24,#f59e0b); color: #0f172a; }
+  .theme-admin .hamburger span { background: #fbbf24; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   🎨 TEACHER THEME — Teal sidebar header, green accent
+   ═══════════════════════════════════════════════════════════════ */
+.theme-teacher { background: #f0fdf9; }
+.theme-teacher .sidebar { background: #fff; }
+.theme-teacher .sb-header {
+  background: linear-gradient(135deg, #0f766e 0%, #0369a1 100%);
+}
+.theme-teacher .sb-avatar { background: linear-gradient(135deg,#0f766e,#0369a1); }
+.theme-teacher .sb-standalone.router-link-active {
+  background: linear-gradient(135deg,#f0fdf4,#e0f2fe);
+  border-color: #5eead4;
+  color: #0f766e;
+}
+.theme-teacher .sb-chevron-open { color: #0f766e; }
+.theme-teacher .sb-item.router-link-active {
+  background: #e0f2fe;
+  color: #0e7490;
+  border-left-color: #0f766e;
+}
+.theme-teacher .sb-term-btn:hover { border-color: #0f766e; color: #0f766e; }
+.theme-teacher .sb-term-btn.active { background: #0f766e; border-color: #0f766e; color: white; }
+.theme-teacher .main-wrapper { background: #f0fdf9; }
+@media (max-width: 1023px) {
+  .theme-teacher .mobile-topbar  { background: linear-gradient(135deg,#0f766e,#0369a1); border-bottom-color: transparent; }
+  .theme-teacher .topbar-title   { color: white; }
+  .theme-teacher .topbar-sub     { color: rgba(255,255,255,0.7); }
+  .theme-teacher .topbar-avatar  { background: rgba(255,255,255,0.25); color: white; }
+  .theme-teacher .hamburger span { background: white; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   🎨 DIRECTOR THEME — Dark forest green sidebar, emerald accent
+   ═══════════════════════════════════════════════════════════════ */
+.theme-director { background: #f0fdf4; }
+.theme-director .sidebar {
+  background: #052e16;
+  border-right-color: rgba(255,255,255,0.06);
+}
+.theme-director .sb-header {
+  background: linear-gradient(135deg, #14532d 0%, #065f46 60%, #064e3b 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.theme-director .sb-user-chip {
+  background: rgba(255,255,255,0.04);
+  border-bottom-color: rgba(255,255,255,0.07);
+}
+.theme-director .sb-user-name { color: #f1f5f9; }
+.theme-director .sb-user-role { color: #4ade80; }
+.theme-director .sb-avatar    { background: linear-gradient(135deg,#34d399,#10b981); color: #052e16; }
+.theme-director .sb-nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); }
+.theme-director .sb-standalone {
+  border-color: rgba(255,255,255,0.1);
+  color: #a7f3d0;
+}
+.theme-director .sb-standalone:hover { background: rgba(255,255,255,0.06); }
+.theme-director .sb-standalone.router-link-active {
+  background: rgba(52,211,153,0.16);
+  border-color: rgba(52,211,153,0.5);
+  color: #34d399;
+}
+.theme-director .sb-group-btn  { color: #86efac; }
+.theme-director .sb-group-btn:hover { background: rgba(255,255,255,0.06); }
+.theme-director .sb-group-open { background: rgba(255,255,255,0.05); }
+.theme-director .sb-gl         { color: #d1fae5; }
+.theme-director .sb-chevron    { color: rgba(255,255,255,0.25); }
+.theme-director .sb-chevron-open { color: #34d399; }
+.theme-director .sb-arrow      { color: rgba(255,255,255,0.25); }
+.theme-director .sb-group-items { border-left-color: rgba(255,255,255,0.1); }
+.theme-director .sb-item       { color: #86efac; }
+.theme-director .sb-item:hover { background: rgba(255,255,255,0.06); color: #d1fae5; }
+.theme-director .sb-item.router-link-active {
+  background: rgba(52,211,153,0.16);
+  color: #34d399;
+  border-left-color: #34d399;
+}
+.theme-director .sb-it-label   { color: inherit; }
+.theme-director .sb-it-sub     { color: #166534; }
+.theme-director .sb-ia         { color: rgba(255,255,255,0.15); }
+.theme-director .sb-footer     { border-top-color: rgba(255,255,255,0.07); }
+.theme-director .sb-footer-btn { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); color: #64748b; }
+.theme-director .sb-footer-btn:hover { background: rgba(255,255,255,0.09); color: #86efac; }
+.theme-director .sb-logout     { color: #f87171; border-color: rgba(248,113,113,0.25); }
+.theme-director .sb-logout:hover { background: rgba(248,113,113,0.1); }
+@media (max-width: 1023px) {
+  .theme-director .mobile-topbar  { background: linear-gradient(135deg,#14532d,#065f46); border-bottom-color: transparent; }
+  .theme-director .topbar-title   { color: #34d399; }
+  .theme-director .topbar-sub     { color: rgba(255,255,255,0.6); }
+  .theme-director .topbar-avatar  { background: linear-gradient(135deg,#34d399,#10b981); color: #052e16; }
+  .theme-director .hamburger span { background: #34d399; }
 }
 </style>

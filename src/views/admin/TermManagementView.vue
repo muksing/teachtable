@@ -194,6 +194,50 @@
           </el-button>
         </template>
       </el-dialog>
+      <!-- Promotion Dialog -->
+      <el-dialog v-model="showPromotionDialog" title="🎓 ยกนักเรียนขึ้นเทอมใหม่" width="520px" :close-on-click-modal="false">
+        <div class="mb-3 text-sm text-gray-600">
+          ยกนักเรียนจากเทอม <strong class="text-indigo-600">{{ cloneSource }}</strong>
+          → เทอม <strong class="text-indigo-600">{{ pendingCloneTarget }}</strong>
+        </div>
+
+        <!-- ตารางจับคู่ห้อง -->
+        <div v-if="promotionLoading" class="text-center py-6 text-gray-400">กำลังโหลด...</div>
+        <el-table v-else :data="promotionRows" border size="small" max-height="280">
+          <el-table-column label="ห้องเดิม" prop="from" width="160" align="center">
+            <template #default="{ row }">
+              <span class="font-bold text-gray-700">{{ row.from }}</span>
+              <span class="ml-1 text-xs text-gray-400">({{ row.count }} คน)</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="" width="40" align="center">
+            <template #default>→</template>
+          </el-table-column>
+          <el-table-column label="ห้องใหม่" min-width="150">
+            <template #default="{ row }">
+              <el-input v-model="row.to" size="small" placeholder="เช่น ม.2/1" />
+            </template>
+          </el-table-column>
+          <el-table-column label="ล้างพฤติกรรม" width="100" align="center">
+            <template #default="{ row }">
+              <el-switch v-model="row.clearBehavior" size="small" />
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div class="mt-3 p-3 rounded-lg text-xs" style="background:#fef9c3;border:1px solid #fde68a">
+          <strong>💡 คำแนะนำ:</strong>
+          เปิด "ล้างพฤติกรรม" สำหรับห้องที่เลื่อนช่วงชั้น เช่น ม.3→ม.4
+          คะแนนปัจจุบันจะถูก reset เป็น 0 และ behavior_logs จะไม่ถูกโคลน
+        </div>
+
+        <template #footer>
+          <el-button @click="cancelPromotion">ยกเลิก</el-button>
+          <el-button type="primary" :loading="cloning" @click="confirmPromotion">
+            ✅ ยืนยันยกนักเรียน
+          </el-button>
+        </template>
+      </el-dialog>
     </div>
   </AppLayout>
 </template>
@@ -370,11 +414,23 @@ async function doClone() {
   if (!targetId) return ElMessage.warning('กรุณาเลือกเทอมปลายทาง')
   if (targetId === cloneSource.value) return ElMessage.warning('ต้นทางและปลายทางเป็นเทอมเดียวกัน')
 
+  // ถ้าเลือก clone นักเรียน → เปิด dialog เลื่อนชั้นก่อน
+  const cloneStudents = cloneCollections.find(c => c.key === 'students')?.selected
+  if (cloneStudents) {
+    pendingCloneTarget.value = targetId
+    await openPromotionDialog(cloneSource.value)
+    return
+  }
+
+  await executeClone(targetId, null)
+}
+
+async function executeClone(targetId, classMapping, clearBehaviorRooms = new Set()) {
   cloning.value = true
+  showCloneDialog.value = false
   try {
-    await cloneTermData(cloneSource.value, targetId)
-    ElMessage.success(`โคลนข้อมูลจาก ${cloneSource.value} → ${targetId} สำเร็จ!`)
-    showCloneDialog.value = false
+    await cloneTermData(cloneSource.value, targetId, classMapping, clearBehaviorRooms)
+    ElMessage.success(`ยกนักเรียนจาก ${cloneSource.value} → ${targetId} สำเร็จ!`)
     await loadTerms()
   } catch (e) {
     ElMessage.error('โคลนไม่สำเร็จ: ' + e.message)
@@ -383,7 +439,65 @@ async function doClone() {
   }
 }
 
-async function cloneTermData(fromTerm, toTerm) {
+// ── Promotion Dialog ──────────────────────────────────────────────────
+const showPromotionDialog = ref(false)
+const pendingCloneTarget = ref('')
+const promotionRows = ref([]) // [{ from, to }]
+const promotionLoading = ref(false)
+
+function autoIncrementClass(classId) {
+  // รองรับรูปแบบ ม.1/1, ม.2/3, ป.1/2, ป.6/1 เป็นต้น
+  return classId.replace(/(ม\.|ป\.)(\d+)/, (_, prefix, grade) => {
+    const n = parseInt(grade)
+    return `${prefix}${n + 1}`
+  })
+}
+
+async function openPromotionDialog(sourceTerm) {
+  promotionLoading.value = true
+  showPromotionDialog.value = true
+  try {
+    const { data } = await supabase
+      .from('students')
+      .select('class_id')
+      .eq('school_id', schoolId.value)
+      .eq('term_id', sourceTerm)
+    const countMap = {}
+    ;(data || []).forEach(s => { if (s.class_id) countMap[s.class_id] = (countMap[s.class_id] || 0) + 1 })
+    const classes = Object.keys(countMap).sort()
+    promotionRows.value = classes.map(c => ({
+      from: c,
+      to: autoIncrementClass(c),
+      count: countMap[c],
+      clearBehavior: false,
+    }))
+  } catch (e) {
+    ElMessage.error('โหลดห้องเรียนไม่สำเร็จ: ' + e.message)
+    showPromotionDialog.value = false
+  } finally {
+    promotionLoading.value = false
+  }
+}
+
+async function confirmPromotion() {
+  const mapping = {}
+  const clearBehaviorRooms = new Set()
+  promotionRows.value.forEach(r => {
+    if (r.from && r.to) {
+      mapping[r.from] = r.to
+      if (r.clearBehavior) clearBehaviorRooms.add(r.from)
+    }
+  })
+  showPromotionDialog.value = false
+  await executeClone(pendingCloneTarget.value, mapping, clearBehaviorRooms)
+}
+
+function cancelPromotion() {
+  showPromotionDialog.value = false
+  pendingCloneTarget.value = ''
+}
+
+async function cloneTermData(fromTerm, toTerm, classMapping = null, clearBehaviorRooms = new Set()) {
   const sid = schoolId.value
   const selectedTables = cloneCollections.filter(c => c.selected).map(c => c.key)
   for (const tbl of selectedTables) {
@@ -395,19 +509,30 @@ async function cloneTermData(fromTerm, toTerm) {
         .eq('term_id', fromTerm)
       if (!data || !data.length) continue
 
-      // Prepare rows for target term (strip id to get new auto-ids, update term_id)
       const rows = data.map(row => {
         const { id, created_at, updated_at, ...rest } = row
-        return {
+        const newRow = {
           ...rest,
           term_id: toTerm,
           school_id: sid,
           cloned_from: fromTerm,
           cloned_at: new Date().toISOString(),
         }
+        if (tbl === 'students' && classMapping && newRow.class_id) {
+          const oldClass = newRow.class_id
+          newRow.class_id = classMapping[oldClass] || oldClass
+          // เลื่อนช่วงชั้น: ล้างคะแนนความประพฤติ
+          if (clearBehaviorRooms.has(oldClass)) {
+            newRow.behavior_carry_over = 0
+            newRow.total_behavior_score = 0
+            newRow.general_behavior_score = 0
+            newRow.attendance_behavior_score = 0
+            newRow.learning_behavior_score = 0
+          }
+        }
+        return newRow
       })
 
-      // Insert in chunks of 200
       for (let i = 0; i < rows.length; i += 200) {
         const chunk = rows.slice(i, i + 200)
         const { error } = await supabase.from(tbl).insert(chunk)
@@ -420,10 +545,23 @@ async function cloneTermData(fromTerm, toTerm) {
 }
 
 // ── Set Active Term ───────────────────────────────────────────────────
-// NOTE: ภาคเรียนที่ใช้งานจริงกำหนดจาก "ข้อมูลพื้นฐานโรงเรียน" เท่านั้น
-// ฟังก์ชันนี้ใช้สำหรับดูข้อมูลย้อนหลังในหน้านี้เท่านั้น ไม่กระทบการทำงานของระบบ
 async function setActiveTerm(termId) {
-  ElMessage.info(`หากต้องการเปลี่ยนภาคเรียนที่ใช้งาน ให้ไปที่ "ข้อมูลพื้นฐานโรงเรียน" และเปลี่ยนปีการศึกษา/ภาคเรียน แล้วบันทึก`)
+  try {
+    await ElMessageBox.confirm(
+      `เปลี่ยนภาคเรียนปัจจุบันของโรงเรียนเป็น "${termId}" ?\n\nทุกเมนูในระบบจะแสดงข้อมูลของเทอม ${termId} ทันที`,
+      'เปลี่ยนภาคเรียนปัจจุบัน',
+      { confirmButtonText: 'เปลี่ยนเทอม', cancelButtonText: 'ยกเลิก', type: 'warning' }
+    )
+  } catch { return }
+  try {
+    const { error } = await supabase.from('schools').update({ current_term: termId }).eq('id', schoolId.value)
+    if (error) throw error
+    schoolStore.setCurrentTerm(termId)
+    ElMessage.success(`เปลี่ยนภาคเรียนปัจจุบันเป็น ${termId} เรียบร้อย`)
+    await loadTerms()
+  } catch (e) {
+    ElMessage.error('เปลี่ยนไม่สำเร็จ: ' + e.message)
+  }
 }
 
 // ── Export Term ───────────────────────────────────────────────────────

@@ -5,18 +5,19 @@
       <!-- Header -->
       <div class="imp-header">
         <h1 class="imp-title">📥 นำเข้าข้อมูลบันทึกเข้าสอน</h1>
-        <p class="imp-sub">อัพโหลด Excel ที่ Export จากระบบเดิม (Firebase) — ต้องมี 2 Sheet: <b>teach_logs</b> และ <b>student_attendance</b></p>
+        <p class="imp-sub">รองรับ <b>CSV</b> หรือ <b>Excel (.xlsx)</b> จากระบบเดิม — ข้อมูลการเข้าเรียนนักเรียน (Sheet 2) เป็นตัวเลือก ไม่บังคับ</p>
       </div>
+
 
       <!-- Step 1: Upload -->
       <el-card class="imp-card mb-4">
-        <template #header><span class="imp-card-title">① เลือกไฟล์ Excel</span></template>
+        <template #header><span class="imp-card-title">① เลือกไฟล์</span></template>
 
         <el-upload
           ref="uploadRef"
           :auto-upload="false"
           :limit="1"
-          accept=".xlsx,.xls"
+          accept=".xlsx,.xls,.csv"
           :on-change="onFileChange"
           :on-remove="onFileRemove"
           drag
@@ -26,7 +27,7 @@
           <div style="margin-top:8px;font-size:14px;color:#64748b">
             ลากไฟล์มาวางที่นี่ หรือ <span style="color:#0284c7;font-weight:600">คลิกเพื่อเลือกไฟล์</span>
           </div>
-          <div style="font-size:12px;color:#94a3b8;margin-top:4px">รองรับ .xlsx เท่านั้น</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:4px">รองรับ .csv / .xlsx</div>
         </el-upload>
 
         <div v-if="fileInfo" class="mt-3 p-3 rounded-xl" style="background:#f0fdf4;border:1px solid #86efac">
@@ -46,10 +47,10 @@
             <div class="imp-sum-lbl">Sheet: teach_logs</div>
             <div class="imp-sum-sub">{{ sheetInfo.logs.ok ? '✅ โครงสร้างถูกต้อง' : '❌ ' + sheetInfo.logs.error }}</div>
           </div>
-          <div class="imp-sum-box" :class="sheetInfo.att.ok ? 'imp-sum--green' : 'imp-sum--red'">
+          <div class="imp-sum-box" :class="sheetInfo.att.hasData ? (sheetInfo.att.ok ? 'imp-sum--green' : 'imp-sum--red') : 'imp-sum--blue'">
             <div class="imp-sum-num">{{ sheetInfo.att.count }}</div>
-            <div class="imp-sum-lbl">Sheet: student_attendance</div>
-            <div class="imp-sum-sub">{{ sheetInfo.att.ok ? '✅ โครงสร้างถูกต้อง' : '❌ ' + sheetInfo.att.error }}</div>
+            <div class="imp-sum-lbl">ข้อมูลการเข้าเรียน (ตัวเลือก)</div>
+            <div class="imp-sum-sub">{{ !sheetInfo.att.hasData ? '— ไม่มีในไฟล์นี้' : sheetInfo.att.ok ? '✅ โครงสร้างถูกต้อง' : '❌ ' + sheetInfo.att.error }}</div>
           </div>
           <div class="imp-sum-box imp-sum--blue">
             <div class="imp-sum-num">{{ uniquePeriods }}</div>
@@ -86,23 +87,26 @@
           <el-table-column prop="topic" label="หัวข้อ" min-width="160" />
         </el-table>
 
-        <!-- Preview student_attendance -->
-        <div class="mb-1 font-bold text-gray-600" style="font-size:13px">ตัวอย่างข้อมูล student_attendance (5 แถวแรก):</div>
-        <el-table :data="attPreview" size="small" border style="border-radius:8px">
-          <el-table-column prop="date" label="วันที่" width="110" />
-          <el-table-column prop="class_id" label="ห้อง" width="90" />
-          <el-table-column prop="period_number" label="คาบ" width="60" align="center" />
-          <el-table-column prop="student_code" label="รหัสนักเรียน" width="110" />
-          <el-table-column prop="status" label="สถานะ" width="110">
-            <template #default="{ row }">
-              <el-tag :type="statusTagType(row.status)" size="small">{{ row.status }}</el-tag>
-            </template>
-          </el-table-column>
-        </el-table>
+        <!-- Preview student_attendance (optional) -->
+        <template v-if="attPreview.length">
+          <div class="mb-1 font-bold text-gray-600" style="font-size:13px">ตัวอย่างข้อมูลการเข้าเรียน (5 แถวแรก):</div>
+          <el-table :data="attPreview" size="small" border style="border-radius:8px">
+            <el-table-column prop="date" label="วันที่" width="110" />
+            <el-table-column prop="class_id" label="ห้อง" width="90" />
+            <el-table-column prop="period_number" label="คาบ" width="60" align="center" />
+            <el-table-column prop="student_code" label="รหัสนักเรียน" width="110" />
+            <el-table-column prop="status" label="สถานะ" width="110">
+              <template #default="{ row }">
+                <el-tag :type="statusTagType(row.status)" size="small">{{ row.status }}</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+        <div v-else class="text-xs text-gray-400 mt-2">— ไม่มีข้อมูลการเข้าเรียนนักเรียนในไฟล์นี้ (จะ import เฉพาะบันทึกครู)</div>
       </el-card>
 
       <!-- Step 3: Import -->
-      <el-card v-if="parsed && sheetInfo.logs.ok && sheetInfo.att.ok" class="imp-card mb-4">
+      <el-card v-if="parsed && sheetInfo.logs.ok" class="imp-card mb-4">
         <template #header><span class="imp-card-title">③ นำเข้าข้อมูล</span></template>
 
         <div class="mb-4 p-3 rounded-xl" style="background:#fffbeb;border:1px solid #fde68a;font-size:13px">
@@ -138,34 +142,40 @@
 
       <!-- Format guide -->
       <el-card class="imp-card" style="border-left:4px solid #94a3b8">
-        <template #header><span class="imp-card-title" style="color:#64748b">📋 รูปแบบ Excel ที่รองรับ</span></template>
+        <template #header><span class="imp-card-title" style="color:#64748b">📋 รูปแบบไฟล์ที่รองรับ</span></template>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
           <div>
-            <div class="font-bold mb-2">Sheet 1: <code>teach_logs</code></div>
+            <div class="font-bold mb-2">📄 CSV หรือ Sheet: บันทึกเข้าสอน <span style="color:#94a3b8;font-weight:400">(บังคับ)</span></div>
             <table class="imp-guide-table">
-              <tr><th>คอลัมน์</th><th>ตัวอย่าง</th></tr>
-              <tr><td>date</td><td>2025-11-04</td></tr>
-              <tr><td>term_id</td><td>2568_1</td></tr>
-              <tr><td>class_id</td><td>ม.1/1</td></tr>
-              <tr><td>period_number</td><td>1</td></tr>
-              <tr><td>slot_type</td><td>normal / homeroom</td></tr>
-              <tr><td>teacher_name</td><td>นายสมชาย ใจดี</td></tr>
-              <tr><td>topic</td><td>(ไม่บังคับ)</td></tr>
-              <tr><td>activity_type</td><td>(ไม่บังคับ)</td></tr>
-              <tr><td>is_filled</td><td>TRUE / FALSE</td></tr>
+              <tr><th>คอลัมน์</th><th>ตัวอย่าง</th><th>บังคับ?</th></tr>
+              <tr><td>date</td><td>2026-04-27</td><td>✅</td></tr>
+              <tr><td>class_id</td><td>ม.4/2</td><td>✅</td></tr>
+              <tr><td>period_number</td><td>1</td><td>✅</td></tr>
+              <tr><td>term_id</td><td>2569_1</td><td>— (ใช้ term ปัจจุบันถ้าไม่มี)</td></tr>
+              <tr><td>slot_type</td><td>normal / homeroom</td><td>—</td></tr>
+              <tr><td>teacher_name</td><td>นายสมชาย ใจดี</td><td>—</td></tr>
+              <tr><td>teacher_id</td><td>501</td><td>—</td></tr>
+              <tr><td>subject_name</td><td>คณิตศาสตร์</td><td>—</td></tr>
+              <tr><td>topic</td><td>เรื่อง...</td><td>—</td></tr>
+              <tr><td>note</td><td>หมายเหตุ</td><td>—</td></tr>
+              <tr><td>img1, img2, img3</td><td>https://...</td><td>—</td></tr>
+              <tr><td>activity_type</td><td>บรรยาย</td><td>—</td></tr>
+              <tr><td>is_filled</td><td>TRUE / FALSE</td><td>—</td></tr>
             </table>
           </div>
           <div>
-            <div class="font-bold mb-2">Sheet 2: <code>student_attendance</code></div>
+            <div class="font-bold mb-2">📋 Sheet 2: <code>student_attendance</code> <span style="color:#94a3b8;font-weight:400">(ตัวเลือก)</span></div>
             <table class="imp-guide-table">
               <tr><th>คอลัมน์</th><th>ตัวอย่าง</th></tr>
-              <tr><td>date</td><td>2025-11-04</td></tr>
-              <tr><td>term_id</td><td>2568_1</td></tr>
+              <tr><td>date</td><td>2026-04-27</td></tr>
               <tr><td>class_id</td><td>ม.1/1</td></tr>
               <tr><td>period_number</td><td>1</td></tr>
               <tr><td>student_code</td><td>1234</td></tr>
               <tr><td>status</td><td>มาเรียน / ขาดเรียน / มาสาย / ลาป่วย / ลากิจ / โดดเรียน</td></tr>
             </table>
+            <div class="mt-3 text-xs" style="color:#64748b">
+              ถ้าไม่มี Sheet นี้ / ไม่มีในไฟล์ CSV — ระบบจะ import เฉพาะบันทึกครู student_records จะเป็น null
+            </div>
           </div>
         </div>
       </el-card>
@@ -181,8 +191,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { supabase } from '@/supabase/client'
 import { useAuthStore } from '@/stores/auth'
+import { useSchoolStore } from '@/stores/school'
 
-const authStore = useAuthStore()
+const authStore   = useAuthStore()
+const schoolStore = useSchoolStore()
 
 // ─── State ────────────────────────────────────────────────────
 const fileInfo      = ref(null)
@@ -200,7 +212,7 @@ const logsPreview = computed(() => logsRows.value.slice(0, 5))
 const attPreview  = computed(() => attRows.value.slice(0, 5))
 
 const sheetInfo = computed(() => {
-  const LOG_REQUIRED = ['date','term_id','class_id','period_number']
+  const LOG_REQUIRED = ['date','class_id','period_number']
   const ATT_REQUIRED = ['date','class_id','period_number','student_code','status']
 
   const logKeys = logsRows.value.length ? Object.keys(logsRows.value[0]) : []
@@ -208,6 +220,8 @@ const sheetInfo = computed(() => {
 
   const logMissing = LOG_REQUIRED.filter(k => !logKeys.includes(k))
   const attMissing = ATT_REQUIRED.filter(k => !attKeys.includes(k))
+
+  const attHasData = attRows.value.length > 0
 
   return {
     logs: {
@@ -217,14 +231,17 @@ const sheetInfo = computed(() => {
     },
     att: {
       count: attRows.value.length,
-      ok: attRows.value.length > 0 && attMissing.length === 0,
+      hasData: attHasData,
+      // ถ้าไม่มีข้อมูลเลย = ok (optional), ถ้ามีต้องมี columns ครบ
+      ok: !attHasData || attMissing.length === 0,
       error: attMissing.length ? `ไม่มีคอลัมน์: ${attMissing.join(', ')}` : '',
     },
   }
 })
 
 const uniquePeriods = computed(() => {
-  const s = new Set(logsRows.value.filter(r => r.is_filled !== false && String(r.is_filled).toLowerCase() !== 'false')
+  const s = new Set(logsRows.value
+    .filter(r => r.date && r.class_id)
     .map(r => `${r.date}|${r.class_id}|${r.period_number}`))
   return s.size
 })
@@ -246,22 +263,28 @@ async function onFileChange(file) {
   fileInfo.value = { name: file.name, size: file.size }
   try {
     const buffer = await file.raw.arrayBuffer()
-    const wb = read(buffer, { type: 'array', cellDates: false })
+    const isCsv  = file.name.toLowerCase().endsWith('.csv')
 
-    // Find sheets (case-insensitive)
-    const findSheet = (name) => wb.SheetNames.find(s => s.toLowerCase() === name.toLowerCase())
-    const logSheet  = findSheet('teach_logs')
-    const attSheet  = findSheet('student_attendance')
+    const wb = read(buffer, { type: 'array', cellDates: false, codepage: 65001 })
 
-    if (!logSheet) { ElMessage.error('ไม่พบ Sheet ชื่อ "teach_logs" ในไฟล์'); return }
-    if (!attSheet) { ElMessage.error('ไม่พบ Sheet ชื่อ "student_attendance" ในไฟล์'); return }
+    if (isCsv) {
+      // CSV: single sheet → treat as teach_logs, no student attendance
+      const sheet = wb.Sheets[wb.SheetNames[0]]
+      logsRows.value = utils.sheet_to_json(sheet, { defval: '', raw: false }).map(normalizeLogRow)
+      attRows.value  = []
+    } else {
+      // Excel: find sheets (case-insensitive); student_attendance is optional
+      const findSheet = (name) => wb.SheetNames.find(s => s.toLowerCase() === name.toLowerCase())
+      const logSheet  = findSheet('teach_logs') || wb.SheetNames[0]
+      const attSheet  = findSheet('student_attendance')
 
-    logsRows.value = utils.sheet_to_json(wb.Sheets[logSheet], { defval: '' })
-    attRows.value  = utils.sheet_to_json(wb.Sheets[attSheet], { defval: '' })
+      if (!logSheet) { ElMessage.error('ไม่พบข้อมูลในไฟล์ Excel'); return }
 
-    // Normalize: trim strings, convert date serial if needed
-    logsRows.value = logsRows.value.map(normalizeLogRow)
-    attRows.value  = attRows.value.map(normalizeAttRow)
+      logsRows.value = utils.sheet_to_json(wb.Sheets[logSheet], { defval: '', raw: false }).map(normalizeLogRow)
+      attRows.value  = attSheet
+        ? utils.sheet_to_json(wb.Sheets[attSheet], { defval: '', raw: false }).map(normalizeAttRow)
+        : []
+    }
 
     validateData()
     parsed.value = true
@@ -290,17 +313,27 @@ function excelDateToStr(val) {
 const VALID_STATUSES = new Set(['มาเรียน','ขาดเรียน','มาสาย','ลาป่วย','ลากิจ','โดดเรียน','ไปราชการ'])
 
 function normalizeLogRow(r) {
+  const isFilled = String(r.is_filled ?? '').toLowerCase() === 'true'
+    || r.is_filled === true || r.is_filled === 1
+  // term_id: ถ้าไม่มีใน CSV ให้ดึงจาก id (เช่น "2026-04-27_ม.4_2_hr0" ไม่มี term_id ใน field นั้น)
+  const termId = String(r.term_id || '').trim()
   return {
     date:          excelDateToStr(r.date),
-    term_id:       String(r.term_id || '').trim(),
+    term_id:       termId,
     class_id:      String(r.class_id || '').trim(),
-    period_number: Number(r.period_number),
+    period_number: Number(r.period_number ?? r.period ?? 0),
     slot_type:     String(r.slot_type || 'normal').trim().toLowerCase() || 'normal',
     teacher_name:  String(r.teacher_name || '').trim(),
-    subject_name:  String(r.subject_name || '').trim(),
+    teacher_id:    String(r.teacher_id || '').trim() || null,
+    subject_name:  String(r.subject_name || '').trim() || null,
+    subject_id:    String(r.subject_id || '').trim() || null,
     topic:         String(r.topic || '').trim() || null,
+    note:          String(r.note || '').trim() || null,
+    img1:          String(r.img1 || '').trim() || null,
+    img2:          String(r.img2 || '').trim() || null,
+    img3:          String(r.img3 || '').trim() || null,
     activity_type: String(r.activity_type || '').trim() || null,
-    is_filled:     String(r.is_filled).toLowerCase() === 'true' || r.is_filled === true || r.is_filled === 1,
+    is_filled:     isFilled,
   }
 }
 
@@ -323,8 +356,7 @@ function validateData() {
       errs.push({ sheet: 'teach_logs', row: i + 2, msg: `date ไม่ถูกต้อง: "${r.date}"` })
     if (!r.class_id)
       errs.push({ sheet: 'teach_logs', row: i + 2, msg: 'class_id ว่าง' })
-    if (!r.term_id)
-      errs.push({ sheet: 'teach_logs', row: i + 2, msg: 'term_id ว่าง' })
+    // term_id เป็น optional warning ไม่ใช่ error (จะใช้ค่า default ที่กำหนด)
   })
 
   attRows.value.forEach((r, i) => {
@@ -361,6 +393,17 @@ async function startImport() {
   try {
     const schoolId = authStore.schoolId
 
+    // โหลด subjects เพื่อ lookup ชื่อวิชา → subject_code
+    const { data: subjectsData } = await supabase
+      .from('subjects')
+      .select('subject_code, name')
+      .eq('school_id', schoolId)
+    // map: ชื่อวิชา (lowercase trim) → subject_code
+    const subjectByName = new Map()
+    for (const s of (subjectsData || [])) {
+      if (s.name) subjectByName.set(s.name.trim().toLowerCase(), s.subject_code)
+    }
+
     // Build student_records map: key = `date|class_id|period_number`
     const attMap = new Map()
     for (const r of attRows.value) {
@@ -370,9 +413,10 @@ async function startImport() {
       attMap.get(key)[r.student_code] = { status: r.status }
     }
 
-    // Filter only filled logs
+
+    // Filter: ต้องมี date และ class_id เท่านั้น
     const filledLogs = logsRows.value.filter(r =>
-      r.is_filled && r.date && /^\d{4}-\d{2}-\d{2}$/.test(r.date) && r.class_id && r.term_id
+      r.date && /^\d{4}-\d{2}-\d{2}$/.test(r.date) && r.class_id
     )
 
     const CHUNK = 200
@@ -385,22 +429,29 @@ async function startImport() {
       const payloads = chunk.map(r => {
         const key = `${r.date}|${r.class_id}|${r.period_number}`
         const student_records = attMap.get(key) || null
+        const termId = r.term_id
+        // images: DB column เป็น array ไม่ใช่ img1/img2/img3 แยก
+        const images = [r.img1, r.img2, r.img3]
+          .filter(v => v && String(v).trim().startsWith('http'))
+        // ค้นหา subject_code จากชื่อวิชา → ใส่ใน subject_id (column จริงใน teach_actuals)
+        const subjectCode = subjectByName.get((r.subject_name || '').trim().toLowerCase()) || null
         return {
-          school_id:       schoolId,
-          term_id:         r.term_id,
-          class_id:        r.class_id,
-          date:            r.date,
-          period_number:   Number(r.period_number),
-          slot_type:       r.slot_type || 'normal',
-          teacher_plan_name: r.teacher_name || '',
-          subject_plan_id: null,
-          actual_teacher_id: null,
-          planned_teacher_id: null,
-          topic:           r.topic || null,
-          activity_type:   r.activity_type || null,
-          is_filled:       true,
-          student_records: student_records,
-          updated_at:      new Date().toISOString(),
+          school_id:          schoolId,
+          term_id:            termId,
+          class_id:           r.class_id,
+          date:               r.date,
+          period_number:      Number(r.period_number),
+          slot_type:          r.slot_type || 'normal',
+          planned_teacher_id: r.teacher_id || null,
+          record_by_name:     r.teacher_name || null,
+          subject_id:         subjectCode,
+          topic:              r.topic || null,
+          note:               r.note || null,
+          images:             images.length ? images : null,
+          activity_type:      r.activity_type || null,
+          is_filled:          r.is_filled !== false,
+          student_records:    student_records,
+          updated_at:         new Date().toISOString(),
         }
       })
 

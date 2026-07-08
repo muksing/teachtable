@@ -75,9 +75,12 @@
           <el-table-column type="selection" width="45" align="center" />
           <el-table-column prop="level" label="ระดับชั้น" width="100" align="center" />
           <el-table-column prop="room" label="ห้อง" width="80" align="center" />
-          <el-table-column label="ชื่อห้อง/ID" width="140">
+          <el-table-column label="ชื่อห้อง/ID" width="180">
             <template #default="{ row }">
-              <span class="font-semibold text-purple-700">{{ row.class_id }}</span>
+              <div class="flex items-center gap-1 flex-wrap">
+                <span class="font-semibold text-purple-700">{{ row.class_id }}</span>
+                <el-tag v-if="row.is_schedule_only" type="warning" size="small" effect="light">ล็อกตาราง</el-tag>
+              </div>
               <div v-if="row.class_name" class="text-xs text-gray-400">{{ row.class_name }}</div>
             </template>
           </el-table-column>
@@ -136,14 +139,8 @@
             <el-input v-model="form.class_name" placeholder="เช่น ห้องเรียนพิเศษวิทยาศาสตร์" />
           </el-form-item>
           <el-form-item label="ครูที่ปรึกษา">
-            <el-select v-model="form.homeroom_teacher_ids" class="w-full" clearable filterable multiple collapse-tags collapse-tags-tooltip
-              placeholder="เลือกครูที่ปรึกษา (เลือกได้หลายคน)" @change="onTeacherChange">
-              <el-option
-                v-for="t in sortedTeachers" :key="t.teacher_id"
-                :label="`[${t.teacher_id}] ${t.prefix || ''}${t.name} ${t.surname}${t.dept ? '  — ' + t.dept : ''}`"
-                :value="t.teacher_id"
-              />
-            </el-select>
+            <TeacherSelect v-model="form.homeroom_teacher_ids" :teachers="teachers" multiple class="w-full"
+              placeholder="เลือกครูที่ปรึกษา (เลือกได้หลายคน)" @change="onTeacherChange" />
             <div class="text-xs text-amber-600 mt-1">★ ครูที่เลือกเป็นคนแรก = ครูหลัก (รับผิดชอบคาบพิเศษ/ที่ปรึกษา)</div>
           </el-form-item>
           <el-form-item label="ห้องเรียนประจำ">
@@ -163,6 +160,12 @@
             <el-form-item label="จำนวนนักเรียนสูงสุด">
               <el-input-number v-model="form.max_students" :min="1" :max="60" class="w-full" />
             </el-form-item>
+          </div>
+          <div class="mt-1 p-3 rounded-xl" style="background:#fefce8;border:1px solid #fde68a">
+            <el-checkbox v-model="form.is_schedule_only">
+              <span class="font-semibold text-amber-700">ห้องล็อกตารางเท่านั้น (ไม่มีนักเรียน)</span>
+            </el-checkbox>
+            <div class="text-xs text-amber-600 mt-1">ใช้เทคนิคล็อกเวลาครู — ไม่ปรากฏใน Dashboard, รายงาน และสถิติการมาเรียน</div>
           </div>
         </el-form>
         <template #footer>
@@ -255,7 +258,8 @@ const form = reactive({
   homeroom_teacher_names_snapshot: [],
   room_number: '',
   home_room_id: '',
-  max_students: 40
+  max_students: 40,
+  is_schedule_only: false,
 })
 
 const rules = {
@@ -263,15 +267,6 @@ const rules = {
   room: [{ required: true, message: 'กรุณากรอกหมายเลขห้อง', trigger: 'blur' }]
 }
 
-const sortedTeachers = computed(() => {
-  return [...teachers.value]
-    .filter(t => t.is_active !== false)
-    .sort((a, b) => {
-      const deptA = (a.dept || '').localeCompare(b.dept || '', 'th')
-      if (deptA !== 0) return deptA
-      return (a.teacher_id || '').localeCompare(b.teacher_id || '', 'th')
-    })
-})
 
 const computedClassId = computed(() => {
   if (!form.level || !form.room) return ''
@@ -379,7 +374,8 @@ function openDialog(cls = null) {
         : (cls.homeroom_teacher_name_snapshot ? [cls.homeroom_teacher_name_snapshot] : []),
       room_number: cls.room_number || '',
       home_room_id: cls.home_room_id || '',
-      max_students: cls.max_students ?? 40
+      max_students: cls.max_students ?? 40,
+      is_schedule_only: cls.is_schedule_only === true,
     })
   } else {
     Object.assign(form, {
@@ -392,7 +388,8 @@ function openDialog(cls = null) {
       homeroom_teacher_names_snapshot: [],
       room_number: '',
       home_room_id: '',
-      max_students: 40
+      max_students: 40,
+      is_schedule_only: false,
     })
   }
   dialogVisible.value = true
@@ -434,7 +431,8 @@ async function handleSave() {
         homeroom_teacher_names_snapshot: form.homeroom_teacher_names_snapshot,
         room_number: form.room_number,
         home_room_id: form.home_room_id || '',
-        max_students: form.max_students
+        max_students: form.max_students,
+        is_schedule_only: form.is_schedule_only,
       })
       ElMessage.success('บันทึกข้อมูลห้องเรียนเรียบร้อย')
       classes.value = await getClasses()

@@ -475,7 +475,7 @@ async function loadAll() {
       if (!row.teacher_id) continue
       const st = row.slot_type
       if (st === 'activity' || st === 'manual_lock') continue
-      const dayNum = Number(row.day_of_week)
+      const dayNum = Number(row.day_of_week) || THAI_DAY_NUM[row.day_of_week] || 0
       const period = Number(row.period_number)
       if (!dayNum || !period) continue
       if (!map[row.teacher_id]) map[row.teacher_id] = {}

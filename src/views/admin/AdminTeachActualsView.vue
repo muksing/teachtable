@@ -34,9 +34,7 @@
           </div>
           <div>
             <div class="text-xs text-gray-500 mb-1 font-medium">👨‍🏫 ชื่อครู</div>
-            <el-select v-model="filterTeacher" placeholder="เลือกครู" clearable filterable style="width:160px">
-              <el-option v-for="t in teachersList" :key="t.teacher_id" :label="`${t.prefix || ''}${t.first_name || ''} ${t.last_name || ''}`" :value="t.teacher_id" />
-            </el-select>
+            <TeacherSelect v-model="filterTeacher" :teachers="teachersList" placeholder="เลือกครู" clearable style="width:160px" />
           </div>
           <div>
             <div class="text-xs text-gray-500 mb-1 font-medium">📚 วิชา</div>
@@ -180,6 +178,12 @@ async function loadData() {
     const slotMap = new Map()
     for (const s of (slotsRes.data || [])) {
       slotMap.set(`${s.class_id}_${s.period_number}_${s.day_of_week}`, s)
+      // รองรับ day_of_week เป็นชื่อวันไทยหรือตัวเลข — เพิ่ม key แบบตัวเลขเสมอ
+      const numDay = Number(s.day_of_week) || THAI_DAY_TO_NUM[s.day_of_week] || 0
+      if (numDay) {
+        const numKey = `${s.class_id}_${s.period_number}_${numDay}`
+        if (!slotMap.has(numKey)) slotMap.set(numKey, s)
+      }
     }
     const teacherNameMap = new Map()
     for (const t of (teachersRes.data || [])) {
@@ -327,7 +331,7 @@ async function deleteAll() {
 onMounted(async () => {
   try {
     const [cls, tch, subj] = await Promise.all([getClasses(), getTeachers(), getSubjects()])
-    classesList.value = cls
+    classesList.value = cls.filter(c => !c.is_schedule_only)
     teachersList.value = tch
     subjectsList.value = subj
   } catch (e) {

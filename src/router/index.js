@@ -8,7 +8,7 @@ import PublicHomeView from '@/views/PublicHomeView.vue'
 import DashboardView from '@/views/DashboardView.vue'
 
 const routes = [
-  { path: '/', name: 'SchoolPicker', component: () => import('@/views/SchoolPickerView.vue'), meta: { public: true } },
+  { path: '/', redirect: '/login' },
   { path: '/s/:schoolId', name: 'SchoolPortal', component: () => import('@/views/SchoolPortalView.vue'), meta: { public: true } },
   { path: '/login', name: 'Login', component: PublicHomeView, meta: { public: true } },
   { path: '/register-school', name: 'SchoolRegistration', component: () => import('@/views/SchoolRegistrationView.vue'), meta: { public: true } },
@@ -40,8 +40,10 @@ const routes = [
   { path: '/admin/classes', name: 'Classes', component: () => import('@/views/admin/ClassesView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/students', name: 'Students', component: () => import('@/views/admin/StudentsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'] } },
   { path: '/admin/behavior-settings', name: 'BehaviorSettings', component: () => import('@/views/admin/BehaviorSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
+  { path: '/admin/probation', name: 'Probation', component: () => import('@/views/admin/ProbationView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'] } },
+  { path: '/admin/hair-inspection', name: 'HairInspection', component: () => import('@/views/admin/HairInspectionView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher', 'student_affairs'] } },
   { path: '/admin/attendance-status', name: 'AttendanceStatus', component: () => import('@/views/admin/AttendanceStatusView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
-  { path: '/admin/attendance-maeso', name: 'AttendanceMaeSo', component: () => import('@/views/admin/AttendanceMaeSoView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'] } },
+  { path: '/admin/attendance-maeso', name: 'AttendanceMaeSo', component: () => import('@/views/admin/AttendanceMaeSoView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher', 'school_director'] } },
   { path: '/admin/teaching-log-settings', name: 'TeachingLogSettings', component: () => import('@/views/admin/TeachingLogSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/school-settings', name: 'SchoolSettings', component: () => import('@/views/admin/SchoolSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/renewal', name: 'Renewal', component: () => import('@/views/admin/RenewalView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
@@ -51,6 +53,7 @@ const routes = [
   { path: '/admin/teach-actuals', name: 'AdminTeachActuals', component: () => import('@/views/admin/AdminTeachActualsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/import-teach-actuals', name: 'ImportTeachActuals', component: () => import('@/views/admin/ImportTeachActualsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/generate-teach-actuals', name: 'GenerateTeachActuals', component: () => import('@/views/admin/GenerateTeachActualsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
+  { path: '/admin/makeup-days', name: 'MakeupDays', component: () => import('@/views/admin/MakeupDaysView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
 
   // Scheduler routes
   { path: '/planning/assignments', name: 'Assignments', component: () => import('@/views/scheduler/AssignmentsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_scheduler', 'scheduler'] } },
@@ -81,8 +84,10 @@ const routes = [
   { path: '/email-action', name: 'EmailAction', component: () => import('@/views/EmailActionView.vue'), meta: { public: true } },
 
   { path: '/teacher/teach-actual/:id', name: 'TeachActualDetail', component: () => import('@/views/teacher/TeachActualDetailView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'], featureGate: 'teaching_log_enabled' } },
-  { path: '/teacher/missed-records', name: 'MissedTeachActual', component: () => import('@/views/teacher/MissedTeachActualView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'], featureGate: 'teaching_log_enabled' } },
+  { path: '/teacher/missed-records', name: 'MissedTeachActual', component: () => import('@/views/teacher/MissedTeachActualView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher', 'school_director'], featureGate: 'teaching_log_enabled' } },
   { path: '/teacher/homeroom-dashboard', name: 'HomeroomDashboard', component: () => import('@/views/teacher/HomeroomDashboardView.vue'), meta: { requireAuth: true, roles: ['school_teacher', 'teacher'] } },
+  { path: '/teacher/announcements', name: 'AnnouncementsManage', component: () => import('@/views/teacher/AnnouncementsManageView.vue'), meta: { requireAuth: true, roles: ['school_teacher', 'teacher', 'school_admin', 'admin', 'superadmin', 'announcer'] } },
+  { path: '/teacher/home-visits', name: 'HomeVisit', component: () => import('@/views/teacher/HomeVisitView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'] } },
 
   // คะแนนเก็บ
   { path: '/teacher/score-entry', name: 'ScoreEntry', component: () => import('@/views/teacher/ScoreEntryView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'] } },
@@ -100,7 +105,7 @@ const routes = [
   { path: '/admin/exam-overview', name: 'AdminExamOverview', component: () => import('@/views/admin/ExamOverviewView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/exam-checklist', name: 'AdminExamChecklist', component: () => import('@/views/admin/ExamChecklistView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/exam-anticheat', name: 'AdminExamAntiCheat', component: () => import('@/views/admin/ExamAntiCheatSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
-  { path: '/reports/parent-letter', name: 'ParentLetter', component: () => import('@/views/reports/ParentLetterView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher'] } },
+  { path: '/reports/parent-letter', name: 'ParentLetter', component: () => import('@/views/reports/ParentLetterView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher', 'school_director'] } },
 
   // Student portal
   { path: '/student/login', name: 'StudentLogin',
@@ -124,6 +129,29 @@ const routes = [
       { path: 'messages',    name: 'StudentMessages',    component: () => import('@/views/student/StudentMessagesView.vue') },
       { path: 'exams',       name: 'StudentExamList',    component: () => import('@/views/student/StudentExamListView.vue') },
       { path: 'exams/:id',   name: 'StudentExamTaking',  component: () => import('@/views/student/StudentExamTakingView.vue'), meta: { examMode: true } },
+      { path: 'home-profile', name: 'StudentHomeProfile', component: () => import('@/views/student/StudentHomeProfileView.vue') },
+      { path: 'profile',  name: 'StudentProfile',  component: () => import('@/views/student/StudentProfileView.vue') },
+      { path: 'memories', name: 'StudentMemories', component: () => import('@/views/student/StudentMemoriesView.vue') },
+      { path: 'checkin',       name: 'StudentCheckin',      component: () => import('@/views/student/StudentCheckinView.vue') },
+      { path: 'exam-results',    name: 'StudentExamResults',    component: () => import('@/views/student/StudentExamResultsView.vue') },
+      { path: 'announcements',   name: 'StudentAnnouncements',  component: () => import('@/views/student/StudentAnnouncementsView.vue') },
+      { path: 'timetable',       name: 'StudentTimetable',       component: () => import('@/views/student/StudentTimetableView.vue') },
+    ]
+  },
+
+  // Parent portal
+  { path: '/parent/login', name: 'ParentLogin',
+    component: () => import('@/views/parent/ParentLoginView.vue'),
+    meta: { public: true } },
+  {
+    path: '/parent',
+    component: () => import('@/components/layout/ParentLayout.vue'),
+    meta: { parentPortal: true },
+    children: [
+      { path: '', redirect: '/parent/home' },
+      { path: 'home',          name: 'ParentHome',          component: () => import('@/views/parent/ParentHomeView.vue') },
+      { path: 'child/:code',   name: 'ParentChild',          component: () => import('@/views/parent/ParentChildView.vue') },
+      { path: 'announcements', name: 'ParentAnnouncements',  component: () => import('@/views/parent/ParentAnnouncementsView.vue') },
     ]
   },
 
@@ -183,6 +211,14 @@ router.beforeEach(async (to, from, next) => {
   if (to.meta.studentPortal) {
     const studentStore = useStudentStore()
     if (!studentStore.isLoggedIn) return next({ name: 'StudentLogin' })
+    return next()
+  }
+
+  // Parent portal: custom session (ไม่ใช้ Supabase auth)
+  if (to.meta.parentPortal) {
+    const { useParentStore } = await import('@/stores/parent')
+    const parentStore = useParentStore()
+    if (!parentStore.isLoggedIn) return next({ name: 'ParentLogin' })
     return next()
   }
 

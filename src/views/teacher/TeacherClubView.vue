@@ -135,31 +135,19 @@ const form = reactive({
   is_active: true,
 })
 
-// --- helpers: read/write clubs stored in schools.settings.clubs[term] ---
+// --- helpers: read/write clubs in clubs table ---
 
 async function fetchAllClubs() {
-  const { data: row } = await supabase
-    .from('schools')
-    .select('settings')
-    .eq('id', schoolId.value)
-    .maybeSingle()
-  const allClubs = row?.settings?.clubs || {}
-  return allClubs[term.value] || []
-}
-
-async function persistClubs(clubList) {
-  const { data: row } = await supabase
-    .from('schools')
-    .select('settings')
-    .eq('id', schoolId.value)
-    .maybeSingle()
-  const settings = row?.settings || {}
-  const existing = settings.clubs || {}
-  existing[term.value] = clubList
-  await supabase
-    .from('schools')
-    .update({ settings: { ...settings, clubs: existing } })
-    .eq('id', schoolId.value)
+  let q = supabase
+    .from('clubs')
+    .select('*')
+    .eq('school_id', schoolId.value)
+    .eq('term_id', term.value)
+    .order('created_at', { ascending: false })
+  if (!isAdmin.value) q = q.eq('teacher_id', teacherId.value)
+  const { data, error } = await q
+  if (error) throw error
+  return data || []
 }
 
 // -----------------------------------------------------------------------
@@ -184,7 +172,7 @@ async function saveClub() {
   try {
     await formRef.value?.validate()
   } catch {
-    return // validation failed — form will show inline errors
+    return
   }
   if (!teacherId.value) {
     ElMessage.error('ไม่พบข้อมูลผู้ใช้ กรุณา login ใหม่')
@@ -193,50 +181,46 @@ async function saveClub() {
   dialogLoading.value = true
   try {
     const now = new Date().toISOString()
-    const list = await fetchAllClubs()
-
     if (editingClub.value) {
-      const idx = list.findIndex(c => c.club_id === editingClub.value.club_id)
-      if (idx !== -1) {
-        list[idx] = {
-          ...list[idx],
-          name: form.name,
-          type: form.type,
+      const { error } = await supabase
+        .from('clubs')
+        .update({
+          name: form.name, type: form.type,
           max_capacity: form.max_capacity,
           description: form.description,
           is_active: form.is_active,
           updated_at: now,
-        }
-      }
-      await persistClubs(list)
+        })
+        .eq('club_id', editingClub.value.club_id)
+      if (error) throw error
       Object.assign(editingClub.value, {
-        name: form.name,
-        type: form.type,
+        name: form.name, type: form.type,
         max_capacity: form.max_capacity,
         description: form.description,
         is_active: form.is_active,
       })
     } else {
-      const clubId = `club_${teacherId.value}_${Date.now()}`
-      const newClub = {
-        club_id: clubId,
-        name: form.name,
-        type: form.type,
-        max_capacity: form.max_capacity,
-        description: form.description,
-        is_active: form.is_active,
-        teacher_id: teacherId.value,
-        teacher_name: teacherName.value,
-        member_count: 0,
-        session_count: 0,
-        members: {},   // embedded map: { [student_id]: memberData }
-        sessions: {},  // embedded map: { [session_id]: sessionData }
-        created_at: now,
-        updated_at: now,
-      }
-      list.push(newClub)
-      await persistClubs(list)
-      clubs.value.push({ ...newClub })
+      const newClubId = `club_${teacherId.value}_${Date.now()}`
+      const { data, error } = await supabase
+        .from('clubs')
+        .insert({
+          club_id: newClubId,
+          school_id: schoolId.value,
+          term_id: term.value,
+          name: form.name,
+          type: form.type,
+          max_capacity: form.max_capacity,
+          description: form.description,
+          is_active: form.is_active,
+          teacher_id: teacherId.value,
+          teacher_name: teacherName.value,
+          member_count: 0,
+          session_count: 0,
+        })
+        .select()
+        .single()
+      if (error) throw error
+      clubs.value.unshift(data)
     }
     ElMessage.success('บันทึกชุมนุมสำเร็จ')
     dialogVisible.value = false
@@ -255,9 +239,8 @@ async function deleteClub(club) {
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
     loading.value = true
-    const list = await fetchAllClubs()
-    const updated = list.filter(c => c.club_id !== club.club_id)
-    await persistClubs(updated)
+    const { error } = await supabase.from('clubs').delete().eq('club_id', club.club_id)
+    if (error) throw error
     clubs.value = clubs.value.filter(c => c.club_id !== club.club_id)
     ElMessage.success('ลบชุมนุมแล้ว')
   } catch (e) {
@@ -274,13 +257,7 @@ function goDetail(club) {
 async function loadClubs() {
   loading.value = true
   try {
-    const list = await fetchAllClubs()
-    const sorted = [...list].sort((a, b) =>
-      (b.created_at || '').localeCompare(a.created_at || '')
-    )
-    clubs.value = isAdmin.value
-      ? sorted
-      : sorted.filter(c => c.teacher_id === teacherId.value)
+    clubs.value = await fetchAllClubs()
   } catch (e) {
     ElMessage.error('โหลดข้อมูลไม่สำเร็จ: ' + e.message)
   } finally {

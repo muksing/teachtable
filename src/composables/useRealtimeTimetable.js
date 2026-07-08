@@ -45,9 +45,19 @@ function buildSlotPayload(slot, overrides = {}) {
 // Convert a raw timetable_slots row → local slot shape
 // IMPORTANT: explicit overrides come AFTER ...row so they win over DB column names
 function rowToSlot(row) {
+  // composite key: class_id → class-based, room_id → room-based, teacher_id → teacher-based
+  // (room lock + teacher lock มี class_id = null ต้องใช้ room_id/teacher_id กัน ID ชน)
+  const localId = row.class_id
+    ? safeId(row.day_of_week, row.period_number, row.class_id)
+    : row.room_id
+      ? safeId(row.day_of_week, row.period_number, '__R', row.room_id)
+      : row.teacher_id
+        ? safeId(row.day_of_week, row.period_number, '__T', row.teacher_id)
+        : safeId(row.day_of_week, row.period_number, '__X', row.id)
+
   const slot = buildSlotPayload({
     ...row,                                                               // DB columns first
-    id: safeId(row.day_of_week, row.period_number, row.class_id),        // composite key overrides DB uuid
+    id: localId,                                                          // composite key overrides DB uuid
     day: row.day_of_week,
     period: row.period_number,
     class_id: row.class_id,
@@ -436,6 +446,24 @@ export function useRealtimeTimetable() {
     const sid = schoolId()
     const t = term()
 
+    // ลบ slot ที่ชนกับล็อกนี้ก่อน (ถ้ามีคาบสอนอยู่แล้ว)
+    // local slot ใช้ s.day / s.period (ไม่ใช่ day_of_week / period_number)
+    const conflicting = timetableSlots.value.filter(s => {
+      if (Number(s.day) !== Number(day) || Number(s.period) !== Number(period)) return false
+      if (lockType === 'class')   return s.class_id === classId
+      if (lockType === 'teacher') return s.teacher_id === teacherId
+      if (lockType === 'room')    return s.preferred_room === roomId
+      return false
+    })
+    for (const cs of conflicting) {
+      const dbId = cs._db_id || cs.id
+      await supabase.from('timetable_slots').delete().eq('id', dbId)
+    }
+    if (conflicting.length) {
+      const conflictIds = new Set(conflicting.map(s => s.id))
+      timetableSlots.value = timetableSlots.value.filter(s => !conflictIds.has(s.id))
+    }
+
     const { data, error } = await supabase
       .from('timetable_slots')
       .upsert({
@@ -446,6 +474,7 @@ export function useRealtimeTimetable() {
         day_of_week: day,
         period_number: period,
         slot_type: 'manual_lock',
+        act_name: label || null,
         school_id: sid,
         updated_by: authStore.profile?.uid || '',
         updated_at: new Date().toISOString(),

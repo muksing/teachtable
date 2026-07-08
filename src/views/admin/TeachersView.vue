@@ -91,8 +91,9 @@
           <el-table-column label="ชื่อ-นามสกุล" min-width="180">
             <template #default="{ row }">
               <div class="flex items-center gap-2">
-                <div class="avatar-sm" :style="`background:${userByTeacher[row.teacher_id] ? getRoleColor(userByTeacher[row.teacher_id].role) : '#9ca3af'}`">
-                  {{ (row.name||'?').charAt(0) }}
+                <div class="avatar-sm" :style="`background:${userByTeacher[row.teacher_id] ? getRoleColor(userByTeacher[row.teacher_id].role) : '#9ca3af'}`" style="overflow:hidden">
+                  <img v-if="userByTeacher[row.teacher_id]?.photo_url" :src="userByTeacher[row.teacher_id].photo_url" style="width:100%;height:100%;object-fit:cover;border-radius:50%" @error="e => e.target.style.display='none'" />
+                  <span v-else>{{ (row.name||'?').charAt(0) }}</span>
                 </div>
                 <div>
                   <div class="font-medium text-sm">{{ row.prefix }}{{ row.name }} {{ row.surname }}</div>
@@ -142,6 +143,16 @@
                     :model-value="(userByTeacher[row.teacher_id].roles||[]).includes('school_director')"
                     @change="val => toggleRole(row.teacher_id, 'school_director', val)">
                     👔 ผู้บริหาร
+                  </el-checkbox>
+                  <el-checkbox size="small"
+                    :model-value="(userByTeacher[row.teacher_id].roles||[]).includes('student_affairs')"
+                    @change="val => toggleRole(row.teacher_id, 'student_affairs', val)">
+                    🎓 ฝ่ายกิจการผู้เรียน
+                  </el-checkbox>
+                  <el-checkbox size="small"
+                    :model-value="(userByTeacher[row.teacher_id].roles||[]).includes('announcer')"
+                    @change="val => toggleRole(row.teacher_id, 'announcer', val)">
+                    📣 ประชาสัมพันธ์
                   </el-checkbox>
                 </div>
               </div>

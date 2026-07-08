@@ -97,3 +97,35 @@ body {
   color: white;
   text-align: center;
 }
+
+/* ═══════════════════════════════════════
+   Dark Mode (CSS filter inversion trick)
+   ═══════════════════════════════════════ */
+html.dark-mode {
+  filter: invert(92%) hue-rotate(180deg) brightness(0.96) contrast(0.98);
+}
+/* คืนค่ารูปภาพและวิดีโอให้เป็นปกติ */
+html.dark-mode img,
+html.dark-mode video,
+html.dark-mode canvas,
+html.dark-mode [class*="avatar"],
+html.dark-mode [class*="photo"],
+html.dark-mode [class*="logo"],
+html.dark-mode .el-image img,
+html.dark-mode .ann-img,
+html.dark-mode .ann-lightbox-img,
+html.dark-mode .hd-ann-img,
+html.dark-mode .hd-lightbox-img,
+html.dark-mode .sa-img,
+html.dark-mode .pa-img,
+html.dark-mode .ph-ann-img,
+html.dark-mode .ann-item-img {
+  filter: invert(100%) hue-rotate(180deg);
+}
+/* ปุ่ม dark mode toggle */
+.dark-toggle {
+  background: none; border: none; cursor: pointer;
+  font-size: 20px; padding: 4px 8px; border-radius: 8px;
+  transition: background .15s; line-height: 1;
+}
+.dark-toggle:hover { background: rgba(0,0,0,.08); }

@@ -13,6 +13,15 @@
         </div>
       </div>
 
+      <!-- ── Makeup Day Banner ──────────────────────────────────── -->
+      <div v-if="makeupInfo" class="tl-makeup-banner">
+        <span class="tl-makeup-icon">📆</span>
+        <div class="tl-makeup-text">
+          <b>วันเรียนชดเชย</b> — วันนี้ใช้ตารางสอนของวัน<b>{{ makeupInfo.refName }}</b>
+          <span v-if="makeupInfo.reason"> · {{ makeupInfo.reason }}</span>
+        </div>
+      </div>
+
       <!-- ── Filter Bar ─────────────────────────────────────────── -->
       <el-card class="mb-5" shadow="never" style="border-radius:14px;border-top:4px solid #ff7a00;box-shadow:0 4px 16px rgba(255,122,0,0.10)">
         <div class="flex flex-wrap gap-4 items-center">
@@ -612,7 +621,8 @@ async function ensureRecordsForSelectedDate() {
       return
     }
 
-    // มีบางส่วนแล้ว → ตรวจคาบของครูคนนี้โดยเฉพาะว่าครบไหม
+    // มีบางส่วนแล้ว → ตรวจเฉพาะคาบของครูคนนี้ว่ามี record ในDB ไหม
+    // หลักการ: ถ้ามีแล้วข้าม ไม่แตะ — ตรวจแค่ "มีคาบอยู่ใน DB ไหม" เท่านั้น
     const myId = subTeacherId.value || authStore.profile?.teacher_id || authStore.profile?.uid
     const mySlots = timetable.filter(s => {
       if (s?.slot_type === 'activity' || s?.slot_type === 'manual_lock') return false
@@ -622,19 +632,11 @@ async function ensureRecordsForSelectedDate() {
 
     if (!mySlots.length) return  // ครูไม่มีคาบวันนี้
 
-    // ตรวจว่าคาบของครูคนนี้มีครบและมีข้อมูลครูถูกต้องไหม
-    // (record ที่มีอยู่แต่ planned_teacher_id = null ถือว่าเสีย → ต้องสร้างใหม่)
-    const existingMap = new Map(allExisting.map(r => [
-      `${r.class_id}_${r.period_number ?? r.period}`,
-      r.teacher_plan_id  // teacher_plan_id = planned_teacher_id หลัง mapTeachActual
-    ]))
-    const hasMissing = mySlots.some(s => {
-      const key = `${s.class_id}_${s.period_number ?? s.period}`
-      return !existingMap.has(key) || !existingMap.get(key)
-    })
+    const existingKeys = new Set(allExisting.map(r => `${r.class_id}_${r.period_number ?? r.period}`))
+    const hasMissing = mySlots.some(s => !existingKeys.has(`${s.class_id}_${s.period_number ?? s.period}`))
 
     if (hasMissing) {
-      // คาบขาดหรือข้อมูลครูเสีย → generate (delete null-teacher records แล้ว insert ใหม่)
+      // มีคาบที่ยังไม่มี record เลย → insert เฉพาะที่หายไป (ไม่แตะที่มีอยู่แล้ว)
       await generateTeachActualsForDate(dateKey, thaiDayName.value, timetable)
     }
   } catch (e) {
@@ -698,8 +700,32 @@ async function autoGenerateToday() {
   }
 }
 
+// ── Makeup Day Banner ──────────────────────────────────────────────────
+const MAKEUP_DAY_NAMES = { 1:'จันทร์', 2:'อังคาร', 3:'พุธ', 4:'พฤหัสบดี', 5:'ศุกร์', 6:'เสาร์' }
+const makeupDayMap = ref({}) // date → { reference_day, reason }
+
+async function loadMakeupDays() {
+  const sid = authStore.schoolId
+  if (!sid) return
+  const { data } = await supabase.from('makeup_days')
+    .select('makeup_date,reference_day,reason')
+    .eq('school_id', sid)
+  if (data) {
+    const map = {}
+    data.forEach(r => { map[r.makeup_date] = r })
+    makeupDayMap.value = map
+  }
+}
+
+const makeupInfo = computed(() => {
+  const d = selectedDate.value
+  const r = makeupDayMap.value[d]
+  if (!r) return null
+  return { refName: MAKEUP_DAY_NAMES[r.reference_day] || r.reference_day, reason: r.reason }
+})
+
 onMounted(async () => {
-  await autoGenerateToday()
+  await Promise.all([autoGenerateToday(), loadMakeupDays()])
   await ensureRecordsForSelectedDate()
   await loadData()
 })
@@ -882,6 +908,17 @@ function onDialogClose() {
 <style scoped>
 /* ── Page layout ──────────────────────────────────────── */
 .tl-page { padding: 24px; max-width: 1100px; margin: 0 auto; }
+
+/* ── Makeup Day Banner ─────────────────────────────────── */
+.tl-makeup-banner {
+  display: flex; align-items: center; gap: 10px;
+  background: linear-gradient(135deg,#1e40af,#1d4ed8);
+  color: #fff; border-radius: 12px; padding: 11px 16px;
+  margin-bottom: 14px; font-size: 13px;
+  box-shadow: 0 4px 16px rgba(29,78,216,0.3);
+}
+.tl-makeup-icon { font-size: 1.3rem; flex-shrink: 0; }
+.tl-makeup-text { flex: 1; }
 
 /* ── Header ────────────────────────────────────────────── */
 .tl-header {

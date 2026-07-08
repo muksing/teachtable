@@ -24,6 +24,9 @@ export const useAuthStore = defineStore('auth', () => {
   const isSubCoordinator = computed(() => roles.value.includes('sub_coordinator'))
   const isSubjectHead = computed(() => roles.value.includes('subject_head'))
   const isSchoolDirector = computed(() => roles.value.includes('school_director'))
+  const isAnnouncer = computed(() =>
+    roles.value.some(r => ['announcer', 'school_admin', 'superadmin', 'school_director'].includes(r))
+  )
   const canManageSubstitute = computed(() =>
     roles.value.some(r => ['school_admin', 'superadmin', 'sub_coordinator', 'subject_head'].includes(r))
   )
@@ -68,6 +71,7 @@ export const useAuthStore = defineStore('auth', () => {
     isSubCoordinator,
     isSubjectHead,
     isSchoolDirector,
+    isAnnouncer,
     canManageSubstitute,
     hasAnyRole,
     setProfile,

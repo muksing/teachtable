@@ -328,6 +328,9 @@
                   <el-form-item label="Telegram">
                     <el-input v-model="form.guardian_primary.telegram" placeholder="@username" />
                   </el-form-item>
+                  <el-form-item label="เลขบัตรประชาชน (ผปค.1)" style="grid-column:1/-1">
+                    <el-input v-model="form.guardian_primary.national_id" placeholder="13 หลัก (ใช้ login ระบบผู้ปกครอง)" maxlength="13" />
+                  </el-form-item>
                 </div>
               </div>
 
@@ -357,9 +360,83 @@
                   <el-form-item label="Telegram">
                     <el-input v-model="form.guardian_secondary.telegram" placeholder="@username" />
                   </el-form-item>
+                  <el-form-item label="เลขบัตรประชาชน (ผปค.2)" style="grid-column:1/-1">
+                    <el-input v-model="form.guardian_secondary.national_id" placeholder="13 หลัก (ใช้ login ระบบผู้ปกครอง)" maxlength="13" />
+                  </el-form-item>
                 </div>
               </div>
             </el-tab-pane>
+
+            <!-- Tab 4: ย้ายเข้ากลางเทอม -->
+            <el-tab-pane label="🚚 ย้ายเข้า" name="transfer">
+              <div class="transfer-notice">
+                <div class="transfer-notice-title">📌 สำหรับนักเรียนย้ายเข้ากลางเทอมเท่านั้น</div>
+                <div class="transfer-notice-sub">นักเรียนปกติที่เรียนตั้งแต่ต้นเทอม — ปล่อยว่างไว้ทุกช่อง</div>
+              </div>
+
+              <el-form-item label="วันที่เริ่มเรียนในโรงเรียนนี้" class="mt-3">
+                <el-date-picker
+                  v-model="form.join_date"
+                  type="date"
+                  placeholder="ปล่อยว่าง = เริ่มตั้งแต่วันเปิดเทอม"
+                  value-format="YYYY-MM-DD"
+                  class="w-full"
+                  clearable
+                />
+                <div class="text-xs text-gray-400 mt-1">ระบบจะไม่นับคาบที่ผ่านไปก่อนวันนี้เป็นการขาดเรียน</div>
+              </el-form-item>
+
+              <div v-if="form.join_date" class="mt-2">
+                <div class="text-sm font-bold text-gray-700 mb-2">เวลาเรียนยกมาจากโรงเรียนเดิม (รายวิชา)</div>
+                <div v-if="loadingClassSubjects" class="text-xs text-gray-400 py-3">กำลังโหลดรายวิชา...</div>
+                <div v-else-if="!classSubjectsForTransfer.length" class="text-xs text-gray-400 py-3">ไม่พบรายวิชา — กรุณาเลือกห้องเรียนก่อน</div>
+                <div v-else class="transfer-subject-list">
+                  <div
+                    v-for="subj in classSubjectsForTransfer"
+                    :key="subj.code"
+                    class="transfer-subject-row"
+                  >
+                    <div class="transfer-subj-info">
+                      <div class="transfer-subj-code">{{ subj.code }}</div>
+                      <div class="transfer-subj-name">{{ subj.name }}</div>
+                    </div>
+                    <div class="transfer-subj-input">
+                      <el-input-number
+                        v-model="form.subject_carry_over[subj.code]"
+                        :min="0"
+                        :max="999"
+                        size="small"
+                        style="width:100px"
+                        placeholder="0"
+                      />
+                      <span class="text-xs text-gray-400 ml-1">คาบ</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="text-xs text-gray-400 mt-2">
+                  คาบที่ยกมา = จำนวนคาบที่นักเรียนเคยเรียนวิชานี้ในโรงเรียนเดิม (ระบบจะนับรวมเมื่อคำนวณ % เวลาเรียน)
+                </div>
+              </div>
+
+              <!-- behavior carry-over -->
+              <div class="mt-4 p-3 rounded-xl" style="background:#f0fdf4;border:1px solid #bbf7d0">
+                <div class="text-sm font-bold text-green-800 mb-2">🌟 คะแนนความประพฤติยกมาจากโรงเรียนเดิม</div>
+                <div class="flex items-center gap-3">
+                  <el-input-number
+                    v-model="form.behavior_carry_over"
+                    :min="0"
+                    :max="100"
+                    size="default"
+                    style="width:160px"
+                  />
+                  <span class="text-sm text-gray-500">คะแนน (จาก 100)</span>
+                </div>
+                <div class="text-xs text-gray-400 mt-2">
+                  คะแนนนี้จะนับรวมกับคะแนนที่บันทึกในระบบ เพื่อคำนวณคะแนนพฤติกรรมทั้งหมด
+                </div>
+              </div>
+            </el-tab-pane>
+
           </el-tabs>
         </el-form>
         <template #footer>
@@ -539,6 +616,30 @@ import { useSchoolStore } from '@/stores/school'
 const { getStudents, saveStudent, getClasses } = useSchoolDb()
 const { printReport } = usePrintReport()
 
+// Transfer student — subjects for carry-over input
+const classSubjectsForTransfer = ref([])
+const loadingClassSubjects = ref(false)
+async function loadClassSubjectsForTransfer(classId) {
+  if (!classId) { classSubjectsForTransfer.value = []; return }
+  loadingClassSubjects.value = true
+  try {
+    const { data } = await supabase
+      .from('timetable_slots')
+      .select('subject_id, subject_name')
+      .eq('school_id', authStore.schoolId)
+      .eq('class_id', classId)
+      .eq('slot_type', 'subject')
+      .not('subject_id', 'is', null)
+      .limit(500)
+    const seen = new Set()
+    classSubjectsForTransfer.value = (data || [])
+      .filter(r => r.subject_id && !seen.has(r.subject_id) && seen.add(r.subject_id))
+      .map(r => ({ code: r.subject_id, name: r.subject_name || r.subject_id }))
+      .sort((a, b) => a.code.localeCompare(b.code))
+  } catch { classSubjectsForTransfer.value = [] }
+  finally { loadingClassSubjects.value = false }
+}
+
 const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
 
@@ -563,7 +664,7 @@ function canManageStudent(student) {
 
 // ==================== Constants ====================
 const STUDENT_STATUS_OPTIONS = ['เรียนอยู่', 'พักการเรียน', 'ย้ายออก', 'จบ/ออก']
-const RELATIONSHIP_OPTIONS = ['บิดา', 'มารดา', 'บิดา/มารดา', 'ปู่/ย่า', 'ตา/ยาย', 'พี่/น้อง', 'อื่นๆ']
+const RELATIONSHIP_OPTIONS = ['บิดา', 'มารดา', 'ปู่/ย่า', 'ตา/ยาย', 'พี่/น้อง', 'ผู้ปกครอง', 'อื่นๆ']
 const STATUS_FILTER_OPTIONS = [
   { label: 'ทั้งหมด', value: '' },
   { label: 'เรียนอยู่', value: 'เรียนอยู่' },
@@ -644,8 +745,10 @@ const emptyForm = () => ({
   student_status: 'เรียนอยู่',
   photo_url: '',
   contact: { phone: '', line_id: '', email: '', telegram: '', address: '' },
-  guardian_primary: { name: '', relationship: 'บิดา/มารดา', phone: '', line_id: '', email: '', telegram: '' },
-  guardian_secondary: { name: '', relationship: '', phone: '', line_id: '', email: '', telegram: '' },
+  guardian_primary: { name: '', relationship: 'บิดา', phone: '', line_id: '', email: '', telegram: '', national_id: '' },
+  guardian_secondary: { name: '', relationship: '', phone: '', line_id: '', email: '', telegram: '', national_id: '' },
+  join_date: null,
+  subject_carry_over: {},
 })
 
 const form = reactive(emptyForm())
@@ -889,6 +992,7 @@ onUnmounted(() => {
 function onClassChange(classId) {
   const cls = classes.value.find(c => c.class_id === classId)
   form.class_name_snapshot = cls ? (cls.class_name || cls.class_id) : classId
+  loadClassSubjectsForTransfer(classId)
 }
 
 function openDialog(student = null) {
@@ -929,11 +1033,12 @@ function openDialog(student = null) {
       },
       guardian_primary: {
         name: student.guardian_primary?.name || student.parent_name || '',
-        relationship: student.guardian_primary?.relationship || 'บิดา/มารดา',
+        relationship: student.guardian_primary?.relationship || 'บิดา',
         phone: student.guardian_primary?.phone || student.parent_phone || '',
         line_id: student.guardian_primary?.line_id || '',
         email: student.guardian_primary?.email || '',
         telegram: student.guardian_primary?.telegram || '',
+        national_id: student.guardian_primary?.national_id || '',
       },
       guardian_secondary: {
         name: student.guardian_secondary?.name || '',
@@ -942,8 +1047,12 @@ function openDialog(student = null) {
         line_id: student.guardian_secondary?.line_id || '',
         email: student.guardian_secondary?.email || '',
         telegram: student.guardian_secondary?.telegram || '',
+        national_id: student.guardian_secondary?.national_id || '',
       },
+      join_date: student.join_date || null,
+      subject_carry_over: student.subject_carry_over ? { ...student.subject_carry_over } : {},
     })
+    if (student.class_id) loadClassSubjectsForTransfer(student.class_id)
   } else {
     Object.assign(form, emptyForm())
   }
@@ -1004,6 +1113,8 @@ async function handleSave() {
         contact: { ...form.contact },
         guardian_primary: { ...form.guardian_primary },
         guardian_secondary: { ...form.guardian_secondary },
+        join_date: form.join_date || null,
+        subject_carry_over: { ...form.subject_carry_over },
       }
 
       await saveStudent(payload)
@@ -1049,10 +1160,13 @@ async function confirmDelete(row) {
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
     loading.value = true
-    await saveStudent({ ...row, is_active: false })
+    const { error } = await supabase.from('students').delete().eq('id', row.id)
+    if (error) throw error
     ElMessage.success('ลบนักเรียนเรียบร้อย')
     students.value = await getStudents()
-  } catch { /* cancelled */ } finally { loading.value = false }
+  } catch (e) {
+    if (e !== 'cancel' && typeof e !== 'string') ElMessage.error('ลบไม่สำเร็จ: ' + e.message)
+  } finally { loading.value = false }
 }
 
 function onSelectionChange(rows) { selectedRows.value = rows }
@@ -1066,11 +1180,16 @@ async function deleteSelected() {
       { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'warning' }
     )
     loading.value = true
-    for (const row of selectedRows.value) await saveStudent({ ...row, is_active: false })
+    const ids = selectedRows.value.map(r => r.id).filter(Boolean)
+    if (!ids.length) throw new Error('ไม่พบ id นักเรียน')
+    const { error } = await supabase.from('students').delete().in('id', ids)
+    if (error) throw error
     selectedRows.value = []
     ElMessage.success('ลบรายการที่เลือกเรียบร้อย')
     students.value = await getStudents()
-  } catch { /* cancelled */ } finally { loading.value = false }
+  } catch (e) {
+    if (e !== 'cancel' && typeof e !== 'string') ElMessage.error('ลบไม่สำเร็จ: ' + e.message)
+  } finally { loading.value = false }
 }
 
 async function openResetBehaviorScoreDialog() {
@@ -1141,72 +1260,101 @@ function handleImportFile(e) {
     if (rows.length < 2) { ElMessage.warning('ไม่พบข้อมูลในไฟล์'); return }
     const classSet = new Set(classes.value.map(c => c.class_id))
 
-    // helper: คืน import value ถ้ามี ไม่งั้นใช้ค่าเดิม
-    const pick = (importVal, existing) => {
-      const v = importVal !== undefined && importVal !== null ? String(importVal).trim() : ''
-      return v !== '' ? v : (existing ?? '')
+    // header → index map
+    const headerRow = (rows[0] || []).map(h => String(h || '').trim())
+    const ci = (name) => headerRow.indexOf(name)
+    const isNewFlat = ci('ผปค1_ชื่อ') >= 0   // format ใหม่ vs เก่า (JSON)
+
+    const pick = (v, existing) => {
+      const s = (v !== undefined && v !== null) ? String(v).trim() : ''
+      return s !== '' ? s : (existing ?? '')
     }
-    const pickNum = (importVal, existing) => {
-      const n = Number(importVal)
-      return !isNaN(n) && String(importVal).trim() !== '' ? n : (existing ?? null)
+    const pickNum = (v, existing) => {
+      const n = Number(v)
+      return !isNaN(n) && String(v ?? '').trim() !== '' ? n : (existing ?? null)
     }
-    const pickJson = (importVal, existing) => {
-      const v = importVal !== undefined && importVal !== null ? String(importVal).trim() : ''
-      if (!v) return existing || null
-      try { return JSON.parse(v) } catch { return existing || null }
+    const pickJson = (v, existing) => {
+      const s = (v !== undefined && v !== null) ? String(v).trim() : ''
+      if (!s) return existing || null
+      try { return JSON.parse(s) } catch { return existing || null }
     }
 
     const parsed = rows.slice(1).filter(r => r.some(c => c)).map(r => {
-      const student_id = String(r[1] || '').trim()
-      const govIdRaw   = String(r[17] || '').trim()   // col 17 = เลขบัตรประชาชน
+      const g = (name) => r[ci(name)]
 
-      // match ด้วย student_code ก่อน ถ้าไม่เจอให้ลอง gov_id
-      let existingStudent = student_id
-        ? students.value.find(s => s.student_id === student_id)
-        : null
-      if (!existingStudent && govIdRaw) {
-        existingStudent = students.value.find(s => s.gov_id === govIdRaw)
+      const student_id = String(g('รหัสนักเรียน') ?? '').trim()
+      const govIdRaw   = String(g('เลขบัตรประชาชน (นักเรียน)') ?? g('เลขบัตรประชาชน') ?? '').trim()
+
+      let existingStudent = student_id ? students.value.find(s => s.student_id === student_id) : null
+      if (!existingStudent && govIdRaw) existingStudent = students.value.find(s => s.gov_id === govIdRaw)
+
+      const classId   = pick(g('ห้อง'), existingStudent?.class_id)
+      const prefixRaw = pick(g('คำนำหน้า'), existingStudent?.prefix)
+
+      let gp, gs, ct
+      if (isNewFlat) {
+        gp = {
+          name:         pick(g('ผปค1_ชื่อ'),         existingStudent?.guardian_primary?.name),
+          relationship: pick(g('ผปค1_ความสัมพันธ์'),  existingStudent?.guardian_primary?.relationship) || 'บิดา',
+          phone:        pick(g('ผปค1_โทรศัพท์'),      existingStudent?.guardian_primary?.phone),
+          national_id:  pick(g('ผปค1_เลขบัตร'),       existingStudent?.guardian_primary?.national_id),
+          line_id:      pick(g('ผปค1_LINE'),          existingStudent?.guardian_primary?.line_id),
+          email:        pick(g('ผปค1_อีเมล'),         existingStudent?.guardian_primary?.email),
+          telegram:     existingStudent?.guardian_primary?.telegram || '',
+        }
+        gs = {
+          name:         pick(g('ผปค2_ชื่อ'),         existingStudent?.guardian_secondary?.name),
+          relationship: pick(g('ผปค2_ความสัมพันธ์'),  existingStudent?.guardian_secondary?.relationship),
+          phone:        pick(g('ผปค2_โทรศัพท์'),      existingStudent?.guardian_secondary?.phone),
+          national_id:  pick(g('ผปค2_เลขบัตร'),       existingStudent?.guardian_secondary?.national_id),
+          line_id:      pick(g('ผปค2_LINE'),          existingStudent?.guardian_secondary?.line_id),
+          email:        pick(g('ผปค2_อีเมล'),         existingStudent?.guardian_secondary?.email),
+          telegram:     existingStudent?.guardian_secondary?.telegram || '',
+        }
+        ct = {
+          address: pick(g('ที่อยู่'),              existingStudent?.contact?.address),
+          phone:   pick(g('โทรศัพท์ติดต่ออื่น'),   existingStudent?.contact?.phone),
+          line_id: existingStudent?.contact?.line_id || '',
+          email:   pick(g('อีเมล (นักเรียน)'),     existingStudent?.contact?.email),
+        }
+      } else {
+        // format เก่า: JSON columns
+        gp = pickJson(g('ผู้ปกครองหลัก'), existingStudent?.guardian_primary)
+        gs = pickJson(g('ผู้ปกครองรอง'),   existingStudent?.guardian_secondary)
+        ct = pickJson(g('ติดต่ออื่น'),     existingStudent?.contact)
       }
 
-      const classId = pick(r[0], existingStudent?.class_id)
-      const prefixRaw = pick(r[3], existingStudent?.prefix)
-
       const obj = {
-        // ถ้า import ไม่มี student_id แต่เจอ existing ด้วย gov_id → ใช้ student_id เดิม
-        student_id: student_id || existingStudent?.student_id || '',
-        class_id: classId,
+        student_id:  student_id || existingStudent?.student_id || '',
+        class_id:    classId,
         class_name_snapshot: classId,
-        seat_number: pickNum(r[2], existingStudent?.seat_number),
+        seat_number: pickNum(g('เลขที่'), existingStudent?.seat_number),
         prefix:      prefixRaw,
-        name:        pick(r[4], existingStudent?.name),
-        surname:     pick(r[5], existingStudent?.surname),
-        gender:      genderFromPrefix(prefixRaw) || pick(r[6], existingStudent?.gender),
-        birth_date:  pick(r[7], existingStudent?.birth_date),
-        parent_name:  pick(r[8], existingStudent?.parent_name),
-        parent_phone: pick(r[9], existingStudent?.parent_phone),
-        general_behavior_score:    pickNum(r[10], existingStudent?.general_behavior_score ?? 0),
-        attendance_behavior_score: pickNum(r[11], existingStudent?.attendance_behavior_score ?? 0),
-        learning_behavior_score:   pickNum(r[12], existingStudent?.learning_behavior_score ?? 0),
-        total_behavior_score:      pickNum(r[13], existingStudent?.total_behavior_score ?? 0),
-        behavior_carry_over:       pickNum(r[14], existingStudent?.behavior_carry_over ?? 0),
-        note:           pick(r[15], existingStudent?.note),
-        student_status: pick(r[16], existingStudent?.student_status) || 'เรียนอยู่',
-        gov_id: govIdRaw || existingStudent?.gov_id || null,
-        photo_url:          pick(r[18], existingStudent?.photo_url),
-        guardian_primary:   pickJson(r[19], existingStudent?.guardian_primary),
-        guardian_secondary: pickJson(r[20], existingStudent?.guardian_secondary),
-        contact:            pickJson(r[21], existingStudent?.contact),
+        name:        pick(g('ชื่อ'),     existingStudent?.name),
+        surname:     pick(g('นามสกุล'), existingStudent?.surname),
+        gender:      genderFromPrefix(prefixRaw) || pick(g('เพศ'), existingStudent?.gender),
+        birth_date:  pick(g('วันเกิด'), existingStudent?.birth_date),
+        gov_id:      govIdRaw || existingStudent?.gov_id || null,
+        student_status: pick(g('สถานะ'), existingStudent?.student_status) || 'เรียนอยู่',
+        note:        pick(g('หมายเหตุ'), existingStudent?.note),
+        photo_url:   pick(g('รูปภาพ URL'), existingStudent?.photo_url),
+        general_behavior_score:    pickNum(g('คะแนนทั่วไป'),   existingStudent?.general_behavior_score ?? 0),
+        attendance_behavior_score: pickNum(g('คะแนนมาเรียน'),  existingStudent?.attendance_behavior_score ?? 0),
+        learning_behavior_score:   pickNum(g('คะแนนเรียนรู้'), existingStudent?.learning_behavior_score ?? 0),
+        total_behavior_score:      pickNum(g('คะแนนรวม'),      existingStudent?.total_behavior_score ?? 0),
+        behavior_carry_over:       pickNum(g('สะสมยกมา'),      existingStudent?.behavior_carry_over ?? 0),
+        parent_name:  gp?.name  || existingStudent?.parent_name  || '',
+        parent_phone: gp?.phone || existingStudent?.parent_phone || '',
+        guardian_primary:   gp || null,
+        guardian_secondary: (gs?.name || gs?.phone) ? gs : null,
+        contact:            ct || null,
         is_active: true,
         _isUpdate: !!existingStudent,
         _matchedBy: existingStudent
           ? (student_id && students.value.find(s => s.student_id === student_id) ? 'รหัส' : 'บัตรประชาชน')
           : null,
       }
-
-      // คงข้อมูลที่ Excel ไม่ได้ส่งมา (ไฟล์เก่า < 22 คอลัมน์)
-      if (existingStudent) {
-        obj.id = existingStudent.id
-      }
+      if (existingStudent) obj.id = existingStudent.id
 
       let error = ''
       if (!obj.class_id) error = 'ไม่มีห้องเรียน'
@@ -1265,31 +1413,47 @@ async function confirmImport() {
 }
 
 function exportExcel() {
-  const headers = [
+  const HEADERS = [
     'ห้อง', 'รหัสนักเรียน', 'เลขที่', 'คำนำหน้า', 'ชื่อ', 'นามสกุล', 'เพศ', 'วันเกิด',
-    'ผู้ปกครอง', 'เบอร์ผู้ปกครอง',
+    'เลขบัตรประชาชน (นักเรียน)', 'อีเมล (นักเรียน)', 'สถานะ', 'หมายเหตุ', 'รูปภาพ URL',
     'คะแนนทั่วไป', 'คะแนนมาเรียน', 'คะแนนเรียนรู้', 'คะแนนรวม', 'สะสมยกมา',
-    'หมายเหตุ', 'สถานะ', 'เลขบัตรประชาชน', 'รูปภาพ URL',
-    'ผู้ปกครองหลัก', 'ผู้ปกครองรอง', 'ติดต่ออื่น',
+    'ผปค1_ชื่อ', 'ผปค1_ความสัมพันธ์', 'ผปค1_โทรศัพท์', 'ผปค1_เลขบัตร', 'ผปค1_LINE', 'ผปค1_อีเมล',
+    'ผปค2_ชื่อ', 'ผปค2_ความสัมพันธ์', 'ผปค2_โทรศัพท์', 'ผปค2_เลขบัตร', 'ผปค2_LINE', 'ผปค2_อีเมล',
+    'ที่อยู่', 'โทรศัพท์ติดต่ออื่น',
   ]
-  const rows = filteredStudents.value.map(s => [
-    s.class_id, s.student_id, s.seat_number,
-    s.prefix, s.name, s.surname, s.gender, s.birth_date,
-    s.parent_name, s.parent_phone,
-    s.general_behavior_score ?? 0,
-    s.attendance_behavior_score ?? 0,
-    s.learning_behavior_score ?? 0,
-    s.total_behavior_score ?? 0,
-    s.behavior_carry_over ?? 0,
-    s.note, s.student_status || 'เรียนอยู่', s.gov_id || '', s.photo_url || '',
-    s.guardian_primary ? JSON.stringify(s.guardian_primary) : '',
-    s.guardian_secondary ? JSON.stringify(s.guardian_secondary) : '',
-    s.contact ? JSON.stringify(s.contact) : '',
-  ])
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  const COL_WIDTHS = [
+    8, 14, 6, 8, 12, 16, 6, 12,
+    16, 26, 8, 16, 32,
+    10, 10, 10, 10, 10,
+    22, 14, 14, 16, 14, 24,
+    22, 14, 14, 16, 14, 24,
+    40, 18,
+  ]
+  const rows = filteredStudents.value.map(s => {
+    const gp = s.guardian_primary   || {}
+    const gs = s.guardian_secondary || {}
+    const ct = s.contact            || {}
+    return [
+      s.class_id, s.student_id, s.seat_number,
+      s.prefix, s.name, s.surname, s.gender, s.birth_date,
+      s.gov_id || '', ct.email || '', s.student_status || 'เรียนอยู่', s.note || '', s.photo_url || '',
+      s.general_behavior_score    ?? 0,
+      s.attendance_behavior_score ?? 0,
+      s.learning_behavior_score   ?? 0,
+      s.total_behavior_score      ?? 0,
+      s.behavior_carry_over       ?? 0,
+      gp.name || '', gp.relationship || '', gp.phone || '', gp.national_id || '', gp.line_id || '', gp.email || '',
+      gs.name || '', gs.relationship || '', gs.phone || '', gs.national_id || '', gs.line_id || '', gs.email || '',
+      ct.address || '', ct.phone || '',
+    ]
+  })
+  const ws = XLSX.utils.aoa_to_sheet([HEADERS, ...rows])
+  ws['!cols'] = COL_WIDTHS.map(w => ({ wch: w }))
+  // ล็อคแถว header
+  ws['!freeze'] = { xSplit: 0, ySplit: 1 }
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'นักเรียน')
-  XLSX.writeFile(wb, 'students.xlsx')
+  XLSX.writeFile(wb, 'students_export.xlsx')
 }
 
 function handlePrint() {
@@ -1367,4 +1531,34 @@ function handlePrint() {
 .dialog-tabs :deep(.el-tabs__header) {
   margin-bottom: 16px;
 }
+
+/* ── Transfer student tab ── */
+.transfer-notice {
+  background: linear-gradient(135deg, #fef3c7, #fffbeb);
+  border: 1px solid #fcd34d;
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+.transfer-notice-title { font-size: 13px; font-weight: 700; color: #92400e; }
+.transfer-notice-sub { font-size: 12px; color: #b45309; margin-top: 3px; }
+
+.transfer-subject-list {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.transfer-subject-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-bottom: 1px solid #f3f4f6;
+  gap: 12px;
+}
+.transfer-subject-row:last-child { border-bottom: none; }
+.transfer-subject-row:hover { background: #f9fafb; }
+.transfer-subj-info { flex: 1; min-width: 0; }
+.transfer-subj-code { font-size: 11px; font-weight: 700; color: #7c3aed; }
+.transfer-subj-name { font-size: 13px; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.transfer-subj-input { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 </style>

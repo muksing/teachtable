@@ -417,9 +417,10 @@ const absentStudents = computed(() => {
       const stDef = statuses.find(s => s && s.label === stLabel) || {}
       
       const isAbsent = (cat === 'absent' && stLabel !== 'ไม่บันทึก')
+      const isLeave  = (cat === 'leave')
       const isNegative = (typeof stDef.points_default === 'number' && stDef.points_default < 0)
 
-      if (isAbsent || isNegative) {
+      if (isAbsent || isLeave || isNegative) {
         rows.push({
           student_id: stu.student_id,
           student_name: stu.student_name || '',
@@ -494,11 +495,10 @@ async function loadData() {
   loading.value = true
   try {
     const [studs, actuals] = await Promise.all([
-      getStudents(selectedClassId.value),
+      getStudents(selectedClassId.value, { activeOnly: true }),
       getTeachActualsRangeByClass(selectedDate.value, selectedDate.value, selectedClassId.value),
     ])
     students.value = studs
-      .filter(s => !s.student_status || s.student_status === 'เรียนอยู่')
       .map(s => ({
         ...s,
         student_name: s.student_name || `${s.prefix||''}${s.name||''} ${s.surname||''}`.trim(),
@@ -572,7 +572,7 @@ function copyLineMessage() {
   ]
   const absRows = absentStudents.value
   if (absRows.length) {
-    lines.push('นักเรียนขาด/สาย:')
+    lines.push('นักเรียนขาด/ลา/สาย:')
     absRows.forEach(r => {
       lines.push(`  คาบ${r.period} ${statusLabel(r.status)} ${studentName(r)}${r.parent_phone ? '  ☎ ' + r.parent_phone : ''}`)
     })
@@ -588,7 +588,7 @@ function copyLineMessage() {
 onMounted(async () => {
   try {
     attendanceStatuses.value = await getAttendanceStatuses()
-    classes.value = await getClasses()
+    classes.value = (await getClasses()).filter(c => !c.is_schedule_only)
     if (!isAdmin.value) {
       const teacherId = myTeacherId.value
       if (teacherId) {

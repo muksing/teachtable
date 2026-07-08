@@ -146,6 +146,10 @@
             <el-table-column label="ชื่อ-นามสกุล" min-width="200">
               <template #default="{ row }">
                 <span class="font-semibold">{{ studentNameFull(row) }}</span>
+                <span v-if="row.joinDate" class="ml-2 text-xs text-amber-600 font-medium"
+                  :title="`ย้ายเข้า ${row.joinDate}${row.carryOver ? ` · ยกมา ${row.carryOver} คาบ` : ''}`">
+                  🚚 ย้ายเข้า {{ row.joinDate }}{{ row.carryOver ? ` (+${row.carryOver})` : '' }}
+                </span>
               </template>
             </el-table-column>
         <el-table-column label="มา" width="85" align="center" sortable prop="present">
@@ -351,7 +355,7 @@ const { getClasses, getStudents, getTeachingAssignments, getTeachActualsRangeByC
 
 // ─── Role ────────────────────────────────────────────────────────
 const isTeacherOnly = computed(() =>
-  !authStore.hasAnyRole(['school_admin', 'admin', 'superadmin'])
+  !authStore.hasAnyRole(['school_admin', 'admin', 'superadmin', 'school_director', 'sub_coordinator', 'subject_head'])
 )
 const myDisplayName = computed(() =>
   authStore.profile?.displayName || authStore.profile?.name || 'ผู้ทำรายการ'
@@ -380,8 +384,10 @@ const allActuals  = ref([])
 const hasData = computed(() => reportRows.value.length > 0)
 
 // ─── Available classes / subjects ────────────────────────────────
+const realClasses = computed(() => classes.value.filter(c => !c.is_schedule_only))
+
 const availableClasses = computed(() => {
-  if (!isTeacherOnly.value) return classes.value
+  if (!isTeacherOnly.value) return realClasses.value
   const teacherId = authStore.profile?.teacher_id || authStore.profile?.uid
   const myClassIds = new Set(
     assignments.value
@@ -389,12 +395,12 @@ const availableClasses = computed(() => {
       .map(a => a.class_id)
   )
   // รวมห้องที่ครูเป็นครูที่ปรึกษา (homeroom teacher)
-  for (const cls of classes.value) {
+  for (const cls of realClasses.value) {
     const ids = Array.isArray(cls.homeroom_teacher_ids) ? cls.homeroom_teacher_ids
       : (cls.homeroom_teacher_id ? [cls.homeroom_teacher_id] : [])
     if (ids.includes(teacherId)) myClassIds.add(cls.class_id)
   }
-  return classes.value.filter(c => myClassIds.has(c.class_id))
+  return realClasses.value.filter(c => myClassIds.has(c.class_id))
 })
 
 const availableSubjects = computed(() => {
@@ -494,24 +500,34 @@ function pp5StatusClass(st) { return PP5_STATUS[st]?.cls   || 'pp5-p' }
 const pp5StudentSummaries = computed(() => {
   const result = {}
   for (const stu of allStudents.value) {
-    let present = 0, late = 0, absent = 0, leave = 0, total = 0
+    const joinDate = stu.join_date || null
+    let present = 0, late = 0, absent = 0, leave = 0, official = 0, notFilled = 0, total = 0
     for (const ta of periodsForTable.value) {
+      if (joinDate && ta.date && ta.date < joinDate) continue
       total++
       if (!ta.is_filled) {
-        absent++ // ไม่บันทึก = ขาด
+        notFilled++   // ยังไม่บันทึก — ไม่นับเป็นขาด
       } else {
         const st = pp5CellStatus(stu.student_id, ta)
-          const cat = categorizeStatus(st)
-          if (cat === 'present') present++
-          else if (cat === 'absent') absent++
-          else if (cat === 'leave') leave++
-          // official ไม่หักจากการมา — ไม่นับแยก
+        const cat = categorizeStatus(st)
+        if (cat === 'present') present++
+        else if (cat === 'absent') absent++
+        else if (cat === 'leave') leave++
+        else if (cat === 'official') { present++; official++ }  // ไปราชการ = นับเป็นมา
       }
     }
-    const pct = total > 0 ? (present / total) * 100 : 100
+    // carry-over: บวกคาบที่ยกมาจากโรงเรียนเดิม (ค่าเฉลี่ยทุกวิชา)
+    const co = stu.subject_carry_over || {}
+    const coVals = Object.values(co).map(Number).filter(v => v > 0)
+    const carryOver = coVals.length ? Math.round(coVals.reduce((a, b) => a + b, 0) / coVals.length) : 0
+    present += carryOver
+    total += carryOver
+    // pct คำนวณจากคาบที่บันทึกแล้วเท่านั้น (ไม่รวมยังไม่บันทึก)
+    const filledTotal = total - notFilled
+    const pct = filledTotal > 0 ? (present / filledTotal) * 100 : 100
     result[stu.student_id] = {
-      present, late, absent, leave, total, pct,
-      isMaeSo: total > 0 && pct < 80
+      present, late, absent, leave, official, notFilled, total, pct,
+      isMaeSo: filledTotal > 0 && pct < 80
     }
   }
   return result
@@ -546,8 +562,9 @@ async function loadReport() {
   if (!startDate.value || !endDate.value) { ElMessage.warning('กรุณาเลือกช่วงวันที่'); return }
   loading.value = true
   try {
-    const teacherId = authStore.profile?.teacher_id || authStore.profile?.uid
-    const students  = await getStudents(filterClassId.value, { activeOnly: true })
+    const teacherId  = authStore.profile?.teacher_id || ''
+    const teacherUid = authStore.profile?.uid || ''
+    const students   = await getStudents(filterClassId.value, { activeOnly: true })
     let actuals = await getTeachActualsRangeByClass(startDate.value, endDate.value, filterClassId.value)
 
     if (filterSubjectId.value) {
@@ -560,10 +577,14 @@ async function loadReport() {
         )
       }
     }
-    if (isTeacherOnly.value && teacherId) {
-      actuals = actuals.filter(a =>
-        a.teacher_plan_id === teacherId || a.teacher_actual_id === teacherId
-      )
+    if (isTeacherOnly.value && (teacherId || teacherUid)) {
+      actuals = actuals.filter(a => {
+        // ตรวจสอบครูที่วางแผน (จากตารางสอน) หรือครูที่บันทึกจริง
+        if (teacherId && (a.teacher_plan_id === teacherId || a.teacher_actual_id === teacherId)) return true
+        if (teacherUid && teacherUid !== teacherId &&
+            (a.teacher_plan_id === teacherUid || a.teacher_actual_id === teacherUid)) return true
+        return false
+      })
     }
 
     allStudents.value = students.map(s => ({
@@ -572,29 +593,106 @@ async function loadReport() {
     })).sort((a, b) => (Number(a.seat_number) || 9999) - (Number(b.seat_number) || 9999))
     allActuals.value = actuals
 
-    const statusMap = {}
-    students.forEach(s => {
-      statusMap[s.student_id] = { present:0, late:0, absent:0, sick:0, leave:0, official:0, total:0 }
-    })
-    actuals.forEach(ta => {
-      const recs = ta.student_records || {}
-      // นับทุกคนในห้องเสมอ (total เท่ากันทุกคน)
-      students.forEach(s => {
-        if (!statusMap[s.student_id]) return
-        statusMap[s.student_id].total++
-        if (!ta.is_filled) {
-          statusMap[s.student_id].absent++
-        } else {
-          const rec = recs[String(s.student_id)] || recs[s.student_id]
-          const status = rec?.status || 'มาเรียน'  // ไม่ถูกบันทึกในคาบนี้ = ถือว่ามา
-          const cat = categorizeStatus(status)
-          statusMap[s.student_id][cat]++
+    // ── Day-based counting (matches homeroom dashboard logic) ──────────────
+    // Build dayData[studentId][date] = { hmStatus, regularStatuses, skipCount }
+    const homeroomPeriodNums = new Set(homeroomPeriods.value.map(hp => Number(hp.period)))
+    const dayData = {}
+
+    for (const ta of actuals) {
+      const date = ta.date
+      const isHm = homeroomPeriodNums.has(Number(ta.period_number)) || ta.slot_type === 'homeroom'
+
+      if (!ta.is_filled) {
+        // ยังไม่บันทึก — สร้าง placeholder เพื่อนับวันใน total แต่ไม่นับเป็นขาด
+        for (const s of students) {
+          const sid = String(s.student_id)
+          if (!dayData[sid]) dayData[sid] = {}
+          if (!dayData[sid][date]) dayData[sid][date] = { hmStatus: null, regularStatuses: [], skipCount: 0 }
         }
-      })
-    })
+        continue
+      }
+
+      for (const [sid, rec] of Object.entries(ta.student_records || {})) {
+        if (!dayData[sid]) dayData[sid] = {}
+        if (!dayData[sid][date]) dayData[sid][date] = { hmStatus: null, regularStatuses: [], skipCount: 0 }
+        const st = rec?.status || 'มาเรียน'
+        if (isHm) {
+          dayData[sid][date].hmStatus = st
+        } else {
+          dayData[sid][date].regularStatuses.push(st)
+          if (st === 'โดดเรียน') dayData[sid][date].skipCount++
+        }
+      }
+    }
+
+    function computeMode(arr) {
+      if (!arr.length) return null
+      const cnt = {}
+      for (const v of arr) cnt[v] = (cnt[v] || 0) + 1
+      return Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0]
+    }
+
+    const statusMap = {}
+    for (const s of students) {
+      const sid = String(s.student_id)
+      const days = dayData[sid] || {}
+
+      // join_date: skip days before student joined this school
+      const joinDate = s.join_date || null
+
+      let present = 0, late = 0, absent = 0, leave = 0, official = 0, notFilled = 0, total = 0
+
+      for (const [dateKey, dayInfo] of Object.entries(days)) {
+        if (joinDate && dateKey < joinDate) continue
+
+        const { hmStatus, regularStatuses } = dayInfo
+        total++
+
+        // วันที่ยังไม่มีข้อมูลบันทึกเลย — นับใน total แต่ไม่นับสถานะ
+        if (hmStatus === null && regularStatuses.length === 0) { notFilled++; continue }
+
+        const regularMode = regularStatuses.length ? computeMode(regularStatuses) : null
+        const homeroomMissed = hmStatus != null &&
+          (hmStatus === 'ขาดเรียน' || hmStatus === 'ลาป่วย' || hmStatus === 'ลากิจ' || hmStatus === 'ไปราชการ')
+        const regularPresent = regularMode != null &&
+          (regularMode === 'มาเรียน' || regularMode === 'มาสาย')
+
+        if (homeroomMissed && regularPresent) {
+          present++
+          late++
+        } else {
+          const dayMode = regularMode ?? hmStatus
+          if (!dayMode || dayMode === 'มาเรียน' || dayMode === 'มาสาย') present++
+          else if (dayMode === 'ขาดเรียน' || dayMode === 'โดดเรียน') absent++
+          else if (dayMode === 'ลาป่วย' || dayMode === 'ลากิจ') leave++
+          else if (dayMode === 'ไปราชการ') { present++; official++ }
+          else present++
+        }
+      }
+
+      // subject_carry_over: บวกคาบยกมาจากโรงเรียนเดิม
+      const carryOverMap = s.subject_carry_over || {}
+      let carryOver = 0
+      if (filterSubjectId.value && !filterSubjectId.value.startsWith('__homeroom__')) {
+        carryOver = Number(carryOverMap[filterSubjectId.value] || 0)
+      } else if (!filterSubjectId.value) {
+        const vals = Object.values(carryOverMap).map(Number).filter(v => v > 0)
+        carryOver = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0
+      }
+
+      statusMap[s.student_id] = {
+        present: present + carryOver,
+        late, absent, leave, official, notFilled,
+        total: total + carryOver,
+        carryOver, joinDate,
+      }
+    }
+
     reportRows.value = students.map(s => {
-      const c   = statusMap[s.student_id] || { present:0, late:0, absent:0, sick:0, leave:0, official:0, total:0 }
-      const pct = c.total > 0 ? (c.present / c.total) * 100 : 0
+      const c = statusMap[s.student_id] || { present:0, late:0, absent:0, leave:0, official:0, notFilled:0, total:0, carryOver:0, joinDate:null }
+      // pct คำนวณจากคาบที่บันทึกแล้วเท่านั้น (ไม่รวมยังไม่บันทึก)
+      const filledTotal = c.total - (c.notFilled || 0)
+      const pct = filledTotal > 0 ? (c.present / filledTotal) * 100 : 0
       return { ...s, ...c, pct }
     }).sort((a, b) => (Number(a.seat_number) || 9999) - (Number(b.seat_number) || 9999))
 

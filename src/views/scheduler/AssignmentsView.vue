@@ -74,10 +74,7 @@
         <el-select v-model="filterClass" placeholder="ทุกห้อง" clearable class="w-36">
           <el-option v-for="c in classes" :key="c.class_id" :label="c.class_id" :value="c.class_id" />
         </el-select>
-        <el-select v-model="filterTeacher" placeholder="ทุกครู" clearable class="w-48">
-          <el-option v-for="t in teachers" :key="t.teacher_id"
-            :label="`${t.prefix || ''}${t.name} ${t.surname}`" :value="t.teacher_id" />
-        </el-select>
+        <TeacherSelect v-model="filterTeacher" :teachers="teachers" placeholder="ทุกครู" clearable style="width:192px" />
         <el-select v-model="filterStatus" placeholder="ทุกสถานะ" clearable class="w-36">
           <el-option label="ครบแล้ว" value="done" />
           <el-option label="ยังไม่ครบ" value="pending" />
@@ -125,26 +122,30 @@
             </template>
           </el-table-column>
           <el-table-column label="ครูผู้สอน" min-width="130" prop="teacher_name" />
-          <el-table-column label="ห้อง/Lab" width="120">
+          <el-table-column v-if="!isMobile" label="ห้อง/Lab" width="120">
             <template #default="{ row }">
               <span v-if="row.preferred_room" class="text-blue-600 text-sm">🏛 {{ row.preferred_room }}</span>
               <span v-else class="text-gray-300 text-xs">ห้องเรียนปกติ</span>
             </template>
           </el-table-column>
-          <el-table-column label="คาบ/สัปดาห์" width="110" align="center">
+          <el-table-column label="คาบ/สัปดาห์" :width="isMobile ? 70 : 110" align="center">
             <template #default="{ row }">
-              <el-tag type="info">{{ row.periods_per_week }} คาบ</el-tag>
+              <el-tag type="info" :size="isMobile ? 'small' : 'default'">{{ row.periods_per_week }} คาบ</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="คาบติดกัน" width="100" align="center">
+          <el-table-column v-if="!isMobile" label="คาบติดกัน" width="100" align="center">
             <template #default="{ row }">
               <el-tag v-if="row.consecutive_periods > 1" type="warning">{{ row.consecutive_periods }} คาบ</el-tag>
               <span v-else class="text-gray-400 text-sm">-</span>
             </template>
           </el-table-column>
-          <el-table-column label="ความคืบหน้า" width="180">
+          <el-table-column label="ความคืบหน้า" :width="isMobile ? 90 : 180">
             <template #default="{ row }">
-              <div class="flex items-center gap-2">
+              <div v-if="isMobile" class="text-center text-xs font-bold"
+                :class="row.done ? 'text-green-600' : (row.placed||0) > 0 ? 'text-amber-600' : 'text-red-500'">
+                {{ row.placed||0 }}/{{ row.periods_per_week }}
+              </div>
+              <div v-else class="flex items-center gap-2">
                 <el-progress
                   :percentage="Math.min(100, Math.round(((row.placed||0) / row.periods_per_week) * 100))"
                   :status="row.done ? 'success' : (row.placed||0) > 0 ? '' : 'exception'"
@@ -154,18 +155,24 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="สถานะ" width="110" align="center">
+          <el-table-column v-if="!isMobile" label="สถานะ" width="110" align="center">
             <template #default="{ row }">
               <el-tag :type="row.done ? 'success' : (row.placed||0) > 0 ? 'warning' : 'danger'" size="small">
                 {{ row.done ? 'ครบแล้ว' : (row.placed||0) > 0 ? 'บางส่วน' : 'ยังไม่จัด' }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="จัดการ" width="130" align="center" fixed="right">
+          <el-table-column label="จัดการ" :width="isMobile ? 70 : 130" align="center" :fixed="isMobile ? false : 'right'">
             <template #default="{ row }">
               <template v-if="!isLocked">
-                <el-button size="small" type="primary" plain @click="openDialog(row)">แก้ไข</el-button>
-                <el-button size="small" type="danger" plain @click="deleteAssignment(row)">ลบ</el-button>
+                <template v-if="isMobile">
+                  <el-button size="small" type="primary" plain @click="openDialog(row)" style="padding:4px 8px">✏️</el-button>
+                  <el-button size="small" type="danger" plain @click="deleteAssignment(row)" style="padding:4px 8px">🗑</el-button>
+                </template>
+                <template v-else>
+                  <el-button size="small" type="primary" plain @click="openDialog(row)">แก้ไข</el-button>
+                  <el-button size="small" type="danger" plain @click="deleteAssignment(row)">ลบ</el-button>
+                </template>
               </template>
               <span v-else class="text-xs text-gray-400">—</span>
             </template>
@@ -188,10 +195,7 @@
             </el-select>
           </el-form-item>
           <el-form-item label="ครูผู้สอน" prop="teacher_id">
-            <el-select v-model="form.teacher_id" class="w-full" placeholder="เลือกครู" @change="onTeacherChange" filterable>
-              <el-option v-for="t in teachers" :key="t.teacher_id"
-                :label="`${t.prefix || ''}${t.name} ${t.surname}`" :value="t.teacher_id" />
-            </el-select>
+            <TeacherSelect v-model="form.teacher_id" :teachers="teachers" class="w-full" @change="onTeacherChange" />
           </el-form-item>
 
           <!-- 3D Scheduling: Room/Lab -->
@@ -333,7 +337,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { supabase } from '@/supabase/client'
 import * as XLSX from 'xlsx'
@@ -350,6 +354,9 @@ const { isLocked } = useScheduleGuard()
 const { getTeachers, getSubjects, getClasses, getRooms, getRoomCatalog, saveTeachingAssignment, deleteTeachingAssignment } = useSchoolDb()
 const { printReport } = usePrintReport()
 const term = () => schoolStore.currentTerm || '2568_1'
+
+const isMobile = ref(window.innerWidth < 768)
+function onResize() { isMobile.value = window.innerWidth < 768 }
 
 const loading = ref(false), saving = ref(false), dialogVisible = ref(false)
 const editing = ref(null), formRef = ref()
@@ -442,6 +449,7 @@ async function loadRoomOptions() {
 }
 
 onMounted(async () => {
+  window.addEventListener('resize', onResize)
   loading.value = true
   try {
     const [t, s, c, r] = await Promise.all([getTeachers(), getSubjects(), getClasses(), loadRoomOptions()])
@@ -454,6 +462,7 @@ onMounted(async () => {
     loading.value = false
   }
 })
+onUnmounted(() => window.removeEventListener('resize', onResize))
 
 async function reload() {
   const schoolId = authStore.schoolId
@@ -565,6 +574,9 @@ async function saveAssignment() {
 
     saving.value = true
     try {
+      // จำค่าเดิมก่อนบันทึก (ใช้ detect ว่าอะไรเปลี่ยน)
+      const oldSubjectCode = editing.value?.subject_code || null
+
       await saveTeachingAssignment({
         id: editing.value?.id,
         class_id: form.class_id,
@@ -576,11 +588,45 @@ async function saveAssignment() {
         periods_per_week: form.periods_per_week,
         consecutive_periods: form.consecutive_periods,
       })
+
       if (editing.value?.id) {
+        // cascade timetable_slots — อัปเดตทุก field ผ่าน assign_id
+        // (teach_actuals derive ข้อมูลวิชา/ครูจาก timetable_slots ณ เวลา query จึงแก้อัตโนมัติ)
         await supabase
           .from('timetable_slots')
-          .update({ room_id: form.preferred_room || null, teacher_name: form.teacher_name || null })
+          .update({
+            subject_id:   form.subject_code   || null,
+            subject_name: form.subject_name   || null,
+            teacher_id:   form.teacher_id     || null,
+            teacher_name: form.teacher_name   || null,
+            room_id:      form.preferred_room || null,
+          })
           .eq('assign_id', editing.value.id)
+
+        // cascade exams — ถ้ารหัสวิชาเปลี่ยน อัปเดตข้อสอบที่ตรงกับวิชา+ห้องนั้น
+        const subjectChanged = oldSubjectCode && oldSubjectCode !== form.subject_code
+        if (subjectChanged) {
+          const { data: matchedExams } = await supabase
+            .from('exams')
+            .select('id, class_ids')
+            .eq('school_id', authStore.schoolId)
+            .eq('subject_code', oldSubjectCode)
+          const classId = form.class_id
+          const examIds = (matchedExams || [])
+            .filter(e => {
+              try {
+                const arr = Array.isArray(e.class_ids) ? e.class_ids : JSON.parse(e.class_ids || '[]')
+                return arr.includes(classId)
+              } catch { return false }
+            })
+            .map(e => e.id)
+          if (examIds.length) {
+            await supabase
+              .from('exams')
+              .update({ subject_code: form.subject_code, subject_name: form.subject_name })
+              .in('id', examIds)
+          }
+        }
       }
       ElMessage.success('บันทึกเรียบร้อย')
       dialogVisible.value = false
@@ -672,22 +718,18 @@ async function deleteAll() {
   if (!allRows.length) return
   try {
     await ElMessageBox.confirm(
-      `ยืนยันการลบทั้งหมด ${allRows.length} รายการ? ไม่สามารถกู้คืนได้`,
-      'ยืนยันการลบทั้งหมด',
-      { confirmButtonText: 'ลบทั้งหมด', cancelButtonText: 'ยกเลิก', type: 'error' }
+      `ยืนยันการลบ ${allRows.length} รายการที่กรองอยู่? ลบทั้งภาระงานและคาบในตารางสอน ไม่สามารถกู้คืนได้`,
+      'ยืนยันการลบ',
+      { confirmButtonText: 'ลบ', cancelButtonText: 'ยกเลิก', type: 'error' }
     )
     loading.value = true
-    const schoolId = authStore.schoolId
-    const currentTerm = term()
-    const { error: e1 } = await supabase
-      .from('timetable_slots').delete()
-      .eq('school_id', schoolId).eq('term_id', currentTerm).eq('slot_type', 'subject')
-    if (e1) throw e1
-    const { error: e2 } = await supabase
-      .from('teaching_assignments').delete()
-      .eq('school_id', schoolId).eq('term_id', currentTerm)
-    if (e2) throw e2
-    ElMessage.success('ลบทั้งหมดเรียบร้อย')
+    // ลบเฉพาะ assign_id ที่อยู่ใน filter ปัจจุบัน (ไม่ลบข้ามครู/วิชา)
+    const assignIds = allRows.map(r => r.id)
+    for (const aid of assignIds) {
+      await supabase.from('timetable_slots').delete().eq('assign_id', aid)
+      await deleteTeachingAssignment(aid)
+    }
+    ElMessage.success('ลบเรียบร้อย')
     await reload()
   } catch (e) {
     if (e !== 'cancel' && typeof e !== 'string') ElMessage.error(e.message)
