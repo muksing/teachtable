@@ -110,7 +110,7 @@ const authStore = useAuthStore()
 const router = useRouter()
 
 const schoolId = computed(() => authStore.schoolId)
-const term = computed(() => schoolStore.currentTerm || '2568_1')
+const term = computed(() => schoolStore.currentTerm)
 const teacherId   = computed(() => authStore.profile?.teacher_id || authStore.profile?.uid || '')
 const teacherName = computed(() => authStore.profile?.displayName || authStore.profile?.email || '')
 const isAdmin     = computed(() => authStore.isAdmin)

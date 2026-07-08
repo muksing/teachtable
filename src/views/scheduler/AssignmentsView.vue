@@ -353,7 +353,7 @@ const schoolStore = useSchoolStore()
 const { isLocked } = useScheduleGuard()
 const { getTeachers, getSubjects, getClasses, getRooms, getRoomCatalog, saveTeachingAssignment, deleteTeachingAssignment } = useSchoolDb()
 const { printReport } = usePrintReport()
-const term = () => schoolStore.currentTerm || '2568_1'
+const term = () => schoolStore.currentTerm
 
 const isMobile = ref(window.innerWidth < 768)
 function onResize() { isMobile.value = window.innerWidth < 768 }

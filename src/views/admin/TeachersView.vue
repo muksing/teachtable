@@ -715,7 +715,7 @@ async function loadAll() {
     teachers.value = teacherData
 
     // Collect distinct term_ids for the pull dialog
-    const termSet = new Set([schoolStore.currentTerm || '2568_1'])
+    const termSet = new Set([schoolStore.currentTerm])
     ;(termIdsRes.data || []).forEach(r => r.term_id && termSet.add(r.term_id))
     availableTerms.value = Array.from(termSet).sort((a, b) => b.localeCompare(a))
 

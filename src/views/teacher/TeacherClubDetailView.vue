@@ -433,7 +433,7 @@ const STATUS_CELL_CLS = {
 // ── Router ────────────────────────────────────────────────────────
 const router  = useRouter()
 const route   = useRoute()
-const term    = computed(() => schoolStore.currentTerm || '2568_1')
+const term    = computed(() => schoolStore.currentTerm)
 const clubId  = computed(() => route.params.clubId)
 
 // ── Core state — separate refs for club / members / sessions ──────

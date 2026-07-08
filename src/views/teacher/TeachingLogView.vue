@@ -784,7 +784,7 @@ async function openDialog(slot) {
   // Slot has no DB record yet — upsert to get/create ID, then navigate
   generating.value = true
   try {
-    const termId    = schoolStore.currentTerm || '2568_1'
+    const termId    = schoolStore.currentTerm
     const schoolId  = authStore.schoolId
     const periodNum = Number(slot.period ?? slot.period_number)
     const classId   = slot.class_id

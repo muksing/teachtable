@@ -134,7 +134,7 @@ async function loadData() {
   loading.value = true
   try {
     const schoolId = authStore.schoolId
-    const termId = schoolStore.currentTerm || '2568_1'
+    const termId = schoolStore.currentTerm
 
     // query teach_actuals ตรงๆ (เฉพาะ records ที่มีจริงใน DB)
     let actualsQ = supabase
@@ -311,7 +311,7 @@ async function deleteAll() {
     )
     loading.value = true
     const schoolId = authStore.schoolId
-    const term = schoolStore.currentTerm || '2568_1'
+    const term = schoolStore.currentTerm
     const { error } = await supabase
       .from('teach_actuals')
       .delete()

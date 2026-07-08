@@ -274,7 +274,7 @@ const authStore = useAuthStore()
 const { buildSignatureHTML, getModuleSignatures } = useSignature()
 const { getRooms, getTeachers, getClasses } = useSchoolDb()
 const { slotTable } = useTimetableSource()
-const term = computed(() => schoolStore.currentTerm || '2568_1')
+const term = computed(() => schoolStore.currentTerm)
 const isLocked = computed(() => !!schoolStore.settingsObj?.timetable_published_at)
 const { DAYS, PERIODS, PERIOD_TIMES } = useTimetable()
 

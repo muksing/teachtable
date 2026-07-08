@@ -1188,7 +1188,7 @@ function getDateRange(p) {
     return { start: toLocalStr(new Date(today.getFullYear(), today.getMonth(), 1)), end: ts }
   }
   // ภาคเรียน: ใช้ term start จาก school store หรือ default
-  const term = schoolStore.currentTerm || '2568_1'
+  const term = schoolStore.currentTerm
   const year = parseInt(term.split('_')[0] || '2568') - 543
   const sem  = parseInt(term.split('_')[1] || '1')
   const termStart = sem === 1 ? new Date(year, 4, 1) : new Date(year, 9, 1)
@@ -1941,7 +1941,7 @@ async function loadData() {
   try {
     const { start, end } = getDateRange(period.value)
     const schoolId = authStore.schoolId
-    const termId   = schoolStore.currentTerm || '2568_1'
+    const termId   = schoolStore.currentTerm
 
     const [stuRes, actRes] = await Promise.all([
       supabase

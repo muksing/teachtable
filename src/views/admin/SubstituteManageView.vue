@@ -199,7 +199,7 @@ const {
   subscribeLeaveRequests, getThaiDayFromDate,
 } = useSchoolDb()
 
-const term          = computed(() => schoolStore.currentTerm || '2568_1')
+const term          = computed(() => schoolStore.currentTerm)
 const termLabel     = computed(() => schoolStore.termLabel || term.value)
 const isAdmin       = computed(() => authStore.isAdmin)
 const isCoordinator = computed(() => authStore.hasAnyRole(['sub_coordinator']))

@@ -162,7 +162,7 @@ async function loadPublished() {
   loading.value = true
   publishedMissing.value = false
   try {
-    currentTerm.value = schoolStore.currentTerm || '2568_1'
+    currentTerm.value = schoolStore.currentTerm
 
     const [classesRes, teachersRes, publishedRes, schoolRes] = await Promise.all([
       supabase.from('classes').select('*').eq('school_id', sid).order('class_name'),

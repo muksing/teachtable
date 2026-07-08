@@ -195,7 +195,7 @@ async function loadData() {
   loading.value = true
   try {
     const schoolId = authStore.schoolId
-    const term     = schoolStore.currentTerm || '2568_1'
+    const term     = schoolStore.currentTerm
     if (!schoolId) throw new Error('ไม่พบ schoolId')
 
     // 1. Teaching assignments (source of truth for what SHOULD have exams)

@@ -175,7 +175,7 @@ const authStore = useAuthStore()
 const schoolStore = useSchoolStore()
 
 const schoolId = computed(() => authStore.schoolId)
-const term = computed(() => schoolStore.currentTerm || '2568_1')
+const term = computed(() => schoolStore.currentTerm)
 
 const loading = ref(false)
 const dialogLoading = ref(false)

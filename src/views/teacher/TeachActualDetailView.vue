@@ -521,7 +521,7 @@ const schoolStore = useSchoolStore()
 const { slotTable } = useTimetableSource()
 const { getStudents, getBehaviorSettings, getAttendanceStatuses, getSubjects } = useSchoolDb()
 
-const term = () => schoolStore.currentTerm || '2568_1'
+const term = () => schoolStore.currentTerm
 const taId = computed(() => route.params.id)
 
 // ─── Constants ────────────────────────────────────────────────────
@@ -942,7 +942,7 @@ async function loadPage() {
     }
     if (!currentTeacherName.value) currentTeacherName.value = p?.displayName || p?.display_name || p?.email || ''
 
-    const t = schoolStore.currentTerm || '2568_1'
+    const t = schoolStore.currentTerm
     const [allBeh, subjects, slotRes] = await Promise.all([
       getBehaviorSettings(),
       getSubjects(),

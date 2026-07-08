@@ -79,7 +79,7 @@ export function useRealtimeTimetable() {
   const schoolStore = useSchoolStore()
   const authStore = useAuthStore()
   const schoolId = () => authStore.schoolId
-  const term = () => schoolStore.currentTerm || '2568_1'
+  const term = () => schoolStore.currentTerm
 
   // State
   const timetableSlots = ref([])

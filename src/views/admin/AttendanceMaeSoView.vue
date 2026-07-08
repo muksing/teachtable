@@ -225,7 +225,7 @@ async function loadReport() {
   classList.value = []
   try {
     const schoolId = authStore.schoolId
-    const termId   = schoolStore.currentTerm || '2568_1'
+    const termId   = schoolStore.currentTerm
 
     // โหลดข้อมูลพื้นฐาน + teach_actuals
     const [allClasses, allStudents, allActuals, subjectsRes] = await Promise.all([
@@ -546,7 +546,7 @@ function printAll() {
 
 // ── Init ──────────────────────────────────────────────────────────────────
 onMounted(async () => {
-  const termId     = schoolStore.currentTerm || '2568_1'
+  const termId     = schoolStore.currentTerm
   const [buddhYear, sem] = termId.split('_')
   const christYear = parseInt(buddhYear) - 543
   startDate.value  = sem === '2' ? `${christYear}-11-01` : `${christYear}-05-01`

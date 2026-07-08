@@ -32,9 +32,10 @@ export function useMasterAuth() {
       const { data } = await supabase.from('schools').select('*').eq('id', schoolId).single()
       if (data) {
         schoolStore.setSchool(data)
-        // ใช้ schools.current_term เท่านั้น — ห้าม fallback ไป settings.school_info.current_term
-        // (เป็นข้อมูลแสดงผลปีการศึกษาที่เปิดเรียน คนละก้อนกับเทอมที่ระบบใช้ query จริง เคยทำให้เทอมสลับผิดมาแล้ว)
-        schoolStore.setCurrentTerm(data.current_term || '2568_1')
+        // ใช้ schools.current_term เท่านั้น — ห้าม fallback เป็นรหัสเทอมที่เขียนตายตัว (hardcoded)
+        // เพราะถ้าค่านี้ยังไม่ถูกตั้ง ระบบควรแสดงว่า "ยังไม่มีเทอม" ให้แอดมินไปตั้งค่าจริง
+        // ไม่ใช่แอบอ้างเทอมใดเทอมหนึ่งที่อาจไม่มีข้อมูลอยู่เลย (สาเหตุของเหตุการณ์เทอมสลับที่เคยเกิดขึ้น)
+        schoolStore.setCurrentTerm(data.current_term || null)
         subscribeSchoolSettings(schoolId)
       }
     } catch {
@@ -55,7 +56,7 @@ export function useMasterAuth() {
       }, (payload) => {
         if (payload.new) {
           schoolStore.setSchool(payload.new)
-          schoolStore.setCurrentTerm(payload.new.current_term || '2568_1')
+          schoolStore.setCurrentTerm(payload.new.current_term || null)
         }
       })
       .subscribe()

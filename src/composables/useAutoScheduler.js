@@ -15,7 +15,7 @@ export function useAutoScheduler() {
   const authStore = useAuthStore()
   const quotaTracking = useQuotaTracking()
   const schoolId = () => authStore.schoolId
-  const term = () => schoolStore.currentTerm || '2568_1'
+  const term = () => schoolStore.currentTerm
 
   const scheduling = ref(false)
   const scheduleLog = ref([])

@@ -231,7 +231,7 @@ const {
   createLeaveRequest, getLeaveRequests, cancelLeaveRequest,
 } = useSchoolDb()
 
-const term        = computed(() => schoolStore.currentTerm || '2568_1')
+const term        = computed(() => schoolStore.currentTerm)
 const termLabel   = computed(() => schoolStore.termLabel || term.value)
 const teacherId   = computed(() => authStore.profile?.teacher_id || authStore.profile?.uid || '')
 const teacherName = computed(() => authStore.profile?.displayName || authStore.profile?.email || '')

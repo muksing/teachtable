@@ -908,7 +908,7 @@ const schoolStore = useSchoolStore()
 const authStore = useAuthStore()
 const { isLocked, showLockMsg, guardAction } = useScheduleGuard()
 const presence = useSchedulerPresence()
-const term = () => schoolStore.currentTerm || '2568_1'
+const term = () => schoolStore.currentTerm
 
 const {
   DAYS, PERIODS, PERIOD_TIMES,

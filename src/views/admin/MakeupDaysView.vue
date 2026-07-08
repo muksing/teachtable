@@ -227,7 +227,7 @@ async function paginate(buildQuery) {
 
 // ── Load slots for reference day ──
 async function loadSlotsForDay(refDay) {
-  const tid = schoolStore.currentTerm || '2568_1'
+  const tid = schoolStore.currentTerm
   const slots = await paginate((f, t) =>
     supabase.from(slotTable.value)
       .select('class_id,period_number,subject_id,teacher_id,day_of_week,slot_type')
@@ -264,7 +264,7 @@ async function loadPreview() {
 
 // ── Generate teach_actuals for a specific date ──
 async function generateForDate(makeupDate, refDay) {
-  const tid = schoolStore.currentTerm || '2568_1'
+  const tid = schoolStore.currentTerm
   const sid = schoolId()
 
   const slots = await loadSlotsForDay(refDay)

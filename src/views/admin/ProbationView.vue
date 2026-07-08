@@ -569,7 +569,7 @@ async function saveRecord() {
       const attendance = s.attendance_behavior_score ?? 0
       const learning   = s.learning_behavior_score ?? 0
       const newTotal   = carryOver + general + attendance + learning + newProb
-      const term = schoolStore.currentTerm || '2568_1'
+      const term = schoolStore.currentTerm
       const { data: { user: authUser } } = await supabase.auth.getUser()
 
       await supabase.from('behavior_logs').insert({

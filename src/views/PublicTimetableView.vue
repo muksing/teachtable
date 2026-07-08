@@ -143,7 +143,7 @@ async function loadSchoolData() {
   try {
     const { data: schoolRow, error } = await supabase
       .from('schools')
-      .select('name, settings')
+      .select('name, current_term, settings')
       .eq('id', schoolId)
       .maybeSingle()
 
@@ -152,7 +152,7 @@ async function loadSchoolData() {
     if (schoolRow) {
       schoolInfo.value = { name: schoolRow.name }
       const settings = schoolRow.settings || {}
-      currentTerm.value = settings.current_term || '2568_1'
+      currentTerm.value = schoolRow.current_term || ''
 
       const snapshot = settings.public_timetable_snapshot || null
       if (snapshot) {

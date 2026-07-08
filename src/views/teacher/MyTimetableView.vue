@@ -222,7 +222,7 @@ async function loadMyTimetable() {
   loading.value = true
   slots.value = []
   try {
-    const t = schoolStore.currentTerm || '2568_1'
+    const t = schoolStore.currentTerm
     currentTerm.value = t
 
     const { data, error } = await supabase

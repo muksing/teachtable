@@ -108,7 +108,7 @@ const THAI_DAY_NAMES = ['อาทิตย์', 'จันทร์', 'อั�
 const THAI_DAY_NUM   = { จันทร์:1, อังคาร:2, พุธ:3, พฤหัสบดี:4, ศุกร์:5 }
 
 const today    = new Date().toLocaleDateString('sv-SE')   // YYYY-MM-DD local
-const termId   = computed(() => schoolStore.currentTerm || '2568_1')
+const termId   = computed(() => schoolStore.currentTerm)
 const settingsObj     = computed(() => schoolStore.settingsObj || {})
 const settingsTermStart = computed(() => settingsObj.value.term_start || '')
 const manualTermStart = ref('')

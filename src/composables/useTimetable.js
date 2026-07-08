@@ -9,7 +9,7 @@ export function useTimetable() {
   const authStore = useAuthStore()
   const schoolStore = useSchoolStore()
   const schoolId = () => authStore.schoolId
-  const term = () => schoolStore.currentTerm || '2568_1'
+  const term = () => schoolStore.currentTerm
 
   // ===== Constants =====
   const ALL_DAYS = [

@@ -106,7 +106,7 @@ export function useSchoolDb() {
   const authStore = useAuthStore()
   const schoolStore = useSchoolStore()
 
-  const term = () => schoolStore.displayTerm || schoolStore.currentTerm || '2568_1'
+  const term = () => schoolStore.displayTerm || schoolStore.currentTerm
 
   function getAuditFields() {
     return {

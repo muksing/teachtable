@@ -525,7 +525,7 @@ async function goToDetail(item) {
       .from('teach_actuals')
       .upsert([{
         school_id:          authStore.schoolId,
-        term_id:            schoolStore.currentTerm || '2568_1',
+        term_id:            schoolStore.currentTerm,
         class_id:           item.class_id,
         date:               item.date,
         period_number:      item.period_number || item.period,

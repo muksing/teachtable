@@ -250,7 +250,7 @@ const schoolStore = useSchoolStore()
 const authStore = useAuthStore()
 
 const schoolId = computed(() => authStore.schoolId)
-const currentTerm = computed(() => schoolStore.currentTerm || '2568_1')
+const currentTerm = computed(() => schoolStore.currentTerm)
 
 const loading = ref(false)
 const creating = ref(false)
