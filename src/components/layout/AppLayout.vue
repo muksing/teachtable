@@ -318,6 +318,15 @@ const allGroups = computed(() => {
         { to:'/admin/checkin-settings', icon:'⚙️', bg:'#cffafe', label:'ตั้งค่าการเช็คอิน', sub:'พิกัดโรงเรียน รัศมี คะแนนอัตโนมัติ' },
       ],
     },
+    // School Calendar Group
+    {
+      key: 'calendar', icon: '🗓️', label: 'ปฏิทินโรงเรียน',
+      grad: 'linear-gradient(135deg,#0ea5e9,#6366f1)',
+      roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_TEACHER, 'teacher', 'school_director'],
+      items: [
+        { to:'/admin/calendar', icon:'🗓️', bg:'#e0f2fe', label:'ปฏิทินโรงเรียน', sub:'วันหยุด วันชดเชย วันสอบ กิจกรรม' },
+      ],
+    },
     // Announcements — เห็นเฉพาะผู้มีสิทธิ์ (ไม่ขึ้น feature gate)
     ...(authStore.isAnnouncer ? [{
       key: 'announcements', icon: '📣', label: 'ประชาสัมพันธ์',

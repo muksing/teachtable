@@ -47,6 +47,7 @@ const routes = [
   { path: '/admin/teaching-log-settings', name: 'TeachingLogSettings', component: () => import('@/views/admin/TeachingLogSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/school-settings', name: 'SchoolSettings', component: () => import('@/views/admin/SchoolSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/checkin-settings', name: 'CheckinSettings', component: () => import('@/views/admin/CheckinSettingsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
+  { path: '/admin/calendar', name: 'SchoolCalendar', component: () => import('@/views/admin/SchoolCalendarView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_teacher', 'teacher', 'school_director'] } },
   { path: '/admin/renewal', name: 'Renewal', component: () => import('@/views/admin/RenewalView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/terms', name: 'TermManagement', component: () => import('@/views/admin/TermManagementView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin'] } },
   { path: '/admin/rooms', name: 'Rooms', component: () => import('@/views/admin/RoomsView.vue'), meta: { requireAuth: true, roles: ['school_admin', 'admin', 'superadmin', 'school_scheduler', 'scheduler'] } },
