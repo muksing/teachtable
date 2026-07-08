@@ -3,7 +3,11 @@
     <div class="lookup-page">
       <div class="header-card">
         <h1 class="title">🔍 ค้นหาตารางสอน</h1>
-        <p class="subtitle">ดูตารางห้องเรียนหรือครูคนใดก็ได้ — อ่านอย่างเดียว (ดูตรงจากข้อมูลปัจจุบัน แก้ไขไม่ได้)</p>
+        <p class="subtitle">ดูตารางห้องเรียนหรือครูคนใดก็ได้ — อ่านอย่างเดียวจากตารางฉบับเผยแพร่ล่าสุด</p>
+        <div v-if="publishVersion" class="meta-row">
+          <span class="meta-chip">เวอร์ชัน {{ publishVersion }}</span>
+          <span v-if="publishAtLabel" class="meta-chip">เผยแพร่เมื่อ {{ publishAtLabel }}</span>
+        </div>
       </div>
 
       <el-card class="mb-4" shadow="never">
@@ -20,7 +24,7 @@
               <el-option v-for="t in teachers" :key="t.teacher_code" :label="`${t.prefix||''}${t.first_name} ${t.last_name}`" :value="t.teacher_code" />
             </el-select>
           </div>
-          <el-button :loading="loading" @click="loadData">รีเฟรช</el-button>
+          <el-button :loading="loading" @click="loadPublished">รีเฟรช</el-button>
         </div>
       </el-card>
 
@@ -29,9 +33,9 @@
         <p>กำลังโหลดตารางสอน...</p>
       </div>
 
-      <div v-else-if="!timetable.length" class="state-card warning">
-        <h2>📢 ยังไม่มีตารางสอนของภาคเรียนนี้</h2>
-        <p>ยังไม่พบข้อมูลตารางสอนในระบบสำหรับภาคเรียนปัจจุบัน</p>
+      <div v-else-if="publishedMissing" class="state-card warning">
+        <h2>📢 ยังไม่มีตารางที่เผยแพร่</h2>
+        <p>Admin ยังไม่ได้เผยแพร่ตารางสอน — กรุณาติดต่อผู้ดูแลระบบโรงเรียน</p>
       </div>
 
       <div v-else-if="!selectedClass && !selectedTeacher" class="state-card">
@@ -95,6 +99,9 @@ const classes = ref([])
 const teachers = ref([])
 const timetable = ref([])
 const currentTerm = ref('')
+const publishVersion = ref('')
+const publishAtLabel = ref('')
+const publishedMissing = ref(false)
 
 const selectedClass = ref('')
 const selectedTeacher = ref('')
@@ -151,31 +158,43 @@ function getSlot(day, period) {
   return null
 }
 
-async function loadData() {
+async function loadPublished() {
   const sid = authStore.schoolId
   if (!sid) return
   loading.value = true
+  publishedMissing.value = false
   try {
-    currentTerm.value = schoolStore.currentTerm || '2568_1'
+    const { data: schoolRow, error } = await supabase
+      .from('schools')
+      .select('settings')
+      .eq('id', sid)
+      .maybeSingle()
+    if (error) throw error
 
-    const [classesRes, teachersRes, slotsRes] = await Promise.all([
-      supabase.from('classes').select('*').eq('school_id', sid).order('class_name'),
-      supabase.from('teachers').select('*').eq('school_id', sid).eq('term_id', currentTerm.value).order('first_name'),
-      supabase.from('timetable_slots').select('*').eq('school_id', sid).eq('term_id', currentTerm.value).limit(10000),
-    ])
-    if (classesRes.error) throw classesRes.error
-    if (teachersRes.error) throw teachersRes.error
-    if (slotsRes.error) throw slotsRes.error
+    const settings = schoolRow?.settings || {}
+    currentTerm.value = schoolStore.currentTerm || settings.current_term || '2568_1'
 
-    classes.value = classesRes.data || []
-    teachers.value = teachersRes.data || []
-    timetable.value = slotsRes.data || []
-  } catch (e) {
-    console.error(e)
-    ElMessage.error('โหลดตารางสอนไม่สำเร็จ: ' + e.message)
+    const snapshot = settings.public_timetable_snapshot || null
+    if (snapshot) {
+      classes.value = Array.isArray(snapshot.classes) ? snapshot.classes : []
+      teachers.value = Array.isArray(snapshot.teachers) ? snapshot.teachers : []
+      timetable.value = Array.isArray(snapshot.timetable) ? snapshot.timetable : []
+      currentTerm.value = snapshot.current_term || currentTerm.value
+      publishVersion.value = snapshot.version || ''
+      if (snapshot.published_at_iso) {
+        publishAtLabel.value = new Date(snapshot.published_at_iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
+      }
+      return
+    }
+
+    publishedMissing.value = true
     classes.value = []
     teachers.value = []
     timetable.value = []
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('โหลดตารางสอนไม่สำเร็จ: ' + e.message)
+    publishedMissing.value = true
   } finally {
     loading.value = false
   }
@@ -184,7 +203,7 @@ async function loadData() {
 watch(selectedClass, val => { if (val) selectedTeacher.value = '' })
 watch(selectedTeacher, val => { if (val) selectedClass.value = '' })
 
-onMounted(loadData)
+onMounted(loadPublished)
 </script>
 
 <style scoped>
