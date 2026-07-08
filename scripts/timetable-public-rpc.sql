@@ -6,6 +6,10 @@
 -- 1. get_class_timetable — ดูตารางสอนของห้องเรียน
 --    ใช้ทั้ง student portal และ parent portal
 -- ============================================================
+-- ต้อง DROP ก่อน เพราะเปลี่ยนชนิด return (คอลัมน์ subject_code -> subject_id)
+-- CREATE OR REPLACE เปลี่ยน OUT parameters ของฟังก์ชันเดิมไม่ได้
+DROP FUNCTION IF EXISTS get_class_timetable(TEXT, TEXT, TEXT);
+
 CREATE OR REPLACE FUNCTION get_class_timetable(
   p_school_id TEXT,
   p_class_id  TEXT,
