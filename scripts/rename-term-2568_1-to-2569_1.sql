@@ -16,6 +16,11 @@
 
 begin;
 
+-- ลบขยะที่ค้างอยู่ใน term_id='2569_1' จากตอนที่ระบบสลับเทอมผิดพลาดช่วงเช้า
+-- (ยืนยันแล้วว่าเป็นขยะจริง ไม่ใช่ข้อมูลปีอื่นที่ถูกต้อง เพราะยังไม่เคยขึ้นเทอม 2569_1 จริง
+--  ข้อมูลตัวจริงทั้งหมดอยู่ใน 2568_1 — ตารางอื่นตรวจแล้วไม่มีขยะค้าง มีแค่ teach_actuals)
+delete from teach_actuals where school_id = '11111111-1111-1111-1111-111111111111' and term_id = '2569_1';
+
 update teachers                  set term_id = '2569_1' where school_id = '11111111-1111-1111-1111-111111111111' and term_id = '2568_1';
 update timetable_slots           set term_id = '2569_1' where school_id = '11111111-1111-1111-1111-111111111111' and term_id = '2568_1';
 update timetable_slots_published set term_id = '2569_1' where school_id = '11111111-1111-1111-1111-111111111111' and term_id = '2568_1';
