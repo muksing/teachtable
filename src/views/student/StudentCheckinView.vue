@@ -25,6 +25,9 @@
           <span class="ci-done-badge">✅ เช็คอินแล้ว</span>
           <span class="ci-done-time">{{ formatCheckinTime(todayCheckin?.checkin_time) }}</span>
         </div>
+        <div v-if="awardedPoints" class="ci-points-banner">
+          🎉 คุณได้รับคะแนนเพิ่ม {{ awardedPoints }} คะแนน
+        </div>
         <div v-if="todayCheckin?.checkin_method === 'selfie_only'" class="ci-no-gps-banner">
           📡 ไม่สามารถดึง GPS ได้ — บันทึกด้วยเซลฟี่เท่านั้น ครูจะตรวจสอบภายหลัง
         </div>
@@ -162,7 +165,7 @@ const session = computed(() => studentStore.session || {})
 
 const thaiToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' })
 
-const { status: checkinStatus, errorMsg: checkinError, todayCheckin, gpsAttempt, performCheckin, loadTodayCheckin } = useCheckin()
+const { status: checkinStatus, errorMsg: checkinError, todayCheckin, gpsAttempt, awardedPoints, performCheckin, loadTodayCheckin } = useCheckin()
 
 // ── Mini map ──────────────────────────────────────────────
 const ciMapEl = ref(null)
@@ -522,6 +525,7 @@ onBeforeUnmount(() => {
 
 .ci-done-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:6px; }
 .ci-no-gps-banner { background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; padding:8px 12px; font-size:12px; color:#92400e; margin-bottom:10px; }
+.ci-points-banner { background:rgba(255,255,255,.2); border:1.5px solid rgba(255,255,255,.5); border-radius:10px; padding:8px 12px; font-size:13px; font-weight:700; margin-bottom:10px; text-align:center; }
 .ci-done-badge  { font-size:1rem; font-weight:800; }
 .ci-done-time   { font-size:.9rem; opacity:.9; font-weight:600; }
 .ci-done-body   { display:flex; gap:12px; align-items:flex-start; margin-bottom:12px; }

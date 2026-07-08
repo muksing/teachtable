@@ -306,6 +306,16 @@ const allGroups = computed(() => {
         { to:'/planning/timetable',      icon:'📅', bg:'#dbeafe', label:'จัดตารางสอน',      sub:'ลาก-วาง ตรวจสอบ', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler'] },
         { to:'/planning/print',          icon:'🖨️', bg:'#e0e7ff', label:'พิมพ์ตารางสอน',    sub:'PDF Excel รายห้อง/ครู', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
         { to:'/teacher/my-timetable',    icon:'👤', bg:'#ecfeff', label:'ตารางสอนของฉัน',   sub:'อ่านจากตารางที่เผยแพร่', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
+        { to:'/teacher/timetable-lookup',icon:'🔍', bg:'#fef9c3', label:'ค้นหาตารางสอน',    sub:'ดูตารางห้อง/ครูอื่น (อ่านอย่างเดียว จากฉบับเผยแพร่)', roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN, AUTH_ROLES.SCHOOL_SCHEDULER, 'scheduler', AUTH_ROLES.SCHOOL_TEACHER, 'teacher'] },
+      ],
+    },
+    // Check-in Group
+    {
+      key: 'checkin', icon: '📍', label: 'การเช็คอิน',
+      grad: 'linear-gradient(135deg,#0891b2,#06b6d4)',
+      roles: [AUTH_ROLES.SCHOOL_ADMIN, 'admin', AUTH_ROLES.SUPERADMIN],
+      items: [
+        { to:'/admin/checkin-settings', icon:'⚙️', bg:'#cffafe', label:'ตั้งค่าการเช็คอิน', sub:'พิกัดโรงเรียน รัศมี คะแนนอัตโนมัติ' },
       ],
     },
     // Announcements — เห็นเฉพาะผู้มีสิทธิ์ (ไม่ขึ้น feature gate)

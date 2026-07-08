@@ -32,6 +32,7 @@ export function useCheckin() {
   const errorMsg    = ref('')
   const todayCheckin = ref(null)
   const gpsAttempt  = ref(0) // 1-3 แสดงใน UI
+  const awardedPoints = ref(null) // จำนวนคะแนนที่ได้รับจากเช็คอินครั้งนี้ (null = ไม่ได้รับ/ยังไม่ประมวลผล)
 
   async function loadTodayCheckin() {
     const { school_id, student_code } = studentStore.session || {}
@@ -160,6 +161,18 @@ export function useCheckin() {
       if (ciErr) throw ciErr
       todayCheckin.value = record
       status.value = 'done'
+
+      // เพิ่มคะแนนความประพฤติอัตโนมัติ (ถ้าเปิดใช้ในตั้งค่าเช็คอิน)
+      try {
+        const { data: pts } = await supabase.rpc('award_checkin_points', {
+          p_school_id: school_id,
+          p_student_code: student_code,
+          p_class_id: class_id || null,
+        })
+        awardedPoints.value = typeof pts === 'number' ? pts : null
+      } catch (err) {
+        console.warn('[Checkin] award_checkin_points failed:', err.message)
+      }
     } catch (err) {
       status.value = 'error'
       if (err.code === 1)      errorMsg.value = 'ไม่อนุญาตให้ใช้ GPS — กรุณาเปิดสิทธิ์ตำแหน่งในเบราว์เซอร์'
@@ -167,5 +180,5 @@ export function useCheckin() {
     }
   }
 
-  return { status, errorMsg, todayCheckin, gpsAttempt, performCheckin, loadTodayCheckin }
+  return { status, errorMsg, todayCheckin, gpsAttempt, awardedPoints, performCheckin, loadTodayCheckin }
 }
