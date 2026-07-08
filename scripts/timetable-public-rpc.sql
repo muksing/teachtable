@@ -35,15 +35,15 @@ BEGIN
   RETURN QUERY
   SELECT
     ts.day_of_week::int,
-    ts.period_number,
-    ts.slot_type,
-    ts.subject_name,
-    ts.subject_id,
-    CONCAT(COALESCE(t.prefix,''), COALESCE(t.first_name,''), ' ', COALESCE(t.last_name,'')) AS teacher_name,
-    ts.teacher_id AS teacher_code,
-    ts.room_id,
-    ts.act_name,
-    ts.lock_label
+    ts.period_number::int,
+    ts.slot_type::text,
+    ts.subject_name::text,
+    ts.subject_id::text,
+    CONCAT(COALESCE(t.prefix,''), COALESCE(t.first_name,''), ' ', COALESCE(t.last_name,''))::text AS teacher_name,
+    ts.teacher_id::text AS teacher_code,
+    ts.room_id::text,
+    ts.act_name::text,
+    ts.lock_label::text
   FROM timetable_slots ts
   LEFT JOIN teachers t
     ON t.school_id::text = p_school_id

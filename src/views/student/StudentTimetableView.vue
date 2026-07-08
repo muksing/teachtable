@@ -81,7 +81,7 @@ const session      = computed(() => studentStore.session || {})
 const termLabel    = computed(() => {
   const s = session.value
   if (!s.term_semester || !s.term_year) return s.current_term || ''
-  return `ภาคเรียนที่ ${s.term_semester} ปีการศึกษา ${+s.term_year + 543}`
+  return `ภาคเรียนที่ ${s.term_semester} ปีการศึกษา ${s.term_year}`
 })
 
 const DAY_NAMES = [
