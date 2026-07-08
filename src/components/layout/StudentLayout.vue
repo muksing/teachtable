@@ -153,7 +153,7 @@ function handleLogout() {
   width: 100%;
 }
 
-/* Bottom nav */
+/* Bottom nav — เยอะเกินจะพอดี 1 แถวบนมือถือ เลยให้เลื่อนซ้าย-ขวาแทนการบีบให้พอดี */
 .student-bottomnav {
   position: fixed;
   bottom: 0; left: 0; right: 0;
@@ -162,9 +162,15 @@ function handleLogout() {
   border-top: 1px solid #e5e7eb;
   box-shadow: 0 -3px 14px rgba(109,40,217,.14);
   z-index: 50;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.student-bottomnav::-webkit-scrollbar { display: none; }
 .bottomnav-tab {
-  flex: 1;
+  flex: 0 0 auto;
+  width: 72px;
   display: flex; flex-direction: column; align-items: center;
   padding: 8px 4px 10px;
   text-decoration: none;
@@ -172,6 +178,12 @@ function handleLogout() {
   font-size: 10px;
   transition: color .15s;
   position: relative;
+}
+.bottomnav-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 .bottomnav-tab--active {
   color: #6d28d9;
