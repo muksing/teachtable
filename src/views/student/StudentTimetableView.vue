@@ -20,31 +20,41 @@
         >{{ d.short }}</button>
       </div>
 
-      <!-- Period cards for selected day -->
-      <div class="stb-periods">
+      <!-- Table for selected day -->
+      <div class="stb-table-wrap">
         <div v-if="!daySlots.length" class="stb-empty-day">ไม่มีคาบเรียนวันนี้</div>
-        <div
-          v-for="slot in daySlots" :key="slot.period_number"
-          class="stb-period-card"
-          :class="slotClass(slot)"
-        >
-          <div class="stb-period-num">คาบ {{ slot.period_number }}</div>
-          <div class="stb-period-body">
-            <div v-if="slot.slot_type === 'subject'" class="stb-subject-name">
-              {{ slot.subject_name || 'ไม่มีชื่อวิชา' }}
-            </div>
-            <div v-else-if="slot.slot_type === 'activity'" class="stb-subject-name stb-act">
-              {{ slot.act_name || 'กิจกรรม' }}
-            </div>
-            <div v-else class="stb-subject-name stb-lock">
-              {{ slot.lock_label || 'ล็อก' }}
-            </div>
-            <div v-if="slot.slot_type === 'subject' && slot.teacher_name?.trim()" class="stb-teacher">
-              👤 {{ slot.teacher_name }}
-            </div>
-            <div v-if="slot.room_id" class="stb-room">🚪 {{ slot.room_id }}</div>
-          </div>
-        </div>
+        <table v-else class="stb-table">
+          <thead>
+            <tr>
+              <th class="stb-col-period">คาบ</th>
+              <th class="stb-col-code">รหัสวิชา</th>
+              <th class="stb-col-subject">ชื่อวิชา</th>
+              <th class="stb-col-teacher">ครูผู้สอน</th>
+              <th class="stb-col-room">ห้อง</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="slot in daySlots" :key="slot.period_number" :class="slotClass(slot)">
+              <td class="stb-col-period">{{ slot.period_number }}</td>
+              <template v-if="slot.slot_type === 'subject'">
+                <td class="stb-col-code">{{ slot.subject_id || '—' }}</td>
+                <td class="stb-col-subject">{{ slot.subject_name || 'ไม่มีชื่อวิชา' }}</td>
+                <td class="stb-col-teacher">{{ slot.teacher_name?.trim() || '—' }}</td>
+                <td class="stb-col-room">{{ slot.room_id || '—' }}</td>
+              </template>
+              <template v-else-if="slot.slot_type === 'activity'">
+                <td class="stb-col-code">—</td>
+                <td class="stb-col-subject stb-act" colspan="2">{{ slot.act_name || 'กิจกรรม' }}</td>
+                <td class="stb-col-room">{{ slot.room_id || '—' }}</td>
+              </template>
+              <template v-else>
+                <td class="stb-col-code">—</td>
+                <td class="stb-col-subject stb-lock" colspan="2">{{ slot.lock_label || 'ล็อก' }}</td>
+                <td class="stb-col-room">{{ slot.room_id || '—' }}</td>
+              </template>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <!-- Full week grid (landscape) -->
@@ -207,31 +217,35 @@ onMounted(load)
   background: #6d28d9; color: white; border-color: #6d28d9;
 }
 
-/* Period cards */
-.stb-periods { display: flex; flex-direction: column; gap: 10px; margin-bottom: 24px; }
+/* Day table */
+.stb-table-wrap {
+  background: white; border-radius: 14px; padding: 6px;
+  box-shadow: 0 2px 8px rgba(109,40,217,.1);
+  margin-bottom: 24px; overflow-x: auto;
+}
 .stb-empty-day { text-align: center; padding: 24px; color: #a78bfa; }
 
-.stb-period-card {
-  display: flex; align-items: flex-start; gap: 12px;
-  background: white; border-radius: 14px; padding: 14px 16px;
-  box-shadow: 0 2px 8px rgba(109,40,217,.1);
-  border-left: 5px solid #a78bfa;
+.stb-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.stb-table th {
+  background: #6d28d9; color: white; font-size: 12px; font-weight: 700;
+  padding: 8px 10px; text-align: left; white-space: nowrap;
 }
-.stb-color-sub  { border-left-color: #7c3aed; }
-.stb-color-act  { border-left-color: #f59e0b; }
-.stb-color-lock { border-left-color: #9ca3af; }
+.stb-table td {
+  padding: 9px 10px; border-bottom: 1px solid #ede9fe; vertical-align: middle;
+}
+.stb-table tbody tr:last-child td { border-bottom: none; }
+.stb-table tbody tr:nth-child(odd) { background: #faf9ff; }
 
-.stb-period-num {
-  min-width: 48px; font-size: 13px; font-weight: 700; color: #6d28d9;
-  background: #f5f3ff; border-radius: 8px; padding: 4px 8px;
-  text-align: center; flex-shrink: 0;
-}
-.stb-period-body { flex: 1; min-width: 0; }
-.stb-subject-name { font-size: 16px; font-weight: 800; color: #1f2937; }
-.stb-act  { color: #92400e; }
-.stb-lock { color: #6b7280; font-weight: 600; }
-.stb-teacher { font-size: 13px; color: #6b7280; margin-top: 4px; }
-.stb-room    { font-size: 12px; color: #9ca3af; margin-top: 2px; }
+.stb-col-period { width: 44px; text-align: center; font-weight: 800; color: #6d28d9; }
+.stb-col-code   { width: 90px; color: #7c3aed; font-weight: 700; white-space: nowrap; }
+.stb-col-subject{ font-weight: 700; color: #1f2937; }
+.stb-col-teacher{ color: #4b5563; }
+.stb-col-room   { width: 70px; color: #9ca3af; font-size: 12px; white-space: nowrap; }
+
+tr.stb-color-act  .stb-col-subject.stb-act  { color: #92400e; font-weight: 700; }
+tr.stb-color-lock .stb-col-subject.stb-lock { color: #6b7280; font-weight: 600; }
+tr.stb-color-act  { background: #fffbeb; }
+tr.stb-color-lock { background: #f9fafb; }
 
 /* Grid */
 .stb-grid-wrap {
