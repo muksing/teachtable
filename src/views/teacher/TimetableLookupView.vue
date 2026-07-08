@@ -150,10 +150,10 @@ const selectedTeacherName = computed(() => {
 
 function getSlot(day, period) {
   if (selectedClass.value) {
-    return timetable.value.find(s => s.day === day && s.period === period && s.class_id === selectedClass.value)
+    return timetable.value.find(s => Number(s.day_of_week) === day && Number(s.period_number) === period && s.class_id === selectedClass.value)
   }
   if (selectedTeacher.value) {
-    return timetable.value.find(s => s.day === day && s.period === period && s.teacher_id === selectedTeacher.value)
+    return timetable.value.find(s => Number(s.day_of_week) === day && Number(s.period_number) === period && String(s.teacher_id) === String(selectedTeacher.value))
   }
   return null
 }
@@ -174,19 +174,16 @@ async function loadPublished() {
     const settings = schoolRow?.settings || {}
     currentTerm.value = settings.current_term || schoolStore.currentTerm || '2568_1'
 
-    const publish = settings.timetable_publish || {}
-    publishVersion.value = publish.version || ''
-    if (publish.published_at_iso) {
-      publishAtLabel.value = new Date(publish.published_at_iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
-    }
-
-    const payload = publish.payload || null
-    if (payload) {
-      classes.value = Array.isArray(payload.classes) ? payload.classes : []
-      teachers.value = Array.isArray(payload.teachers) ? payload.teachers : []
-      timetable.value = Array.isArray(payload.timetable) ? payload.timetable : []
-      currentTerm.value = payload.current_term || currentTerm.value
-      publishVersion.value = payload.version || publishVersion.value
+    const snapshot = settings.public_timetable_snapshot || null
+    if (snapshot) {
+      classes.value = Array.isArray(snapshot.classes) ? snapshot.classes : []
+      teachers.value = Array.isArray(snapshot.teachers) ? snapshot.teachers : []
+      timetable.value = Array.isArray(snapshot.timetable) ? snapshot.timetable : []
+      currentTerm.value = snapshot.current_term || currentTerm.value
+      publishVersion.value = snapshot.version || ''
+      if (snapshot.published_at_iso) {
+        publishAtLabel.value = new Date(snapshot.published_at_iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
+      }
       return
     }
 
