@@ -147,32 +147,27 @@ function handleLogout() {
 .student-content {
   flex: 1;
   padding: 16px;
-  padding-bottom: 84px;
+  padding-bottom: 172px;
   max-width: 600px;
   margin: 0 auto;
   width: 100%;
 }
 
-/* Bottom nav — เยอะเกินจะพอดี 1 แถวบนมือถือ เลยให้เลื่อนซ้าย-ขวาแทนการบีบให้พอดี */
+/* Bottom nav — เยอะเกินจะพอดี 1 แถว เลยขึ้นบรรทัดใหม่แทน (4 ต่อแถว, ไม่ต้องเลื่อนหา) */
 .student-bottomnav {
   position: fixed;
   bottom: 0; left: 0; right: 0;
   display: flex;
+  flex-wrap: wrap;
   background: white;
   border-top: 1px solid #e5e7eb;
   box-shadow: 0 -3px 14px rgba(109,40,217,.14);
   z-index: 50;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
 }
-.student-bottomnav::-webkit-scrollbar { display: none; }
 .bottomnav-tab {
-  flex: 0 0 auto;
-  width: 72px;
+  flex: 0 0 25%;
   display: flex; flex-direction: column; align-items: center;
-  padding: 8px 4px 10px;
+  padding: 7px 4px 8px;
   text-decoration: none;
   color: #a78bfa;
   font-size: 10px;

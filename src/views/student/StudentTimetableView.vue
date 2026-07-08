@@ -10,30 +10,32 @@
     <div v-else-if="!slots.length" class="stb-empty">ยังไม่มีตารางสอน</div>
 
     <div v-else class="stb-body">
-      <div class="stb-table-wrap">
-        <table class="stb-table">
+      <div class="table-wrap">
+        <table class="my-table teacher-table">
           <thead>
             <tr>
               <th class="day-col">วัน</th>
-              <th v-for="p in periodNums" :key="p" class="period-col">คาบ {{ p }}</th>
+              <th v-for="p in periodNums" :key="p" class="period-head">คาบ {{ p }}</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="d in activeDays" :key="d.num">
+            <tr v-for="d in activeDays" :key="d.num" :class="`day-row day-${d.num}`">
               <td class="day-col">{{ d.full }}</td>
-              <td v-for="p in periodNums" :key="`${d.num}-${p}`" class="slot-cell" :class="slotClass(slotAt(d.num, p))">
+              <td v-for="p in periodNums" :key="`${d.num}-${p}`" class="slot-cell">
                 <div v-if="slotAt(d.num, p)" class="slot-content">
                   <template v-if="slotAt(d.num, p).slot_type === 'subject'">
                     <div v-if="slotAt(d.num, p).subject_id" class="subject-code">{{ slotAt(d.num, p).subject_id }}</div>
-                    <div class="subject-name">{{ slotAt(d.num, p).subject_name || 'ไม่มีชื่อวิชา' }}</div>
-                    <div v-if="slotAt(d.num, p).teacher_name?.trim()" class="teacher-name">{{ slotAt(d.num, p).teacher_name }}</div>
-                    <div v-if="slotAt(d.num, p).room_id" class="room-name">{{ slotAt(d.num, p).room_id }}</div>
+                    <div class="subject">{{ slotAt(d.num, p).subject_name || 'ไม่มีชื่อวิชา' }}</div>
+                    <div v-if="slotAt(d.num, p).teacher_name?.trim()" class="class">{{ slotAt(d.num, p).teacher_name }}</div>
+                    <div v-if="slotAt(d.num, p).room_id" class="room">{{ slotAt(d.num, p).room_id }}</div>
                   </template>
                   <template v-else-if="slotAt(d.num, p).slot_type === 'activity'">
-                    <div class="subject-name act-name">{{ slotAt(d.num, p).act_name || 'กิจกรรม' }}</div>
+                    <div class="lock-icon">🔒</div>
+                    <div class="lock-name">{{ slotAt(d.num, p).act_name || 'กิจกรรม' }}</div>
                   </template>
                   <template v-else>
-                    <div class="subject-name lock-name">{{ slotAt(d.num, p).lock_label || 'ล็อก' }}</div>
+                    <div class="lock-icon">🔒</div>
+                    <div class="lock-name">{{ slotAt(d.num, p).lock_label || 'ล็อก' }}</div>
                   </template>
                 </div>
               </td>
@@ -92,13 +94,6 @@ const slotMap = computed(() => {
 
 function slotAt(day, period) { return slotMap.value[`${day}_${period}`] || null }
 
-function slotClass(slot) {
-  if (!slot) return 'empty-cell'
-  if (slot.slot_type === 'activity') return 'color-act'
-  if (slot.slot_type === 'lock') return 'color-lock'
-  return 'color-sub'
-}
-
 async function load() {
   loading.value = true
   error.value = ''
@@ -142,44 +137,122 @@ onMounted(load)
 
 .stb-body { padding: 0 12px; }
 
-.stb-table-wrap {
-  background: white; border-radius: 14px; padding: 10px;
-  box-shadow: 0 2px 8px rgba(109,40,217,.1);
+/* ── ตารางแบบเดียวกับ "ตารางสอนของฉัน" ฝั่งครู (MyTimetableView) ── */
+.table-wrap {
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid #e5e7eb;
   overflow-x: auto;
 }
 
-.stb-table { width: 100%; min-width: 720px; border-collapse: collapse; table-layout: fixed; }
-.stb-table th, .stb-table td { border: 1px solid #ede9fe; }
+.my-table {
+  width: 100%;
+  min-width: 860px;
+  border-collapse: collapse;
+}
+
+.my-table th,
+.my-table td {
+  border-bottom: 1px solid #e2e8f0;
+  border-right: 1px solid #e2e8f0;
+  padding: 10px;
+  vertical-align: top;
+  text-align: center;
+}
+
+.my-table th {
+  background: linear-gradient(135deg, #4c1d95 0%, #7c3aed 100%);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.teacher-table .period-head {
+  min-width: 112px;
+  text-align: center;
+}
 
 .day-col {
-  width: 90px; background: #6d28d9; color: white;
-  font-size: 12px; font-weight: 700; padding: 8px 6px; text-align: center;
+  width: 72px;
+  text-align: center;
+  font-weight: 700;
+  background: #e2e8f0;
 }
-td.day-col { background: #f5f3ff; color: #4c1d95; }
 
-.period-col {
-  background: #6d28d9; color: white;
-  font-size: 11px; font-weight: 700; padding: 8px 4px; text-align: center;
-}
+.day-1 .day-col { background: #eab308; color: #fff; }
+.day-2 .day-col { background: #ec4899; color: #fff; }
+.day-3 .day-col { background: #22c55e; color: #fff; }
+.day-4 .day-col { background: #f97316; color: #fff; }
+.day-5 .day-col { background: #3b82f6; color: #fff; }
+.day-6 .day-col { background: #a855f7; color: #fff; }
+.day-7 .day-col { background: #ef4444; color: #fff; }
+
+.day-row .slot-cell { background: #ffffff; }
+.day-1 .slot-cell { background: #fefce8; }
+.day-2 .slot-cell { background: #fdf2f8; }
+.day-3 .slot-cell { background: #f0fdf4; }
+.day-4 .slot-cell { background: #fff7ed; }
+.day-5 .slot-cell { background: #eff6ff; }
+.day-6 .slot-cell { background: #faf5ff; }
+.day-7 .slot-cell { background: #fef2f2; }
 
 .slot-cell {
-  height: 64px; padding: 4px 5px; vertical-align: middle; text-align: center;
+  min-height: 86px;
 }
-.slot-cell.color-sub  { background: #ede9fe; }
-.slot-cell.color-act  { background: #fef3c7; }
-.slot-cell.color-lock { background: #f3f4f6; }
-.slot-cell.empty-cell { background: #fafafa; }
 
-.slot-content { line-height: 1.25; }
-.subject-code  { font-size: 10px; font-weight: 700; color: #7c3aed; }
-.subject-name  { font-size: 11px; font-weight: 700; color: #1f2937; word-break: break-word; }
-.teacher-name  { font-size: 10px; color: #6b7280; margin-top: 1px; }
-.room-name     { font-size: 9px;  color: #9ca3af; margin-top: 1px; }
-.act-name      { color: #92400e; }
-.lock-name     { color: #6b7280; font-weight: 600; }
+.slot-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+  border: none;
+  border-left: 3px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  padding: 6px;
+}
+.day-1 .slot-content { border-left: 3px solid #eab308; background: linear-gradient(180deg,#fff 0%,#fefce8 100%); }
+.day-2 .slot-content { border-left: 3px solid #ec4899; background: linear-gradient(180deg,#fff 0%,#fdf2f8 100%); }
+.day-3 .slot-content { border-left: 3px solid #22c55e; background: linear-gradient(180deg,#fff 0%,#f0fdf4 100%); }
+.day-4 .slot-content { border-left: 3px solid #f97316; background: linear-gradient(180deg,#fff 0%,#fff7ed 100%); }
+.day-5 .slot-content { border-left: 3px solid #3b82f6; background: linear-gradient(180deg,#fff 0%,#eff6ff 100%); }
+.day-6 .slot-content { border-left: 3px solid #a855f7; background: linear-gradient(180deg,#fff 0%,#faf5ff 100%); }
+.day-7 .slot-content { border-left: 3px solid #ef4444; background: linear-gradient(180deg,#fff 0%,#fef2f2 100%); }
 
-@media (max-width: 640px) {
-  .stb-table { min-width: 620px; }
-  .day-col { width: 68px; font-size: 11px; }
+.subject-code {
+  font-weight: 700;
+  color: #1d4ed8;
+  font-size: 12px;
+}
+
+.subject {
+  font-weight: 700;
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.class {
+  color: #475569;
+  font-size: 12px;
+}
+
+.room {
+  color: #0369a1;
+  font-size: 12px;
+}
+
+.lock-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.lock-name {
+  font-weight: 700;
+  color: #92400e;
+  font-size: 12px;
+  text-align: center;
 }
 </style>
