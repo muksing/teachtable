@@ -4,9 +4,8 @@
       <div class="header-card">
         <h1 class="title">🔍 ค้นหาตารางสอน</h1>
         <p class="subtitle">ดูตารางห้องเรียนหรือครูคนใดก็ได้ — อ่านอย่างเดียวจากตารางฉบับเผยแพร่ล่าสุด</p>
-        <div v-if="publishVersion" class="meta-row">
-          <span class="meta-chip">เวอร์ชัน {{ publishVersion }}</span>
-          <span v-if="publishAtLabel" class="meta-chip">เผยแพร่เมื่อ {{ publishAtLabel }}</span>
+        <div v-if="publishAtLabel" class="meta-row">
+          <span class="meta-chip">เผยแพร่เมื่อ {{ publishAtLabel }}</span>
         </div>
       </div>
 
@@ -99,7 +98,6 @@ const classes = ref([])
 const teachers = ref([])
 const timetable = ref([])
 const currentTerm = ref('')
-const publishVersion = ref('')
 const publishAtLabel = ref('')
 const publishedMissing = ref(false)
 
@@ -164,33 +162,27 @@ async function loadPublished() {
   loading.value = true
   publishedMissing.value = false
   try {
-    const { data: schoolRow, error } = await supabase
-      .from('schools')
-      .select('settings')
-      .eq('id', sid)
-      .maybeSingle()
-    if (error) throw error
+    currentTerm.value = schoolStore.currentTerm || '2568_1'
 
-    const settings = schoolRow?.settings || {}
-    currentTerm.value = schoolStore.currentTerm || settings.current_term || '2568_1'
+    const [classesRes, teachersRes, publishedRes, schoolRes] = await Promise.all([
+      supabase.from('classes').select('*').eq('school_id', sid).order('class_name'),
+      supabase.from('teachers').select('*').eq('school_id', sid).eq('term_id', currentTerm.value).order('first_name'),
+      supabase.from('timetable_slots_published').select('*').eq('school_id', sid).eq('term_id', currentTerm.value).limit(10000),
+      supabase.from('schools').select('settings').eq('id', sid).maybeSingle(),
+    ])
+    if (classesRes.error) throw classesRes.error
+    if (teachersRes.error) throw teachersRes.error
+    if (publishedRes.error) throw publishedRes.error
 
-    const snapshot = settings.public_timetable_snapshot || null
-    if (snapshot) {
-      classes.value = Array.isArray(snapshot.classes) ? snapshot.classes : []
-      teachers.value = Array.isArray(snapshot.teachers) ? snapshot.teachers : []
-      timetable.value = Array.isArray(snapshot.timetable) ? snapshot.timetable : []
-      currentTerm.value = snapshot.current_term || currentTerm.value
-      publishVersion.value = snapshot.version || ''
-      if (snapshot.published_at_iso) {
-        publishAtLabel.value = new Date(snapshot.published_at_iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
-      }
-      return
-    }
+    classes.value = classesRes.data || []
+    teachers.value = teachersRes.data || []
+    timetable.value = publishedRes.data || []
 
-    publishedMissing.value = true
-    classes.value = []
-    teachers.value = []
-    timetable.value = []
+    const settings = schoolRes.data?.settings || {}
+    publishAtLabel.value = settings.timetable_published_at
+      ? new Date(settings.timetable_published_at).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
+      : ''
+    if (!timetable.value.length) publishedMissing.value = true
   } catch (e) {
     console.error(e)
     ElMessage.error('โหลดตารางสอนไม่สำเร็จ: ' + e.message)
