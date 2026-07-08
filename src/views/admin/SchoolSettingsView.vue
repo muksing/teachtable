@@ -867,12 +867,14 @@ async function saveSettings() {
     // หมายเหตุสำคัญ: current_term (ก้อนข้อมูลเทอมที่ระบบใช้ query ครู/ตารางสอน/บันทึกเข้าสอน)
     // เป็นคนละอย่างกับ "ภาคเรียนปีการศึกษาที่เปิดเรียน" (data.year/data.semester ในฟอร์มนี้)
     // ห้ามเขียนทับ current_term จากฟอร์มนี้เด็ดขาด — เปลี่ยนเทอมต้องทำผ่านหน้า "จัดการเทอม" เท่านั้น
+    // (ตัด current_term ออกจาก school_info ก่อนบันทึก กัน useMasterAuth.js อ่าน fallback ผิดตัว)
+    const { current_term: _unusedCurrentTerm, ...schoolInfoToSave } = data
     const settings = await readSchoolSettings()
     const { error } = await supabase.from('schools').update({
       name: data.name,
       periods_per_day: data.periods_per_day,
       period_times: data.period_times,
-      settings: { ...settings, school_info: data }
+      settings: { ...settings, school_info: schoolInfoToSave }
     }).eq('id', sid)
     if (error) throw error
 
@@ -883,7 +885,7 @@ async function saveSettings() {
       period_times: data.period_times,
       settings: {
         ...((schoolStore.schoolInfo?.settings && typeof schoolStore.schoolInfo.settings === 'object') ? schoolStore.schoolInfo.settings : {}),
-        school_info: data,
+        school_info: schoolInfoToSave,
       },
       updated_at: new Date(),
     })

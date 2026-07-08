@@ -19,9 +19,9 @@
 
       <!-- Current Term Banner -->
       <el-alert
-        :title="`ภาคเรียนปัจจุบัน (จากข้อมูลพื้นฐานโรงเรียน): ${currentTerm}`"
+        :title="`เทอมที่ระบบใช้งานอยู่ตอนนี้: ${currentTerm}`"
         type="success" show-icon :closable="false" class="mb-6"
-        description="ต้องการเปลี่ยนภาคเรียน: ไปที่เมนู 'ข้อมูลพื้นฐานโรงเรียน' → แก้ไขปีการศึกษา/ภาคเรียน → บันทึก | หน้านี้ใช้ดูและจัดการข้อมูลสำรองตามเทอมเท่านั้น"
+        description="ต้องการเปลี่ยนเทอมที่ระบบใช้งาน: กดปุ่ม '📌 เทอมปัจจุบัน' ที่แถวเทอมในตารางด้านล่างเท่านั้น | หน้า 'ข้อมูลโรงเรียน' ใช้แก้ไขข้อมูลแสดงผล (ปีการศึกษา/ภาคเรียนที่พิมพ์เอกสาร) เท่านั้น ไม่เกี่ยวกับเทอมที่ระบบใช้ query ข้อมูล"
       />
 
       <!-- Quota Summary -->
@@ -67,11 +67,6 @@
               <span class="text-gray-700 font-medium">{{ row.counts?.teachers ?? '...' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="ห้องเรียน" align="center" width="90">
-            <template #default="{ row }">
-              <span class="text-gray-700 font-medium">{{ row.counts?.classes ?? '...' }}</span>
-            </template>
-          </el-table-column>
           <el-table-column label="วิชา" align="center" width="80">
             <template #default="{ row }">
               <span class="text-gray-700 font-medium">{{ row.counts?.subjects ?? '...' }}</span>
@@ -111,7 +106,7 @@
                 <el-button size="small" plain
                   @click="setActiveTerm(row.id)"
                   :disabled="row.id === currentTerm"
-                  title="ภาคเรียนเปลี่ยนได้จากหน้าข้อมูลพื้นฐานโรงเรียน">
+                  title="ตั้งเทอมนี้เป็นเทอมที่ระบบใช้งาน">
                   📌 เทอมปัจจุบัน
                 </el-button>
                 <el-button size="small" type="success" plain
@@ -272,13 +267,13 @@ const cloneTarget = ref('')
 const newTermIdForClone = ref('')
 
 // Tables that can be cloned (mapped to Supabase tables)
+// classes ไม่มีคอลัมน์ term_id (ห้องเรียนใช้ร่วมกันทุกเทอมอยู่แล้ว) จึงไม่มีในรายการโคลนนี้
 const CLONE_COLS = [
-  { key: 'teachers',          label: '👨‍🏫 ครู',           defaultOn: false },
-  { key: 'classes',           label: '🏫 ห้องเรียน',      defaultOn: true  },
+  { key: 'teachers',          label: '👨‍🏫 ครู',           defaultOn: true  },
   { key: 'subjects',          label: '📚 วิชา',           defaultOn: true  },
   { key: 'rooms',             label: '🚪 ห้อง/Lab',       defaultOn: true  },
   { key: 'students',          label: '👨‍🎓 นักเรียน',     defaultOn: true  },
-  { key: 'timetable_slots',   label: '📅 ตารางสอน',       defaultOn: false },
+  { key: 'timetable_slots',   label: '📅 ตารางสอน',       defaultOn: true  },
   { key: 'activity_bookings', label: '🎯 กิจกรรม',        defaultOn: false },
 ]
 const cloneCollections = reactive(CLONE_COLS.map(c => ({ ...c, selected: c.defaultOn })))
@@ -294,7 +289,8 @@ async function loadTerms() {
 
   try {
     // Discover distinct term_ids from all term-scoped tables
-    const tables = ['teachers','classes','subjects','rooms','students','timetable_slots','activity_bookings']
+    // classes ไม่มีคอลัมน์ term_id (ห้องเรียนไม่ผูกกับเทอม) จึงไม่รวมในรายการนี้
+    const tables = ['teachers','subjects','rooms','students','timetable_slots','activity_bookings']
     const termIdSet = new Set([currentTerm.value])
 
     // Also load from academic_terms table if it exists
@@ -305,22 +301,30 @@ async function loadTerms() {
     if (academicTerms) academicTerms.forEach(r => termIdSet.add(r.term_id))
 
     // Collect term_ids from each table
+    const discoverFailed = []
     await Promise.all(tables.map(async tbl => {
       try {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from(tbl)
           .select('term_id')
           .eq('school_id', sid)
           .limit(500)
+        if (error) throw error
         if (data) data.forEach(r => r.term_id && termIdSet.add(r.term_id))
-      } catch { /* ignore if table doesn't have term_id */ }
+      } catch (e) {
+        discoverFailed.push(tbl)
+        console.warn(`Discover term_id from ${tbl} failed:`, e.message)
+      }
     }))
+    if (discoverFailed.length) {
+      ElMessage.warning(`โหลดรายชื่อเทอมจากบางตารางไม่สำเร็จ (${discoverFailed.join(', ')}) — ตัวเลขที่แสดงอาจไม่ครบ`)
+    }
 
     // Count rows per term
     const list = []
     for (const termId of termIdSet) {
       const counts = await countTermRows(termId, sid)
-      const totalRows = Object.values(counts).reduce((s, v) => s + v, 0)
+      const totalRows = Object.values(counts).reduce((s, v) => s + (v || 0), 0)
       list.push({ id: termId, counts, totalRows })
     }
     list.sort((a, b) => b.id.localeCompare(a.id))
@@ -336,17 +340,22 @@ async function loadTerms() {
 }
 
 async function countTermRows(termId, sid) {
-  const tables = ['teachers','classes','subjects','rooms','students','timetable_slots','activity_bookings']
+  // classes ไม่มีคอลัมน์ term_id (ห้องเรียนไม่ผูกกับเทอม) จึงไม่รวมในรายการนี้
+  const tables = ['teachers','subjects','rooms','students','timetable_slots','activity_bookings']
   const counts = {}
   await Promise.all(tables.map(async tbl => {
     try {
-      const { count } = await supabase
+      const { count, error } = await supabase
         .from(tbl)
         .select('*', { count: 'exact', head: true })
         .eq('school_id', sid)
         .eq('term_id', termId)
+      if (error) throw error
       counts[tbl] = count || 0
-    } catch { counts[tbl] = 0 }
+    } catch (e) {
+      counts[tbl] = null
+      console.warn(`Count ${tbl}/${termId} failed:`, e.message)
+    }
   }))
   return counts
 }
@@ -364,6 +373,8 @@ async function createTerm() {
   const targetId = newTermId.value.trim()
 
   if (terms.value.find(t => t.id === targetId)) return ElMessage.warning(`เทอม ${targetId} มีอยู่แล้ว`)
+
+  if (cloneFrom.value && !(await confirmCriticalCollectionsSelected())) return
 
   creating.value = true
   try {
@@ -413,6 +424,7 @@ async function doClone() {
   }
   if (!targetId) return ElMessage.warning('กรุณาเลือกเทอมปลายทาง')
   if (targetId === cloneSource.value) return ElMessage.warning('ต้นทางและปลายทางเป็นเทอมเดียวกัน')
+  if (!(await confirmCriticalCollectionsSelected())) return
 
   // ถ้าเลือก clone นักเรียน → เปิด dialog เลื่อนชั้นก่อน
   const cloneStudents = cloneCollections.find(c => c.key === 'students')?.selected
@@ -497,17 +509,38 @@ function cancelPromotion() {
   pendingCloneTarget.value = ''
 }
 
+// เตือนก่อนสร้าง/โคลนเทอมถ้าไม่ได้เลือก "ครู" หรือ "ตารางสอน" — เทอมใหม่จะไม่มีข้อมูลสำคัญนี้เลย
+// (สาเหตุของเหตุการณ์เทอมว่างที่เคยเกิดขึ้นจริง)
+async function confirmCriticalCollectionsSelected() {
+  const missing = ['teachers', 'timetable_slots']
+    .filter(key => !cloneCollections.find(c => c.key === key)?.selected)
+    .map(key => cloneCollections.find(c => c.key === key)?.label)
+  if (!missing.length) return true
+  try {
+    await ElMessageBox.confirm(
+      `ยังไม่ได้เลือกโคลน: ${missing.join(', ')} — เทอมใหม่จะไม่มีข้อมูลนี้เลย จนกว่าจะเพิ่มเอง ยืนยันจะดำเนินการต่อไหม?`,
+      'แจ้งเตือน', { confirmButtonText: 'ดำเนินการต่อ', cancelButtonText: 'ยกเลิก', type: 'warning' }
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function cloneTermData(fromTerm, toTerm, classMapping = null, clearBehaviorRooms = new Set()) {
   const sid = schoolId.value
   const selectedTables = cloneCollections.filter(c => c.selected).map(c => c.key)
+  const failedTables = []
+  const emptyTables = []
   for (const tbl of selectedTables) {
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from(tbl)
         .select('*')
         .eq('school_id', sid)
         .eq('term_id', fromTerm)
-      if (!data || !data.length) continue
+      if (error) throw error
+      if (!data || !data.length) { emptyTables.push(tbl); continue }
 
       const rows = data.map(row => {
         const { id, created_at, updated_at, ...rest } = row
@@ -539,8 +572,14 @@ async function cloneTermData(fromTerm, toTerm, classMapping = null, clearBehavio
         if (error) throw new Error(`${tbl}: ${error.message}`)
       }
     } catch (e) {
+      failedTables.push(tbl)
       console.warn(`Clone ${tbl} failed:`, e.message)
     }
+  }
+  if (failedTables.length) {
+    ElMessage.error(`โคลนข้อมูลไม่สำเร็จบางส่วน (${failedTables.join(', ')}) — กรุณาตรวจสอบก่อนใช้งานเทอมนี้`)
+  } else if (emptyTables.length) {
+    ElMessage.info(`ไม่มีข้อมูลให้โคลนในบางรายการ (${emptyTables.join(', ')}) — ต้นทางว่างอยู่แล้ว`)
   }
 }
 
@@ -569,7 +608,8 @@ async function exportTerm(termId) {
   try {
     ElMessage.info(`กำลัง export เทอม ${termId}...`)
     const sid = schoolId.value
-    const tables = ['teachers','classes','subjects','rooms','students','timetable_slots','activity_bookings']
+    // classes ไม่มีคอลัมน์ term_id (ห้องเรียนไม่ผูกกับเทอม) จึงไม่รวมในรายการนี้
+    const tables = ['teachers','subjects','rooms','students','timetable_slots','activity_bookings']
     const wb = XLSX.utils.book_new()
     for (const tbl of tables) {
       const { data } = await supabase.from(tbl).select('*').eq('school_id', sid).eq('term_id', termId)
@@ -595,12 +635,17 @@ async function deleteTerm(termId) {
   )
   try {
     const sid = schoolId.value
-    const tables = ['teachers','classes','subjects','rooms','students',
+    // classes ไม่มีคอลัมน์ term_id (ห้องเรียนไม่ผูกกับเทอม) จึงไม่รวมในรายการนี้ — ลบเทอมจะไม่ลบห้องเรียน
+    const tables = ['teachers','subjects','rooms','students',
       'timetable_slots','activity_bookings','teach_actuals','behavior_logs','attendance_records']
 
+    const failed = []
     for (const tbl of tables) {
       const { error } = await supabase.from(tbl).delete().eq('school_id', sid).eq('term_id', termId)
-      if (error) console.warn(`Delete ${tbl}/${termId}:`, error.message)
+      if (error) { console.warn(`Delete ${tbl}/${termId}:`, error.message); failed.push(tbl) }
+    }
+    if (failed.length) {
+      ElMessage.warning(`ลบไม่สำเร็จบางตาราง (${failed.join(', ')}) — ข้อมูลอาจลบไม่ครบ`)
     }
 
     // Remove from academic_terms

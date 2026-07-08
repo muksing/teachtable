@@ -32,11 +32,9 @@ export function useMasterAuth() {
       const { data } = await supabase.from('schools').select('*').eq('id', schoolId).single()
       if (data) {
         schoolStore.setSchool(data)
-        schoolStore.setCurrentTerm(
-          data.current_term ||                           // schools.current_term column (set by SchoolSettings)
-          data.settings?.school_info?.current_term ||   // fallback: nested in school_info
-          '2568_1'
-        )
+        // ใช้ schools.current_term เท่านั้น — ห้าม fallback ไป settings.school_info.current_term
+        // (เป็นข้อมูลแสดงผลปีการศึกษาที่เปิดเรียน คนละก้อนกับเทอมที่ระบบใช้ query จริง เคยทำให้เทอมสลับผิดมาแล้ว)
+        schoolStore.setCurrentTerm(data.current_term || '2568_1')
         subscribeSchoolSettings(schoolId)
       }
     } catch {
@@ -57,11 +55,7 @@ export function useMasterAuth() {
       }, (payload) => {
         if (payload.new) {
           schoolStore.setSchool(payload.new)
-          schoolStore.setCurrentTerm(
-            payload.new.current_term ||
-            payload.new.settings?.school_info?.current_term ||
-            '2568_1'
-          )
+          schoolStore.setCurrentTerm(payload.new.current_term || '2568_1')
         }
       })
       .subscribe()
