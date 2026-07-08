@@ -177,22 +177,26 @@
             </template>
           </el-table-column>
           <!-- จัดการ -->
-          <el-table-column v-if="!isTeacherOrScheduler" label="จัดการ" width="160" align="center" fixed="right">
+          <el-table-column v-if="!isTeacherOrScheduler" label="จัดการ" width="130" align="center" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" type="primary" plain @click="openDialog(row)">แก้ไข</el-button>
-              <el-button
-                v-if="!userByTeacher[row.teacher_id]"
-                size="small" type="success" plain
-                @click="openAccountDialog(row)">
-                🔑 บัญชี
-              </el-button>
-              <el-button
-                v-else
-                size="small" type="warning" plain
-                @click="openResetDialog(row)">
-                🔑 รีเซต
-              </el-button>
-              <el-button size="small" type="danger" plain @click="confirmDelete(row)">ลบ</el-button>
+              <div class="action-btns">
+                <el-tooltip content="แก้ไข" placement="top">
+                  <el-button size="small" type="primary" plain circle @click="openDialog(row)">✏️</el-button>
+                </el-tooltip>
+                <el-tooltip :content="userByTeacher[row.teacher_id] ? 'รีเซตรหัสผ่าน' : 'สร้างบัญชี'" placement="top">
+                  <el-button
+                    v-if="!userByTeacher[row.teacher_id]"
+                    size="small" type="success" plain circle
+                    @click="openAccountDialog(row)">🔑</el-button>
+                  <el-button
+                    v-else
+                    size="small" type="warning" plain circle
+                    @click="openResetDialog(row)">🔑</el-button>
+                </el-tooltip>
+                <el-tooltip content="ลบ" placement="top">
+                  <el-button size="small" type="danger" plain circle @click="confirmDelete(row)">🗑️</el-button>
+                </el-tooltip>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -1397,6 +1401,13 @@ function handlePrint() {
 </script>
 
 <style scoped>
+.action-btns {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.action-btns .el-button + .el-button { margin-left: 0; }
 .header-card {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border-radius: 16px;
