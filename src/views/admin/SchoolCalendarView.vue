@@ -94,7 +94,7 @@ import { useSchoolCalendar } from '@/composables/useSchoolCalendar'
 const authStore = useAuthStore()
 const { events, loading, loadEvents, createEvent, updateEvent, deleteEvent, typeMeta, EVENT_TYPE_META } = useSchoolCalendar()
 
-const canEdit = computed(() => authStore.hasAnyRole(['school_admin', 'admin', 'superadmin', 'school_director', 'announcer']))
+const canEdit = computed(() => authStore.hasAnyRole(['school_admin', 'admin', 'superadmin', 'school_director', 'announcer', 'calendar_manager']))
 
 const customTypeOptions = { meeting: EVENT_TYPE_META.meeting, activity: EVENT_TYPE_META.activity, important: EVENT_TYPE_META.important, other: EVENT_TYPE_META.other }
 

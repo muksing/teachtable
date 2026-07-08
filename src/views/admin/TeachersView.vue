@@ -154,6 +154,11 @@
                     @change="val => toggleRole(row.teacher_id, 'announcer', val)">
                     📣 ประชาสัมพันธ์
                   </el-checkbox>
+                  <el-checkbox size="small"
+                    :model-value="(userByTeacher[row.teacher_id].roles||[]).includes('calendar_manager')"
+                    @change="val => toggleRole(row.teacher_id, 'calendar_manager', val)">
+                    🗓️ ปฏิทินโรงเรียน
+                  </el-checkbox>
                 </div>
               </div>
               <el-tag v-else size="small" type="info" effect="plain">⭕ ยังไม่มีบัญชี</el-tag>

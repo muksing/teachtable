@@ -45,6 +45,7 @@ create policy "school_events_write" on public.school_events
           u.role = any(array['school_admin','superadmin'])
           or 'school_director' = any(u.roles)
           or 'announcer' = any(u.roles)
+          or 'calendar_manager' = any(u.roles)
         )
     )
   )
@@ -57,6 +58,7 @@ create policy "school_events_write" on public.school_events
           u.role = any(array['school_admin','superadmin'])
           or 'school_director' = any(u.roles)
           or 'announcer' = any(u.roles)
+          or 'calendar_manager' = any(u.roles)
         )
     )
   );
