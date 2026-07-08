@@ -864,12 +864,14 @@ async function saveSettings() {
     if (!sid) throw new Error('ไม่พบ schoolId')
 
     // Update schools direct columns + settings.school_info
+    // หมายเหตุสำคัญ: current_term (ก้อนข้อมูลเทอมที่ระบบใช้ query ครู/ตารางสอน/บันทึกเข้าสอน)
+    // เป็นคนละอย่างกับ "ภาคเรียนปีการศึกษาที่เปิดเรียน" (data.year/data.semester ในฟอร์มนี้)
+    // ห้ามเขียนทับ current_term จากฟอร์มนี้เด็ดขาด — เปลี่ยนเทอมต้องทำผ่านหน้า "จัดการเทอม" เท่านั้น
     const settings = await readSchoolSettings()
     const { error } = await supabase.from('schools').update({
       name: data.name,
       periods_per_day: data.periods_per_day,
       period_times: data.period_times,
-      current_term: data.current_term,  // keep top-level column in sync
       settings: { ...settings, school_info: data }
     }).eq('id', sid)
     if (error) throw error
@@ -877,7 +879,6 @@ async function saveSettings() {
     schoolStore.setSchool({
       ...(schoolStore.schoolInfo || {}),
       name: data.name,
-      current_term: data.current_term,
       periods_per_day: data.periods_per_day,
       period_times: data.period_times,
       settings: {
@@ -886,7 +887,6 @@ async function saveSettings() {
       },
       updated_at: new Date(),
     })
-    schoolStore.setCurrentTerm(data.current_term)
     ElMessage.success('บันทึกการตั้งค่าเรียบร้อยแล้ว')
   } catch (e) {
     console.error(e)
