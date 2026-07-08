@@ -34,7 +34,7 @@ AS $$
 BEGIN
   RETURN QUERY
   SELECT
-    ts.day_of_week,
+    ts.day_of_week::int,
     ts.period_number,
     ts.slot_type,
     ts.subject_name,
