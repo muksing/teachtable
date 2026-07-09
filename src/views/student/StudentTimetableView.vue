@@ -138,11 +138,17 @@ onMounted(load)
 .stb-body { padding: 0 12px; }
 
 /* ── ตารางแบบเดียวกับ "ตารางสอนของฉัน" ฝั่งครู (MyTimetableView) ── */
+/* หลุดออกจากกรอบ max-width:600px ของ .student-content (ออกแบบมาสำหรับการ์ดมือถือ)
+   เพื่อให้จอคอมฯ กว้างเต็มที่ — บนมือถือ 96vw ยังพอดีจอ ตารางเลื่อนซ้ายขวาได้ตามปกติ */
 .table-wrap {
   background: #fff;
   border-radius: 14px;
   border: 1px solid #e5e7eb;
   overflow-x: auto;
+  width: 96vw;
+  max-width: 1400px;
+  margin-left: 50%;
+  transform: translateX(-50%);
 }
 
 .my-table {
